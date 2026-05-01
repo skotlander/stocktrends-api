@@ -97,14 +97,19 @@ def _stim_row(
     x13wk: float,
     x13wksd: float,
     exchange: str = "Q",
+    weekdate: datetime.date | None = None,
 ) -> dict:
-    """Build a minimal st_returnmeans row for use in stim_rows lists."""
+    """Build a minimal st_returnmeans row for use in stim_rows lists.
+
+    weekdate defaults to _WD (matches _WEEKDATE_ROWS → stim_is_stale = False).
+    Pass an earlier date to simulate a stale STIM dataset.
+    """
     return {
         "symbol": symbol,
         "exchange": exchange,
         "x13wk": x13wk,
         "x13wksd": x13wksd,
-        "weekdate": _WD,   # matches _WEEKDATE_ROWS → stim_is_stale = False
+        "weekdate": weekdate if weekdate is not None else _WD,
     }
 
 
@@ -608,3 +613,161 @@ def test_portfolio_construct_preview_includes_stim_fields():
         assert field in shape_str, (
             f"Per-position ST-IM field '{field}' missing from preview response_shape"
         )
+
+
+# ---------------------------------------------------------------------------
+# 10. Follow-up tests (Codex review — stale, zero-SD, coverage ordering,
+#     single-covered, identical values, SQL exchange scoping)
+# ---------------------------------------------------------------------------
+
+_STALE_WD = _WD - datetime.timedelta(days=7)   # one week before latest st_data
+
+
+def test_stale_stim_weekdate_all_uncovered():
+    """
+    When stim_rows have weekdate < latest_wd, stim_is_stale=True and every
+    candidate must be uncovered.  ranking_method must be 'decision_score_only'.
+    """
+    candidates = [
+        _candidate("AAPL", _HIGH_TREND_CNT, _HIGH_RSI),
+        _candidate("MSFT", _LOW_TREND_CNT,  _LOW_RSI),
+    ]
+    # Stim rows exist but their weekdate is one week behind st_data
+    stim = [
+        _stim_row("AAPL", x13wk=8.0, x13wksd=2.0, weekdate=_STALE_WD),
+        _stim_row("MSFT", x13wk=6.0, x13wksd=2.0, weekdate=_STALE_WD),
+    ]
+    with patch("routers.portfolio.get_engine", return_value=_mock_engine(candidates, stim)):
+        resp = _client.post("/v1/portfolio/construct", json={"count": 2})
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["ranking_method"] == "decision_score_only", (
+        f"Stale STIM must fall back to decision_score_only; got {body['ranking_method']!r}"
+    )
+    assert body["stim_covered_count"] == 0
+    for pos in body["portfolio"]:
+        assert pos["stim_covered"] is False, (
+            f"{pos['symbol']}: stim_covered must be False when stim_weekdate is stale"
+        )
+        assert pos["stim_percentile_13wk"] is None
+
+
+def test_zero_x13wksd_treated_as_uncovered():
+    """
+    A st_returnmeans row with x13wksd == 0 must not trigger a ZeroDivisionError
+    and must result in stim_covered=False for that candidate.
+    """
+    candidates = [_candidate("DIVZ", _HIGH_TREND_CNT, _HIGH_RSI)]
+    stim = [_stim_row("DIVZ", x13wk=5.0, x13wksd=0.0)]
+
+    with patch("routers.portfolio.get_engine", return_value=_mock_engine(candidates, stim)):
+        resp = _client.post("/v1/portfolio/construct", json={"count": 1})
+
+    assert resp.status_code == 200, resp.text
+    pos = resp.json()["portfolio"][0]
+    assert pos["stim_covered"] is False, "x13wksd=0 must produce stim_covered=False"
+    assert pos["stim_percentile_13wk"] is None
+    assert pos["stim_risk_adjusted_13wk"] is None
+
+
+def test_covered_ranks_above_uncovered_same_decision_score():
+    """
+    Within the same decision_score tier, a candidate with ST-IM coverage
+    must rank above one without coverage, even if the uncovered symbol
+    sorts alphabetically first.
+    """
+    # Both share score 1.00; AAAA (uncovered) < ZZZZ (covered) alphabetically
+    candidates = [
+        _candidate("AAAA", _HIGH_TREND_CNT, _HIGH_RSI),   # no stim row → uncovered
+        _candidate("ZZZZ", _HIGH_TREND_CNT, _HIGH_RSI),   # has stim row → covered
+    ]
+    stim = [_stim_row("ZZZZ", x13wk=6.0, x13wksd=2.0)]   # AAAA intentionally absent
+
+    with patch("routers.portfolio.get_engine", return_value=_mock_engine(candidates, stim)):
+        resp = _client.post("/v1/portfolio/construct", json={"count": 2})
+
+    assert resp.status_code == 200, resp.text
+    portfolio = resp.json()["portfolio"]
+    assert portfolio[0]["symbol"] == "ZZZZ", (
+        "Covered ZZZZ must rank above uncovered AAAA within the same decision_score tier; "
+        f"got {portfolio[0]['symbol']}"
+    )
+    assert portfolio[0]["stim_covered"] is True
+    assert portfolio[1]["stim_covered"] is False
+
+
+def test_single_covered_candidate_gets_midpoint_percentile():
+    """
+    When only one candidate is covered, w_min == w_max so the
+    percentile is clamped to 0.5 (midpoint).
+    """
+    candidates = [_candidate("ONLY", _HIGH_TREND_CNT, _HIGH_RSI)]
+    stim = [_stim_row("ONLY", x13wk=7.0, x13wksd=2.0)]
+
+    with patch("routers.portfolio.get_engine", return_value=_mock_engine(candidates, stim)):
+        resp = _client.post("/v1/portfolio/construct", json={"count": 1})
+
+    assert resp.status_code == 200, resp.text
+    pos = resp.json()["portfolio"][0]
+    assert pos["stim_covered"] is True
+    assert pos["stim_percentile_13wk"] == 0.5, (
+        f"Single covered candidate must get percentile=0.5; got {pos['stim_percentile_13wk']}"
+    )
+
+
+def test_identical_stim_values_all_get_midpoint_percentile():
+    """
+    When all covered candidates share the same risk-adjusted ratio,
+    w_min == w_max and every candidate receives percentile=0.5.
+    Ordering within the tier then falls back to symbol ASC.
+    """
+    candidates = [
+        _candidate("CCCC", _HIGH_TREND_CNT, _HIGH_RSI),
+        _candidate("AAAA", _HIGH_TREND_CNT, _HIGH_RSI),
+        _candidate("BBBB", _HIGH_TREND_CNT, _HIGH_RSI),
+    ]
+    stim = [
+        _stim_row("AAAA", x13wk=4.0, x13wksd=2.0),   # ratio = 2.0
+        _stim_row("BBBB", x13wk=4.0, x13wksd=2.0),   # ratio = 2.0
+        _stim_row("CCCC", x13wk=4.0, x13wksd=2.0),   # ratio = 2.0
+    ]
+
+    with patch("routers.portfolio.get_engine", return_value=_mock_engine(candidates, stim)):
+        resp = _client.post("/v1/portfolio/construct", json={"count": 3})
+
+    assert resp.status_code == 200, resp.text
+    portfolio = resp.json()["portfolio"]
+    for pos in portfolio:
+        assert pos["stim_percentile_13wk"] == 0.5, (
+            f"{pos['symbol']}: expected percentile=0.5 when all ratios identical; "
+            f"got {pos['stim_percentile_13wk']}"
+        )
+    # Symbol is the final deterministic tiebreaker → AAAA, BBBB, CCCC
+    assert [p["symbol"] for p in portfolio] == ["AAAA", "BBBB", "CCCC"]
+
+
+def test_stim_subquery_scoped_to_exchange_universe():
+    """
+    The MAX(weekdate) subquery inside the ST-IM query must be scoped to the
+    same exchange universe as the outer WHERE clause.
+
+    For the default (no exchange filter), the subquery must contain
+    IN ('N', 'Q', 'A') so that a newer weekdate from a non-US exchange
+    cannot cause the US-scoped outer query to return zero rows.
+    """
+    candidates = [_candidate("AAPL", _HIGH_TREND_CNT, _HIGH_RSI)]
+    engine = _mock_engine(candidates)
+
+    with patch("routers.portfolio.text") as mock_text:
+        with patch("routers.portfolio.get_engine", return_value=engine):
+            resp = _client.post("/v1/portfolio/construct", json={"count": 1})
+
+    assert resp.status_code == 200, resp.text
+    stim_sql: str = mock_text.call_args_list[3].args[0]
+
+    # The subquery must restrict the MAX to the same exchange scope
+    assert "SELECT MAX(weekdate) FROM st_returnmeans WHERE exchange IN" in stim_sql, (
+        "MAX(weekdate) subquery must be scoped to exchange IN ('N','Q','A') "
+        f"for default exchange filter; got:\n{stim_sql}"
+    )

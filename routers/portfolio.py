@@ -294,20 +294,26 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
         ).mappings().all()
 
         # --- Query 4: ST-IM risk-adjusted returns for tiebreaking ---
-        # Uses same exchange filter as candidate query; subquery resolves latest weekdate.
+        # Both the MAX(weekdate) subquery and the outer WHERE use the same exchange
+        # scope so that a newer weekdate from a different exchange universe cannot
+        # cause the in-scope rows to return empty.
         stim_params: dict = {}
         if norm_exchange:
             stim_exchange_clause = "AND exchange = :stim_exchange"
+            stim_max_clause = "WHERE exchange = :stim_exchange"
             stim_params["stim_exchange"] = norm_exchange
         else:
             stim_exchange_clause = "AND exchange IN ('N', 'Q', 'A')"
+            stim_max_clause = "WHERE exchange IN ('N', 'Q', 'A')"
 
         stim_rows = conn.execute(
             text(
                 f"""
                 SELECT symbol, exchange, x13wk, x13wksd, weekdate
                 FROM st_returnmeans
-                WHERE weekdate = (SELECT MAX(weekdate) FROM st_returnmeans)
+                WHERE weekdate = (
+                    SELECT MAX(weekdate) FROM st_returnmeans {stim_max_clause}
+                )
                   {stim_exchange_clause}
                 """
             ),
