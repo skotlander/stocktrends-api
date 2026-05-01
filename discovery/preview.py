@@ -87,10 +87,14 @@ _PREVIEW_BY_PATH: dict[str, dict] = {
             "portfolio[].trend", "portfolio[].trend_cnt", "portfolio[].mt_cnt",
             "portfolio[].rsi", "portfolio[].bias", "portfolio[].confidence",
             "portfolio[].decision_score",
+            "portfolio[].stim_expected_return_13wk", "portfolio[].stim_volatility_13wk",
+            "portfolio[].stim_risk_adjusted_13wk", "portfolio[].stim_percentile_13wk",
+            "portfolio[].stim_covered",
             "count", "universe", "exchange_filter",
             "candidates_evaluated", "candidate_selection_method", "candidate_ordering",
             "portfolio_score",
             "bias_requested", "bias_resolved",
+            "stim_weekdate", "stim_covered_count", "stim_coverage_pct", "ranking_method",
             "regime_context.current_regime", "regime_context.regime_score",
             "regime_context.regime_confidence", "regime_context.forecast_regime",
             "regime_context.forecast_confidence", "regime_context.recent_direction",
@@ -99,11 +103,15 @@ _PREVIEW_BY_PATH: dict[str, dict] = {
         ],
         "note": (
             "Returns a constructed equal-weight portfolio allocation with per-position weights, "
-            "Stock Trends signal fields, decision scores, and market regime context. "
-            "universe and exchange_filter echo the parameters used. "
-            "candidate_selection_method ('full_eligible_universe') and candidate_ordering "
-            "('decision_score DESC, symbol ASC') describe how candidates were assembled "
-            "and ranked before top-N selection."
+            "Stock Trends signal fields, decision scores, ST-IM (Stock Trends Inference Model) "
+            "tiebreaker fields, and market regime context. "
+            "Primary ranking is decision_score DESC; within tied decision_score tiers, "
+            "stim_percentile_13wk (derived from x13wk/x13wksd risk-adjusted 13-week return, "
+            "winsorized and normalized [0,1]) breaks ties. Symbol is the final deterministic "
+            "fallback. ranking_method indicates whether ST-IM tiebreaking was applied "
+            "('decision_score_stim_tiebreak') or whether coverage was absent "
+            "('decision_score_only'). stim_covered=false per position when ST-IM data is "
+            "missing, x13wksd=0, or STIM weekdate is stale relative to current st_data week."
         ),
     },
     "/v1/portfolio/evaluate": {

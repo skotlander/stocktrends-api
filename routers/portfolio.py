@@ -293,6 +293,38 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
             candidate_params,
         ).mappings().all()
 
+        # --- Query 4: ST-IM risk-adjusted returns for tiebreaking ---
+        # Both the MAX(weekdate) subquery and the outer WHERE use the same exchange
+        # scope so that a newer weekdate from a different exchange universe cannot
+        # cause the in-scope rows to return empty.
+        stim_params: dict = {}
+        if norm_exchange:
+            stim_exchange_clause = "AND exchange = :stim_exchange"
+            stim_max_clause = "WHERE exchange = :stim_exchange"
+            stim_params["stim_exchange"] = norm_exchange
+        else:
+            stim_exchange_clause = "AND exchange IN ('N', 'Q', 'A')"
+            stim_max_clause = "WHERE exchange IN ('N', 'Q', 'A')"
+
+        stim_rows = conn.execute(
+            text(
+                f"""
+                SELECT symbol, exchange, x13wk, x13wksd, weekdate
+                FROM st_returnmeans
+                WHERE weekdate = (
+                    SELECT MAX(weekdate) FROM st_returnmeans {stim_max_clause}
+                )
+                  {stim_exchange_clause}
+                """
+            ),
+            stim_params,
+        ).mappings().all()
+
+    stim_weekdate = stim_rows[0]["weekdate"] if stim_rows else None
+    stim_map: dict = {(r["symbol"], r["exchange"]): r for r in stim_rows}
+    # Stale when STIM hasn't been updated for the latest st_data week
+    stim_is_stale = stim_weekdate is None or stim_weekdate < latest_wd
+
     if not candidate_rows:
         raise HTTPException(
             status_code=422,
@@ -339,6 +371,22 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
             sym_alignment, sym_bias, trend_cnt, rsi, current_regime_score
         )
 
+        # --- Attach ST-IM fields ---
+        stim_entry = stim_map.get((row["symbol"], row["exchange"]))
+        stim_covered = False
+        stim_expected: float | None = None
+        stim_vol: float | None = None
+        stim_ra: float | None = None
+
+        if not stim_is_stale and stim_entry is not None:
+            x13wk = stim_entry["x13wk"]
+            x13wksd = stim_entry["x13wksd"]
+            if x13wk is not None and x13wksd is not None and float(x13wksd) != 0.0:
+                stim_covered = True
+                stim_expected = round(float(x13wk), 4)
+                stim_vol = round(float(x13wksd), 4)
+                stim_ra = round(float(x13wk) / float(x13wksd), 4)
+
         evaluated.append({
             "symbol": row["symbol"],
             "exchange": row["exchange"],
@@ -350,10 +398,35 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
             "bias": bias_label,
             "confidence": confidence,
             "decision_score": d_score,
+            "stim_expected_return_13wk": stim_expected,
+            "stim_volatility_13wk": stim_vol,
+            "stim_risk_adjusted_13wk": stim_ra,
+            "stim_percentile_13wk": None,
+            "stim_covered": stim_covered,
         })
 
-    # --- Rank by decision_score DESC, stable secondary by symbol ASC ---
-    evaluated.sort(key=lambda x: (-x["decision_score"], x["symbol"]))
+    # --- Compute ST-IM percentile ranks (winsorize 1/99%, normalize [0,1]) ---
+    covered = [c for c in evaluated if c["stim_covered"]]
+    if covered:
+        ra_vals = [c["stim_risk_adjusted_13wk"] for c in covered]
+        sorted_vals = sorted(ra_vals)
+        n = len(sorted_vals)
+        lo = sorted_vals[max(0, int(0.01 * n))]
+        hi = sorted_vals[min(n - 1, int(0.99 * n))]
+        winsorized = [max(lo, min(hi, v)) for v in ra_vals]
+        w_min, w_max = min(winsorized), max(winsorized)
+        for cand, wv in zip(covered, winsorized):
+            cand["stim_percentile_13wk"] = (
+                0.5 if w_max == w_min
+                else round((wv - w_min) / (w_max - w_min), 4)
+            )
+
+    # --- Rank: decision_score DESC, ST-IM percentile DESC (tiebreaker), symbol ASC ---
+    evaluated.sort(key=lambda x: (
+        -x["decision_score"],
+        -(x["stim_percentile_13wk"] if x["stim_covered"] else -1.0),
+        x["symbol"],
+    ))
 
     # --- Select top N and assign equal weight ---
     selected = evaluated[: body.count]
@@ -368,6 +441,18 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
     portfolio_score = round(
         sum(p["decision_score"] for p in portfolio) / len(portfolio), 4
     ) if portfolio else 0.0
+
+    stim_covered_count = sum(1 for c in evaluated if c["stim_covered"])
+    stim_coverage_pct = round(stim_covered_count / len(evaluated), 4) if evaluated else 0.0
+    ranking_method = (
+        "decision_score_stim_tiebreak" if stim_covered_count > 0
+        else "decision_score_only"
+    )
+    candidate_ordering = (
+        "decision_score DESC, stim_percentile_13wk DESC, symbol ASC"
+        if stim_covered_count > 0
+        else "decision_score DESC, symbol ASC"
+    )
 
     resolved_bias = _bias_resolved(body.bias, current_regime)
     notes = _construction_notes(
@@ -390,10 +475,14 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
         "exchange_filter": [norm_exchange] if norm_exchange else ["N", "Q", "A"],
         "candidates_evaluated": len(candidate_rows),
         "candidate_selection_method": "full_eligible_universe",
-        "candidate_ordering": "decision_score DESC, symbol ASC",
+        "candidate_ordering": candidate_ordering,
         "portfolio_score": portfolio_score,
         "bias_requested": body.bias,
         "bias_resolved": resolved_bias,
+        "stim_weekdate": str(stim_weekdate) if stim_weekdate else None,
+        "stim_covered_count": stim_covered_count,
+        "stim_coverage_pct": stim_coverage_pct,
+        "ranking_method": ranking_method,
         "regime_context": {
             "current_regime": current_regime,
             "regime_score": round(current_regime_score, 4),
