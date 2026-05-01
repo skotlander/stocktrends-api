@@ -87,7 +87,9 @@ _PREVIEW_BY_PATH: dict[str, dict] = {
             "portfolio[].trend", "portfolio[].trend_cnt", "portfolio[].mt_cnt",
             "portfolio[].rsi", "portfolio[].bias", "portfolio[].confidence",
             "portfolio[].decision_score",
-            "count", "candidates_evaluated", "portfolio_score",
+            "count", "universe", "exchange_filter",
+            "candidates_evaluated", "candidate_selection_method", "candidate_ordering",
+            "portfolio_score",
             "bias_requested", "bias_resolved",
             "regime_context.current_regime", "regime_context.regime_score",
             "regime_context.regime_confidence", "regime_context.forecast_regime",
@@ -97,7 +99,11 @@ _PREVIEW_BY_PATH: dict[str, dict] = {
         ],
         "note": (
             "Returns a constructed equal-weight portfolio allocation with per-position weights, "
-            "Stock Trends signal fields, decision scores, and market regime context."
+            "Stock Trends signal fields, decision scores, and market regime context. "
+            "universe and exchange_filter echo the parameters used. "
+            "candidate_selection_method ('full_eligible_universe') and candidate_ordering "
+            "('decision_score DESC, symbol ASC') describe how candidates were assembled "
+            "and ranked before top-N selection."
         ),
     },
     "/v1/portfolio/evaluate": {

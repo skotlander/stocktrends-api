@@ -173,6 +173,59 @@ def test_candidates_evaluated_equals_full_universe():
     assert resp.json()["candidates_evaluated"] == 50
 
 
+def test_candidate_sql_has_no_alphabetical_limit():
+    """
+    Regression: the candidate query SQL must not contain ORDER BY symbol ASC or
+    LIMIT :pool_size, and the params dict must not contain pool_size.
+
+    Patches routers.portfolio.text to capture the actual SQL strings so this
+    assertion catches the old alphabetical pre-limit bug even though the mock
+    engine returns candidate rows unconditionally.
+
+    With the old code this test fails because:
+      - candidate_sql contains "ORDER BY symbol ASC"
+      - candidate_sql contains "LIMIT :pool_size"
+      - candidate_params contains "pool_size": 20
+    """
+    candidates = [_candidate("AAPL", _HIGH_TREND_CNT, _HIGH_RSI)]
+    engine = _mock_engine(candidates)
+    conn = engine.connect.return_value.__enter__.return_value
+
+    with patch("routers.portfolio.text") as mock_text:
+        with patch("routers.portfolio.get_engine", return_value=engine):
+            resp = _client.post("/v1/portfolio/construct", json={"count": 5})
+
+    assert resp.status_code == 200, resp.text
+
+    # text() is called exactly 3 times: weekdates, regime aggregation, candidates.
+    sql_calls = mock_text.call_args_list
+    assert len(sql_calls) == 3, f"Expected 3 text() calls, got {len(sql_calls)}"
+    candidate_sql: str = sql_calls[2].args[0]
+
+    assert "ORDER BY symbol ASC" not in candidate_sql, (
+        "Candidate SQL still contains 'ORDER BY symbol ASC' — alphabetical pre-limit bug "
+        f"in query:\n{candidate_sql}"
+    )
+    assert "LIMIT" not in candidate_sql.upper(), (
+        "Candidate SQL still contains 'LIMIT' — candidate pool size pre-filter bug "
+        f"in query:\n{candidate_sql}"
+    )
+
+    # The params dict for the 3rd conn.execute() call must not contain pool_size.
+    execute_calls = conn.execute.call_args_list
+    assert len(execute_calls) == 3
+    candidate_params: dict = execute_calls[2].args[1]
+    assert "pool_size" not in candidate_params, (
+        f"pool_size still in candidate params dict: {candidate_params}"
+    )
+
+    # Required WHERE filters must still be present.
+    assert ":latest_wd" in candidate_sql, "Candidate SQL missing :latest_wd bind"
+    assert "type" in candidate_sql, "Candidate SQL missing type filter"
+    assert "trend" in candidate_sql.lower(), "Candidate SQL missing trend filter"
+    assert "st_data" in candidate_sql, "Candidate SQL missing st_data table reference"
+
+
 # ---------------------------------------------------------------------------
 # 3. TSX exchange code "T" is accepted
 # ---------------------------------------------------------------------------
@@ -354,3 +407,26 @@ def test_construction_notes_mention_candidates_evaluated():
     assert "candidate" in notes_combined.lower() or "evaluated" in notes_combined.lower(), (
         f"construction_notes should mention candidates evaluated: {notes_combined!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 8. x402 preview shape includes new transparency fields
+# ---------------------------------------------------------------------------
+
+def test_portfolio_construct_preview_includes_transparency_fields():
+    """
+    discovery/preview.py entry for /v1/portfolio/construct must include the four
+    new transparency fields added in this PR: universe, exchange_filter,
+    candidate_selection_method, candidate_ordering.
+    """
+    from discovery.preview import get_endpoint_preview
+
+    preview = get_endpoint_preview("/v1/portfolio/construct")
+    assert preview is not None, "/v1/portfolio/construct not registered in preview registry"
+
+    shape_str = " ".join(preview.get("response_shape", []))
+    for field in ("universe", "exchange_filter", "candidate_selection_method", "candidate_ordering"):
+        assert field in shape_str, (
+            f"New transparency field '{field}' missing from /v1/portfolio/construct "
+            f"x402 preview response_shape — update discovery/preview.py"
+        )
