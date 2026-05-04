@@ -257,9 +257,18 @@ def build_x402_requirements(
     # Bazaar extension shape differs by method class.
     # GET/HEAD/DELETE: query-param style (no body fields required).
     # POST/PUT/PATCH:  body style — declare bodyType and an empty body schema.
+    _BAZAAR_OUTPUT: dict[str, Any] = {
+        "type": "json",
+        "description": "JSON response returned after successful payment.",
+        "example": {},
+    }
+
     _QUERY_METHODS = {"GET", "HEAD", "DELETE"}
     if http_method in _QUERY_METHODS:
-        bazaar_info: dict[str, Any] = {"input": {"type": "http", "method": http_method}}
+        bazaar_info: dict[str, Any] = {
+            "input": {"type": "http", "method": http_method},
+            "output": _BAZAAR_OUTPUT,
+        }
         bazaar_schema_input_props: dict[str, Any] = {
             "type": {"type": "string", "const": "http"},
             "method": {"type": "string", "enum": [http_method]},
@@ -267,7 +276,8 @@ def build_x402_requirements(
         bazaar_schema_required = ["type", "method"]
     else:
         bazaar_info = {
-            "input": {"type": "http", "method": http_method, "bodyType": "json", "body": {}}
+            "input": {"type": "http", "method": http_method, "bodyType": "json", "body": {}},
+            "output": _BAZAAR_OUTPUT,
         }
         bazaar_schema_input_props = {
             "type": {"type": "string", "const": "http"},
@@ -309,9 +319,18 @@ def build_x402_requirements(
                             "properties": bazaar_schema_input_props,
                             "required": bazaar_schema_required,
                             "additionalProperties": False,
-                        }
+                        },
+                        "output": {
+                            "type": "object",
+                            "properties": {
+                                "type": {"type": "string"},
+                                "description": {"type": "string"},
+                                "example": {},
+                            },
+                            "required": ["type"],
+                        },
                     },
-                    "required": ["input"],
+                    "required": ["input", "output"],
                 },
             }
         },

@@ -266,3 +266,49 @@ class TestPaymentRequiredHeader:
         # The JSON body's resource field must equal the header's resource.url
         assert body["resource"] == decoded["resource"]["url"]
         assert body["resource"] == _FULL_URL
+
+
+# ---------------------------------------------------------------------------
+# extensions.bazaar.info.output — required by Agentic Market Bazaar check
+# ---------------------------------------------------------------------------
+
+class TestExtensionsBazaarOutput:
+    def test_info_has_output(self, reqs):
+        assert "output" in reqs["extensions"]["bazaar"]["info"]
+
+    def test_output_type_is_json(self, reqs):
+        assert reqs["extensions"]["bazaar"]["info"]["output"]["type"] == "json"
+
+    def test_output_example_present(self, reqs):
+        assert "example" in reqs["extensions"]["bazaar"]["info"]["output"]
+
+    def test_output_example_is_dict(self, reqs):
+        assert isinstance(reqs["extensions"]["bazaar"]["info"]["output"]["example"], dict)
+
+    def test_output_description_present(self, reqs):
+        assert "description" in reqs["extensions"]["bazaar"]["info"]["output"]
+
+    def test_schema_has_output_property(self, reqs):
+        schema_props = reqs["extensions"]["bazaar"]["schema"]["properties"]
+        assert "output" in schema_props
+
+    def test_schema_output_type_is_object(self, reqs):
+        output_schema = reqs["extensions"]["bazaar"]["schema"]["properties"]["output"]
+        assert output_schema["type"] == "object"
+
+    def test_schema_required_includes_input_and_output(self, reqs):
+        required = reqs["extensions"]["bazaar"]["schema"]["required"]
+        assert "input" in required
+        assert "output" in required
+
+    def test_post_info_also_has_output(self, monkeypatch):
+        monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
+        r = build_x402_requirements(path=_PATH, amount_usd=_AMOUNT, method="POST")
+        assert r["extensions"]["bazaar"]["info"]["output"]["type"] == "json"
+
+    def test_decoded_header_has_output(self, monkeypatch):
+        monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
+        _, hdr = build_x402_challenge(path=_PATH, amount_usd=_AMOUNT, method="GET")
+        decoded = json.loads(base64.b64decode(hdr).decode("utf-8"))
+        assert decoded["extensions"]["bazaar"]["info"]["output"]["type"] == "json"
+        assert "example" in decoded["extensions"]["bazaar"]["info"]["output"]
