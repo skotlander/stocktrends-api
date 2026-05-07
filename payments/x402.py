@@ -507,6 +507,12 @@ def _extract_x402_amount_native(payload: dict[str, Any]) -> Decimal | None:
                 if isinstance(authorization, dict):
                     raw_amount = authorization.get("value")
     if raw_amount is None:
+        nested_payload = payload.get("payload")
+        if isinstance(nested_payload, dict):
+            authorization = nested_payload.get("authorization")
+            if isinstance(authorization, dict):
+                raw_amount = authorization.get("value")
+    if raw_amount is None:
         accepted = payload.get("accepted")
         if isinstance(accepted, dict):
             raw_amount = accepted.get("amount")

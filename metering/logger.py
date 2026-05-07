@@ -210,6 +210,36 @@ INSERT INTO api_request_economics (
 """)
 
 
+UPDATE_PENDING_REQUEST_ECONOMICS_SQL = text("""
+UPDATE api_request_economics
+SET
+    customer_id = :customer_id,
+    api_key_id = :api_key_id,
+    pricing_rule_id = :pricing_rule_id,
+    unit_price_usd = :unit_price_usd,
+    billed_amount_usd = :billed_amount_usd,
+    stc_cost = :stc_cost,
+    payment_required = :payment_required,
+    payment_rail = :payment_rail,
+    payment_status = :payment_status,
+    payment_method = :payment_method,
+    payment_network = :payment_network,
+    payment_token = :payment_token,
+    payment_amount_native = :payment_amount_native,
+    payment_amount_usd = :payment_amount_usd,
+    payment_reference = :payment_reference,
+    session_id = :session_id,
+    payment_channel_id = :payment_channel_id,
+    agent_id = :agent_id,
+    agent_type = :agent_type,
+    agent_vendor = :agent_vendor,
+    agent_version = :agent_version,
+    request_purpose = :request_purpose
+WHERE request_id = :request_id
+  AND payment_status = 'pending'
+""")
+
+
 INSERT_REQUEST_ECONOMICS_SQL_LEGACY = text("""
 INSERT INTO api_request_economics (
     request_id,
@@ -256,6 +286,34 @@ INSERT INTO api_request_economics (
     :agent_version,
     :request_purpose
 )
+""")
+
+
+UPDATE_PENDING_REQUEST_ECONOMICS_SQL_LEGACY = text("""
+UPDATE api_request_economics
+SET
+    customer_id = :customer_id,
+    api_key_id = :api_key_id,
+    pricing_rule_id = :pricing_rule_id,
+    unit_price_usd = :unit_price_usd,
+    billed_amount_usd = :billed_amount_usd,
+    payment_required = :payment_required,
+    payment_status = :payment_status,
+    payment_method = :payment_method,
+    payment_network = :payment_network,
+    payment_token = :payment_token,
+    payment_amount_native = :payment_amount_native,
+    payment_amount_usd = :payment_amount_usd,
+    payment_reference = :payment_reference,
+    session_id = :session_id,
+    payment_channel_id = :payment_channel_id,
+    agent_id = :agent_id,
+    agent_type = :agent_type,
+    agent_vendor = :agent_vendor,
+    agent_version = :agent_version,
+    request_purpose = :request_purpose
+WHERE request_id = :request_id
+  AND payment_status = 'pending'
 """)
 
 
@@ -328,9 +386,14 @@ def log_api_request_event(event: dict) -> None:
 
 
 def log_api_request_economics(econ: dict) -> None:
+    econ = dict(econ)
     engine = get_metering_engine()
     try:
         with engine.begin() as conn:
+            if _should_update_pending_economics(econ):
+                result = conn.execute(UPDATE_PENDING_REQUEST_ECONOMICS_SQL, econ)
+                if getattr(result, "rowcount", 0):
+                    return
             conn.execute(INSERT_REQUEST_ECONOMICS_SQL, econ)
     except DBAPIError as exc:
         if not _is_missing_metering_columns_error(exc):
@@ -341,7 +404,21 @@ def log_api_request_economics(econ: dict) -> None:
         legacy_econ.pop("payment_rail", None)
 
         with engine.begin() as conn:
+            if _should_update_pending_economics(legacy_econ):
+                result = conn.execute(UPDATE_PENDING_REQUEST_ECONOMICS_SQL_LEGACY, legacy_econ)
+                if getattr(result, "rowcount", 0):
+                    return
             conn.execute(INSERT_REQUEST_ECONOMICS_SQL_LEGACY, legacy_econ)
+
+
+def _should_update_pending_economics(econ: dict) -> bool:
+    request_id = econ.get("request_id")
+    payment_status = econ.get("payment_status")
+    payment_required = econ.get("payment_required")
+    payment_rail = str(econ.get("payment_rail") or "").strip().lower()
+    payment_method = str(econ.get("payment_method") or "").strip().lower()
+    is_x402 = payment_rail == "x402" or payment_method == "x402"
+    return bool(request_id and payment_required and is_x402 and payment_status and payment_status != "pending")
 
 
 def log_auth_failure_event(

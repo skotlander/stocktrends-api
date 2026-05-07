@@ -914,6 +914,13 @@ class MeteringMiddleware(BaseHTTPMiddleware):
             billed_amount_usd = Decimal("0")
         workflow_type = normalize_workflow_type(auth_mode, agent_identifier)
         resolved_payment_method = payment_method_header or decision.log_payment_method
+        effective_payment_method = (
+            payment_method_header
+            or decision.econ_payment_method
+            or decision.log_payment_method
+        )
+        # Standard x402 clients may send only X-Payment/payment-signature; rail
+        # resolution must still yield x402 so accounting never depends on our private header.
         payment_rail = resolve_payment_rail(
             decision,
             payment_method_header=payment_method_header,
@@ -1102,7 +1109,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
 
             return response
 
-        normalized_payment_method = (payment_method_header or "").strip().lower()
+        normalized_payment_method = (effective_payment_method or "").strip().lower()
 
         should_validate_agent_pay = (
             ENABLE_AGENT_PAY
@@ -1933,7 +1940,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 payment_status = decision.econ_payment_status
 
                 if decision.econ_payment_required:
-                    if is_x402_payment_method(normalized_payment_method):
+                    if payment_rail == "x402" or is_x402_payment_method(normalized_payment_method):
                         if validation_valid and payment_reference_header:
                             payment_status = "settled"
                         elif payment_reference_header and not validation_valid:
@@ -1961,7 +1968,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 econ_payment_fields = build_econ_payment_fields(
                     payment_required=decision.econ_payment_required,
                     payment_status=payment_status or "pending",
-                    payment_method_header=payment_method_header,
+                    payment_method_header=effective_payment_method,
                     payment_network_header=payment_network_header,
                     payment_token_header=payment_token_header,
                     payment_amount_header=payment_amount_header,
