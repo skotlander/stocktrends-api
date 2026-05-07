@@ -415,7 +415,10 @@ def _should_update_pending_economics(econ: dict) -> bool:
     request_id = econ.get("request_id")
     payment_status = econ.get("payment_status")
     payment_required = econ.get("payment_required")
-    return bool(request_id and payment_required and payment_status and payment_status != "pending")
+    payment_rail = str(econ.get("payment_rail") or "").strip().lower()
+    payment_method = str(econ.get("payment_method") or "").strip().lower()
+    is_x402 = payment_rail == "x402" or payment_method == "x402"
+    return bool(request_id and payment_required and is_x402 and payment_status and payment_status != "pending")
 
 
 def log_auth_failure_event(

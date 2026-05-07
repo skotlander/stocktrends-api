@@ -919,6 +919,8 @@ class MeteringMiddleware(BaseHTTPMiddleware):
             or decision.econ_payment_method
             or decision.log_payment_method
         )
+        # Standard x402 clients may send only X-Payment/payment-signature; rail
+        # resolution must still yield x402 so accounting never depends on our private header.
         payment_rail = resolve_payment_rail(
             decision,
             payment_method_header=payment_method_header,

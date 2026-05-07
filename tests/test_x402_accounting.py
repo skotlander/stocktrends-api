@@ -185,3 +185,34 @@ def test_log_api_request_economics_updates_existing_pending_row(monkeypatch):
     assert calls[0]["request_id"] == _REQUEST_ID
     assert calls[0]["payment_status"] == "settled"
 
+
+def test_log_api_request_economics_does_not_update_non_x402_rows(monkeypatch):
+    import metering.logger as logger_module
+
+    statements: list[object] = []
+
+    class FakeConnection:
+        def execute(self, statement, _params):
+            statements.append(statement)
+            return SimpleNamespace(rowcount=1)
+
+    class FakeBegin:
+        def __enter__(self):
+            return FakeConnection()
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakeEngine:
+        def begin(self):
+            return FakeBegin()
+
+    econ = _econ("captured")
+    econ["payment_rail"] = "mpp"
+    econ["payment_method"] = "mpp"
+
+    monkeypatch.setattr(logger_module, "get_metering_engine", lambda: FakeEngine())
+
+    logger_module.log_api_request_economics(econ)
+
+    assert statements == [logger_module.INSERT_REQUEST_ECONOMICS_SQL]
