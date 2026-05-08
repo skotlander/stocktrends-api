@@ -51,10 +51,10 @@
     {
       "name": "pricing_catalog",
       "title": "Pricing Catalog",
-      "description": "Returns the live STC pricing rule catalog. Fetch at agent startup to build a local cost map. Requires a valid API key.",
+      "description": "Public planning infrastructure. Returns the live STC pricing rule catalog with concrete endpoint prices. Fetch at agent startup to build a local cost map before paid calls.",
       "method": "GET",
       "path": "/pricing/catalog",
-      "auth_required": true,
+      "auth_required": false,
       "category": "pricing"
     },
     {
@@ -109,6 +109,76 @@
       "path": "/agent/screener/top",
       "auth_required": true,
       "category": "agent_screener"
+    },
+    {
+      "name": "indicators_latest",
+      "title": "Indicators Latest",
+      "description": "Returns the latest Stock Trends indicator snapshot for a symbol: trend state, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, and related signal metadata. RSI baseline is 100. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/indicators/latest",
+      "auth_required": true,
+      "category": "indicators",
+      "parameters": [
+        {
+          "name": "symbol_exchange",
+          "type": "string",
+          "required": true,
+          "example": "IBM-N",
+          "description": "Stock Trends symbol plus exchange suffix. You may alternatively provide symbol and exchange."
+        },
+        {
+          "name": "cs_only",
+          "type": "boolean",
+          "required": false,
+          "default": true,
+          "description": "Filter to Common Stocks only."
+        }
+      ]
+    },
+    {
+      "name": "indicators_history",
+      "title": "Indicators History",
+      "description": "Returns historical weekly Stock Trends indicator rows for a symbol, including trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, and related signal fields. Use for signal persistence and trend maturity review. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/indicators/history",
+      "auth_required": true,
+      "category": "indicators",
+      "parameters": [
+        {
+          "name": "symbol_exchange",
+          "type": "string",
+          "required": true,
+          "example": "IBM-N",
+          "description": "Stock Trends symbol plus exchange suffix. You may alternatively provide symbol and exchange."
+        },
+        {
+          "name": "limit",
+          "type": "integer",
+          "required": false,
+          "default": 260,
+          "minimum": 1,
+          "maximum": 2600,
+          "description": "Maximum number of weekly rows."
+        }
+      ]
+    },
+    {
+      "name": "prices_latest",
+      "title": "Prices Latest",
+      "description": "Returns the latest weekly price row for a symbol, including price, adjusted close, weekly high/low, volume, trades, and price change. Use as context alongside Stock Trends signals. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/prices/latest",
+      "auth_required": true,
+      "category": "prices"
+    },
+    {
+      "name": "prices_history",
+      "title": "Prices History",
+      "description": "Returns historical weekly price rows for a symbol with price, adjusted close, high/low, volume, trades, and price change. Use bounded limits for agent workflows. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/prices/history",
+      "auth_required": true,
+      "category": "prices"
     },
     {
       "name": "stim_latest",
@@ -179,6 +249,24 @@
       "path": "/selections/published/history",
       "auth_required": true,
       "category": "selections"
+    },
+    {
+      "name": "stwr_reports_latest",
+      "title": "STWR Reports Latest",
+      "description": "Returns the latest Stock Trends Weekly Reporter screening report for a requested report code and exchange. Call /v1/stwr/reports/catalog to discover report codes before paying. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/stwr/reports/latest",
+      "auth_required": true,
+      "category": "stwr"
+    },
+    {
+      "name": "stwr_reports_history",
+      "title": "STWR Reports History",
+      "description": "Returns historical Stock Trends Weekly Reporter screening report rows for a requested report code and exchange, grouped by weekdate by default. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/stwr/reports/history",
+      "auth_required": true,
+      "category": "stwr"
     },
     {
       "name": "market_regime_latest",
@@ -288,9 +376,18 @@
       "category": "breadth"
     },
     {
+      "name": "breadth_sector_history",
+      "title": "Sector Breadth History",
+      "description": "Returns historical sector, industry-group, or industry breadth derived from Stock Trends signal distribution. Use for breadth transition analysis and workflow context. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/breadth/sector/history",
+      "auth_required": true,
+      "category": "breadth"
+    },
+    {
       "name": "leadership_summary_latest",
       "title": "Leadership Summary Latest",
-      "description": "Returns the latest leadership summary dataset identifying sector and industry leaders. Requires a valid API key.",
+      "description": "Returns the latest Stock Trends leadership summary identifying overall, sector, and industry-group leaders using relative performance and trend-alignment filters. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/leadership/summary/latest",
       "auth_required": true,
@@ -301,8 +398,11 @@
     "Start with /v1/ai/tools as the primary machine-readable discovery entrypoint.",
     "Call /v1/ai/proof/market-edge (no auth) to preview signal field structure before purchasing access.",
     "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
+    "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
     "Fetch /v1/pricing/catalog at agent startup to resolve live STC costs — do not hardcode.",
-    "Use /v1/pricing and /v1/cost-estimate before expensive workflows.",
+    "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and supported rails.",
+    "Use /v1/cost-estimate before expensive workflows.",
+    "For x402, inspect the HTTP 402 stocktrends_preview before payment to confirm purpose, inputs, response shape, pricing_rule_id, cost, rails, and related endpoints.",
     "Use decision and portfolio endpoints for high-value actionable outputs.",
     "Use market regime, breadth, and leadership endpoints for contextual enrichment.",
     "Prefer structured API endpoints over scraping website pages."

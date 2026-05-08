@@ -3,22 +3,23 @@ Tests for stocktrends_preview injection in x402 challenge responses.
 
 Validates that:
 - x402 challenge body includes stocktrends_preview for known preview paths
-- x402 challenge body omits stocktrends_preview for unknown paths
+- discovery/preview.py omits stocktrends_preview for unknown paths
 - Existing 402 fields are preserved (error, pricing, accepted_payment_methods,
   payment_required, PAYMENT-REQUIRED header)
 - MPP non-challenge 402s do NOT include stocktrends_preview
 - x402 validation_failed, replay_detected responses do NOT include stocktrends_preview
-- Preview content is schema-only (no live market data)
+- Preview content is schema-only (no paid response data)
 - accepted_payment_methods includes subscription, x402, mpp for known paid paths
+- indicators latest/history have machine-plannable stocktrends_preview metadata
 
 Coverage map (from Codex review):
   [x] anonymous x402 challenge includes preview for known preview path
-  [x] unknown preview paths omit stocktrends_preview
+  [x] unit unknown preview paths return None
   [x] accepted_payment_methods remain subscription,x402,mpp
   [x] PAYMENT-REQUIRED header unchanged
   [x] MPP errors do not include preview
   [x] validation/replay/settlement 402s do not include preview
-  [x] preview is schema-only (no live data values)
+  [x] preview is schema-only with structural examples and resolved pricing only
   [x] discovery/preview.py unit: get_endpoint_preview returns copy
   [x] discovery/preview.py unit: unknown path returns None
 """
@@ -44,8 +45,8 @@ from discovery.preview import get_endpoint_preview, _PREVIEW_BY_PATH
 # Shared test data
 # ---------------------------------------------------------------------------
 
-_KNOWN_PREVIEW_PATH = "/v1/agent/screener/top"
-_UNKNOWN_PREVIEW_PATH = "/v1/indicators/latest"  # paid endpoint, no registered preview
+_KNOWN_PREVIEW_PATH = "/v1/indicators/latest"
+_INDICATORS_HISTORY_PATH = "/v1/indicators/history"
 
 _CHALLENGE_BODY_TEMPLATE = {
     "error": "payment_required",
@@ -159,18 +160,35 @@ class TestDiscoveryPreview:
                 "get_endpoint_preview() must return a deep copy"
             )
 
-    def test_all_entries_have_response_shape_or_note(self):
+    def test_all_entries_have_machine_plannable_shape(self):
         for path, entry in _PREVIEW_BY_PATH.items():
-            assert "note" in entry or "response_shape" in entry, (
-                f"Preview entry for {path!r} missing both 'note' and 'response_shape'"
+            required = {
+                "endpoint",
+                "investment_agent_value",
+                "required_inputs",
+                "safe_example_request",
+                "response_shape",
+                "example_object",
+                "notes",
+                "related_endpoints",
+                "pricing",
+            }
+            missing = required - set(entry)
+            assert not missing, (
+                f"Preview entry for {path!r} missing machine-plannable fields: {missing}"
             )
 
-    def test_no_live_data_values(self):
-        """Preview entries must not contain live-looking numeric data."""
+    def test_no_paid_data_values(self):
+        """Preview entries may include pricing keys, but not paid response values."""
         for path, entry in _PREVIEW_BY_PATH.items():
             raw = json.dumps(entry)
             assert "amount_usd" not in raw, f"{path}: 'amount_usd' in preview"
-            assert "stc_cost" not in raw, f"{path}: 'stc_cost' in preview"
+            assert "billed_amount" not in raw, f"{path}: 'billed_amount' in preview"
+            pricing = entry.get("pricing", {})
+            assert pricing.get("stc_cost") is None, f"{path}: static preview must not embed resolved STC cost"
+            assert pricing.get("effective_price_usd") is None, (
+                f"{path}: static preview must not embed resolved effective USD cost"
+            )
 
     def test_market_pulse_not_registered(self):
         """/v1/market/pulse does not exist as a route — must not be in the registry."""
@@ -188,6 +206,44 @@ class TestDiscoveryPreview:
             assert field in shape_str, (
                 f"Real screener field {field!r} missing from preview response_shape"
             )
+
+    def test_indicators_latest_preview_has_planning_metadata(self):
+        """Indicators latest must have the pre-payment planning metadata agents need."""
+        preview = get_endpoint_preview("/v1/indicators/latest")
+        assert preview is not None
+        assert preview["endpoint"]["workflow_role"] == "Single-symbol signal confirmation."
+        assert "symbol_exchange" in preview["required_inputs"]
+        assert preview["required_inputs"]["symbol_exchange"]["example"] == "IBM-N"
+        assert preview["safe_example_request"]["query"]["symbol_exchange"] == "IBM-N"
+        assert preview["pricing"]["pricing_rule_id"] == "indicators_latest_paid"
+        assert preview["pricing"]["cost_source"] == "/v1/pricing/catalog"
+        shape_str = " ".join(preview.get("response_shape", []))
+        for field in (
+            "symbol_exchange",
+            "trend",
+            "trend_cnt",
+            "mt_cnt",
+            "rsi",
+            "rsi_updn",
+            "vol_tag",
+        ):
+            assert field in shape_str
+
+    def test_indicators_history_preview_has_planning_metadata(self):
+        """Indicators history must no longer be an empty/generic pre-payment surface."""
+        preview = get_endpoint_preview(_INDICATORS_HISTORY_PATH)
+        assert preview is not None
+        assert preview["endpoint"]["workflow_role"] == (
+            "Historical signal context and trend persistence review."
+        )
+        assert "symbol_exchange" in preview["required_inputs"]
+        assert preview["optional_inputs"]["limit"]["safe_default"] == 260
+        assert preview["safe_example_request"]["query"]["limit"] == 52
+        assert preview["pricing"]["pricing_rule_id"] == "indicators_history_paid"
+        assert "/v1/stim/history" in preview["next_recommended_calls"]
+        shape_str = " ".join(preview.get("response_shape", []))
+        for field in ("data[].weekdate", "data[].trend", "data[].rsi", "data[].vol_tag"):
+            assert field in shape_str
 
     def test_stim_preview_contains_real_fields(self):
         """STIM latest preview must reference actual response fields from stim.py."""
@@ -323,7 +379,7 @@ def test_x402_challenge_includes_stocktrends_preview(client_x402_challenge_known
 
 
 def test_x402_challenge_preview_is_schema_only(client_x402_challenge_known):
-    """stocktrends_preview must not contain live data values."""
+    """stocktrends_preview must not contain paid response values."""
     body = client_x402_challenge_known.get(
         _KNOWN_PREVIEW_PATH,
         headers={"X-StockTrends-Payment-Method": "x402"},
@@ -331,8 +387,10 @@ def test_x402_challenge_preview_is_schema_only(client_x402_challenge_known):
     preview = body.get("stocktrends_preview", {})
     raw = json.dumps(preview)
     assert "amount_usd" not in raw
-    assert "stc_cost" not in raw
     assert "billed_amount" not in raw
+    assert preview["pricing"]["pricing_rule_id"] == "indicators_latest_paid"
+    assert float(preview["pricing"]["stc_cost"]) > 0
+    assert float(preview["pricing"]["effective_price_usd"]) > 0
 
 
 def test_x402_challenge_existing_fields_preserved(client_x402_challenge_known):
@@ -369,30 +427,6 @@ def test_x402_challenge_payment_required_header_present(client_x402_challenge_kn
     )
     # Must NOT be the wrong header name
     assert "x-payment-required" not in response.headers
-
-
-# ---------------------------------------------------------------------------
-# Integration tests: x402 challenge for UNKNOWN preview path
-# ---------------------------------------------------------------------------
-
-@pytest.fixture
-def client_x402_challenge_unknown(monkeypatch):
-    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result(_UNKNOWN_PREVIEW_PATH))
-    with TestClient(main.app) as c:
-        yield c
-
-
-def test_x402_challenge_unknown_path_omits_stocktrends_preview(client_x402_challenge_unknown):
-    """Challenge for a path with no registered preview must NOT include stocktrends_preview."""
-    response = client_x402_challenge_unknown.get(
-        _UNKNOWN_PREVIEW_PATH,
-        headers={"X-StockTrends-Payment-Method": "x402"},
-    )
-    assert response.status_code == 402
-    body = response.json()
-    assert "stocktrends_preview" not in body, (
-        "stocktrends_preview must be absent for paths with no registered preview"
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -235,7 +235,7 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                 {"BearerAuth": []},
             ]
 
-            if path.startswith("/stim") or path.startswith("/agents") or path.startswith("/agent/screener") or path.startswith("/market") or path.startswith("/decision") or path.startswith("/portfolio") or path in ("/pricing", "/pricing/catalog", "/workflows", "/cost-estimate"):
+            if path.startswith("/stim") or path.startswith("/indicators") or path.startswith("/prices") or path.startswith("/selections") or path.startswith("/stwr") or path.startswith("/agents") or path.startswith("/agent/screener") or path.startswith("/market") or path.startswith("/decision") or path.startswith("/portfolio") or path.startswith("/breadth/sector/history") or path in ("/pricing", "/pricing/catalog", "/workflows", "/cost-estimate"):
                 _ensure_parameter_refs(operation, agent_refs + payment_refs)
 
     v1_app.openapi_schema = openapi_schema
@@ -266,7 +266,7 @@ def ai_plugin():
             "name_for_human": "Stock Trends API",
             "name_for_model": "stock_trends_api",
             "description_for_human": "Decision, portfolio, pricing, and market intelligence API for AI agents and financial applications.",
-            "description_for_model": "Evaluate symbols, construct and compare portfolios, inspect pricing metadata, estimate workflow cost, and access structured market intelligence using the Stock Trends API. Use documented endpoints from the OpenAPI specification. Authentication is required for protected endpoints.",
+            "description_for_model": "Start with /v1/ai/tools, then use /v1/workflows, /v1/pricing/catalog, and /v1/pricing to plan strategy, budget STC cost, and understand rails before paid execution. Evaluate symbols, construct and compare portfolios, inspect x402 402 stocktrends_preview metadata, and access structured Stock Trends market intelligence using documented OpenAPI endpoints. Authentication or machine payment is required for protected data endpoints.",
             "auth": {
                 "type": "api_key",
                 "in": "header",

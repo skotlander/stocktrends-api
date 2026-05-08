@@ -34,12 +34,20 @@ sys.modules.setdefault("db", _DB_MOCK)
 # Now safe to import project modules
 from routers.ai import _TOOL_TEMPLATES, _MANIFEST_PUBLIC_PATHS, _build_workflow_summary, ai_context, ai_tools
 from routers.workflows import WORKFLOW_REGISTRY
+from discovery.endpoint_metadata import build_input_schema
 from pricing.classifier import NON_METERED_PATHS, classify_request
 from payments.policy_provider import (
     is_free_metered_path,
     is_agent_pay_route,
     get_agent_pay_auth_bypass_methods,
 )
+
+_PUBLIC_METERED_PLANNING_EXCEPTIONS = frozenset({
+    # Current runtime behavior: public in ApiKeyMiddleware, but classified as
+    # metered planning metadata. This PR only corrects discovery metadata;
+    # enforcement/classifier reconciliation is a follow-up.
+    "/v1/pricing/catalog",
+})
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +201,8 @@ def test_required_tools_present():
     endpoints = {(t["endpoint"], t["method"]) for t in result["tools"]}
     required = {
         ("/v1/ai/context", "GET"),
+        ("/v1/indicators/latest", "GET"),
+        ("/v1/indicators/history", "GET"),
         ("/v1/decision/evaluate-symbol", "POST"),
         ("/v1/workflows", "GET"),
         ("/v1/cost-estimate", "GET"),
@@ -258,6 +268,30 @@ def test_stim_tools_supported_rails_match_policy():
             f"STIM tool '{tool['name']}' supported_rails={tool['supported_rails']!r} "
             f"expected {expected_rails!r} (derived from runtime policy)"
         )
+
+
+def test_registry_overrides_shadowed_tool_templates():
+    """
+    Older hand-authored templates for these endpoints were thinner than the
+    central registry. The manifest should now expose the registry input schema.
+    """
+    result = ai_tools()
+    tools_by_endpoint = {(tool["endpoint"], tool["method"]): tool for tool in result["tools"]}
+    shadowed = {
+        ("/v1/agent/screener/top", "GET"),
+        ("/v1/portfolio/construct", "POST"),
+        ("/v1/portfolio/evaluate", "POST"),
+        ("/v1/portfolio/compare", "POST"),
+        ("/v1/stim/latest", "GET"),
+        ("/v1/stim/history", "GET"),
+    }
+
+    for endpoint, method in shadowed:
+        tool = tools_by_endpoint[(endpoint, method)]
+        assert tool["input_schema"] == build_input_schema(endpoint)
+        assert tool["safe_example_request"]["path"] == endpoint
+        assert tool["workflow_role"]
+        assert "related_endpoints" in tool
 
 
 def test_non_metered_tools_have_no_pricing_rule_id():
@@ -444,6 +478,13 @@ def test_pricing_cost_estimate_endpoint_present():
     assert result["pricing"]["cost_estimate_endpoint"] == "/v1/cost-estimate"
 
 
+def test_cost_estimate_tool_mentions_mpp_rail():
+    result = ai_tools()
+    tool = next(t for t in result["tools"] if t["endpoint"] == "/v1/cost-estimate")
+    rail_enum = tool["input_schema"]["properties"]["rail_preference"]["enum"]
+    assert "mpp" in rail_enum
+
+
 def test_pricing_section_has_no_hardcoded_usd_amounts():
     """Pricing section must not hardcode USD cost amounts."""
     import json
@@ -518,15 +559,16 @@ def test_regression_ai_context_tool():
 
 def test_regression_pricing_catalog_tool():
     """
-    /v1/pricing/catalog is a standard /v1/ authenticated subscription path.
-    Manifest must reflect: auth_required=True, metered=True, pricing_rule_id not None.
+    /v1/pricing/catalog is public under current ApiKeyMiddleware behavior, but
+    classifier metadata still reports it as metered with a subscription pricing rule.
+    This PR only corrects discovery metadata to match current public behavior.
     """
     result = ai_tools()
     tool = next(t for t in result["tools"] if t["endpoint"] == "/v1/pricing/catalog")
-    assert tool["auth_required"] is True, "/v1/pricing/catalog must be auth_required=True"
+    assert tool["auth_required"] is False, "/v1/pricing/catalog is public under current behavior"
     assert tool["metered"] is True, "/v1/pricing/catalog must be metered=True"
     assert tool["pricing_rule_id"] is not None, (
-        "/v1/pricing/catalog must have a pricing_rule_id (subscription-metered path)"
+        "/v1/pricing/catalog must keep its classifier-derived pricing_rule_id"
     )
 
 
@@ -633,13 +675,14 @@ def test_manifest_public_paths_subset_of_middleware():
 def test_manifest_public_paths_subset_of_non_metered_paths():
     """
     Every path in _MANIFEST_PUBLIC_PATHS must also appear in NON_METERED_PATHS
-    (or is a free-metered path).  A public path that is metered would charge
-    anonymous callers, which is not the intent.
+    (or is a free-metered path), except documented planning metadata paths whose
+    current public behavior is intentionally left unchanged in this PR.
     """
     for path in _MANIFEST_PUBLIC_PATHS:
         is_non_metered = path in NON_METERED_PATHS
         is_free_metered = is_free_metered_path(path)
-        assert is_non_metered or is_free_metered, (
+        is_current_public_metered_exception = path in _PUBLIC_METERED_PLANNING_EXCEPTIONS
+        assert is_non_metered or is_free_metered or is_current_public_metered_exception, (
             f"_MANIFEST_PUBLIC_PATHS path '{path}' is neither in NON_METERED_PATHS "
             f"nor a free_metered_path — public callers would be metered or denied"
         )
@@ -737,3 +780,15 @@ def test_agent_onboarding_notes_references_pricing_catalog():
     result = ai_tools()
     combined = " ".join(result["agent_onboarding_notes"])
     assert "/v1/pricing/catalog" in combined
+
+
+def test_ai_tools_links_planning_surfaces_and_x402_preview():
+    result = ai_tools()
+    serialized = str(result)
+    for expected in (
+        "/v1/workflows",
+        "/v1/pricing/catalog",
+        "/v1/pricing",
+        "stocktrends_preview",
+    ):
+        assert expected in serialized

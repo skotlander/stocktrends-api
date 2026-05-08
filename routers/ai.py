@@ -4,6 +4,7 @@ from fastapi import APIRouter, Response
 from sqlalchemy import text
 from db import get_engine
 from routers.workflows import WORKFLOW_REGISTRY
+from discovery.endpoint_metadata import build_tool_template, iter_endpoint_metadata
 from pricing.classifier import classify_request as _classify_request, NON_METERED_PATHS
 from payments.policy_provider import (
     is_free_metered_path as _is_free_metered_path,
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/ai", tags=["ai"])
 # ---------------------------------------------------------------------------
 _MANIFEST_PUBLIC_PATHS: frozenset = frozenset({
     "/v1/pricing",
+    "/v1/pricing/catalog",
     "/v1/workflows",
     "/v1/ai/context",
     "/v1/ai/tools",
@@ -151,14 +153,14 @@ _TOOL_TEMPLATES = [
         "title": "Live Pricing Catalog",
         "description": (
             "Returns all active STC pricing rules from the pricing engine. "
-            "Requires a valid API key. "
+            "Public planning infrastructure under the current API behavior. "
             "Agents should call this at startup to build a local cost map before issuing data requests."
         ),
         "endpoint": "/v1/pricing/catalog",
         "method": "GET",
         "category": "pricing",
         "input_schema": {"type": "object", "properties": {}, "required": []},
-        "output_summary": "Live pricing rules: rule_name, cost_per_request (STC), access_type.",
+        "output_summary": "Live pricing rules: pricing_rule_id, endpoint_pattern, cost_per_request (STC), access_type, requires_payment.",
     },
     {
         "name": "workflow_registry",
@@ -198,7 +200,7 @@ _TOOL_TEMPLATES = [
                 },
                 "rail_preference": {
                     "type": "string",
-                    "enum": ["subscription", "x402", "auto"],
+                    "enum": ["subscription", "x402", "mpp", "auto"],
                     "description": "Rail preference for cost assignment (default: auto).",
                 },
             },
@@ -520,6 +522,37 @@ _TOOL_TEMPLATES = [
 ]
 
 
+_REGISTRY_TOOL_TEMPLATE_OVERRIDES = frozenset({
+    ("/v1/agent/screener/top", "GET"),
+    ("/v1/portfolio/construct", "POST"),
+    ("/v1/portfolio/evaluate", "POST"),
+    ("/v1/portfolio/compare", "POST"),
+    ("/v1/stim/latest", "GET"),
+    ("/v1/stim/history", "GET"),
+})
+
+
+def _append_registry_tool_templates(templates: list[dict]) -> list[dict]:
+    """Add registry tools, and let selected registry entries replace older thin templates."""
+    existing = {(tool["endpoint"], tool["method"]): idx for idx, tool in enumerate(templates)}
+    result = list(templates)
+    for entry in iter_endpoint_metadata():
+        key = (entry["path"], entry["method"])
+        tool_template = build_tool_template(entry["path"])
+        if tool_template is None:
+            continue
+        if key in existing:
+            if key in _REGISTRY_TOOL_TEMPLATE_OVERRIDES:
+                result[existing[key]] = tool_template
+            continue
+        result.append(tool_template)
+        existing[key] = len(result) - 1
+    return result
+
+
+_TOOL_TEMPLATES = _append_registry_tool_templates(_TOOL_TEMPLATES)
+
+
 def _build_tools() -> list:
     """
     Build the tools list by merging each template with runtime-derived
@@ -701,6 +734,10 @@ def ai_context():
             "pricing_metadata_endpoint": "/v1/pricing",
             "workflow_registry_endpoint": "/v1/workflows",
             "cost_estimate_endpoint": "/v1/cost-estimate",
+            "planning_role": (
+                "/v1/pricing explains payment identity, agent identity, accepted headers, and rails; "
+                "/v1/pricing/catalog gives concrete endpoint prices; /v1/workflows gives task-level strategy."
+            ),
             "note": "Use the live pricing catalog and API response headers as the authoritative source of endpoint pricing and payment requirements."
         },
         "usage_guidance": [
@@ -708,7 +745,10 @@ def ai_context():
             "Use /v1/ai/context as the secondary explanatory endpoint for dataset and endpoint-family context.",
             "Before calling premium endpoints, call /v1/ai/proof/market-edge (no auth required) to inspect signal structure and confirm field schemas before purchasing access.",
             "Use /v1/docs and /v1/openapi.json for exact request and response contracts.",
+            "Use /v1/workflows to select an investment-research strategy and recommended endpoint sequence.",
             "Use /v1/pricing/catalog to discover live pricing rules before calling premium endpoints.",
+            "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and supported rails.",
+            "For x402, inspect the HTTP 402 stocktrends_preview before payment to confirm purpose, inputs, response shape, related endpoints, pricing_rule_id, cost, and rails.",
             "Use subscription access for persistent developer workflows and x402 for agent-native pay-per-request access.",
             "Start premium agent-pay workflows with /v1/agent/screener/top or /v1/stim/latest.",
             "Cache discovery and metadata responses where appropriate because the dataset updates weekly."
@@ -804,17 +844,19 @@ def ai_tools():
             "supported_rails": ["subscription", "x402", "mpp"],
             "expected_flow": [
                 "fetch /v1/ai/tools",
+                "fetch /v1/workflows to choose a task-level strategy",
                 "fetch /v1/pricing/catalog to resolve live STC costs",
+                "fetch /v1/pricing to understand payment rails and headers",
                 "call /v1/agent/screener/top with auth header",
-                "if x402 rail: receive HTTP 402 challenge on first attempt",
+                "if x402 rail: receive HTTP 402 challenge and inspect stocktrends_preview before paying",
                 "retry with X-StockTrends-Payment-* headers to complete payment",
             ],
         },
         "quickstart": [
             {"step": 1, "action": "fetch", "path": "/v1/ai/tools", "note": "Primary machine-readable discovery. This endpoint."},
-            {"step": 2, "action": "fetch", "path": "/v1/pricing", "note": "Inspect metering model and pricing overview."},
-            {"step": 3, "action": "fetch", "path": "/v1/pricing/catalog", "note": "Resolve live STC costs. Requires subscription auth."},
-            {"step": 4, "action": "fetch", "path": "/v1/workflows", "note": "Inspect available multi-step workflows with per-step STC costs."},
+            {"step": 2, "action": "fetch", "path": "/v1/workflows", "note": "Choose a strategy and endpoint sequence for the task."},
+            {"step": 3, "action": "fetch", "path": "/v1/pricing/catalog", "note": "Resolve live STC costs for each endpoint. Public under current API behavior."},
+            {"step": 4, "action": "fetch", "path": "/v1/pricing", "note": "Inspect payment rails, identity headers, and x402/MPP guidance."},
             {"step": 5, "action": "call", "path": "/v1/agent/screener/top", "note": "First premium endpoint. Auth required. x402 and subscription supported."},
         ],
         "recommended_first_workflows": recommended_workflows,
@@ -822,17 +864,23 @@ def ai_tools():
             "Do not hardcode STC costs. Fetch /v1/pricing/catalog at agent startup.",
             "Prefer /v1/ai/tools as the primary machine-readable entrypoint.",
             "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
+            "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
+            "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and rails.",
             "Use /v1/docs or /v1/openapi.json for exact request/response contracts.",
-            "All metered endpoints support subscription, x402, and mpp payment rails.",
+            "Paid endpoint entries list their supported rails; current agent-pay endpoints support subscription, x402, and mpp.",
+            "For x402, inspect the HTTP 402 stocktrends_preview before payment to confirm purpose, inputs, response shape, supported rails, and cost.",
         ],
         "tools": tools,
         "workflows": workflows,
         "pricing": {
             "unit": "STC",
             "unit_description": "Stock Trends Credits. 1 STC ≈ $1 USD (reference value, not a fixed peg).",
-            "model": "All endpoints price in STC. Payment rails convert value to STC.",
+            "model": "All endpoints price in STC. Payment rails translate STC into subscription debit, x402 amount, or MPP session debit.",
+            "metadata_endpoint": "/v1/pricing",
             "catalog_endpoint": "/v1/pricing/catalog",
+            "workflow_registry_endpoint": "/v1/workflows",
             "cost_estimate_endpoint": "/v1/cost-estimate",
+            "x402_preview_location": "HTTP 402 response body field stocktrends_preview",
             "note": (
                 "STC costs are dynamic and resolved from api_pricing_rules. "
                 "Do not hardcode costs — always fetch /v1/pricing/catalog at agent startup."
@@ -891,11 +939,21 @@ def ai_tools():
                 },
                 {
                     "step": 2,
+                    "call": "GET /v1/workflows",
+                    "note": "Choose a strategy and endpoint sequence for the research task.",
+                },
+                {
+                    "step": 3,
                     "call": "GET /v1/pricing/catalog",
                     "note": "Resolve live STC costs for target endpoints.",
                 },
                 {
-                    "step": 3,
+                    "step": 4,
+                    "call": "GET /v1/pricing",
+                    "note": "Inspect payment rails, identity headers, and accepted payment method guidance.",
+                },
+                {
+                    "step": 5,
                     "call": "GET /v1/agent/screener/top",
                     "note": "First premium call. Supports subscription, x402, mpp.",
                 },
@@ -904,15 +962,19 @@ def ai_tools():
             "on_payment_required": (
                 "Selected agent-pay endpoints may return HTTP 402 with an x402 challenge "
                 "when no payment has been presented. The response body contains "
-                "accepted_payment_methods, pricing, and payment_required fields. "
+                "accepted_payment_methods, pricing, payment_required, and stocktrends_preview fields. "
+                "Use stocktrends_preview to confirm endpoint purpose, required inputs, safe example request, "
+                "response shape, related endpoints, pricing_rule_id, STC cost, and supported rails before paying. "
                 "Subscription callers receive 401/403 on auth failure, not 402. "
                 "MPP uses session authorization rather than the x402 challenge flow."
             ),
         },
         "notes": [
             "Start with /v1/ai/tools as the primary machine-readable entry point for agents.",
-            "All metered endpoints price in STC. Fetch /v1/pricing/catalog at agent startup.",
-            "Use /v1/workflows for multi-step workflows with live per-step STC costs.",
+            "Use /v1/workflows to choose a strategy, then /v1/pricing/catalog to budget each endpoint.",
+            "Use /v1/pricing to understand payment rails, agent identity headers, and accepted payment headers.",
+            "All paid endpoints price in STC. Fetch /v1/pricing/catalog at agent startup.",
+            "For x402, inspect the 402 stocktrends_preview before paying.",
             "Use /v1/cost-estimate to plan STC spend before executing a workflow.",
             "Use /v1/ai/context as the secondary explanatory endpoint for dataset and endpoint overview.",
             "See /v1/docs and /v1/openapi.json for exact request/response contracts.",

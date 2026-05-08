@@ -77,6 +77,8 @@ class TestTopLevelShape:
 
     def test_resource_description_present(self, reqs):
         assert "description" in reqs["resource"]
+        assert reqs["resource"]["description"].strip()
+        assert "Stock Trends" in reqs["resource"]["description"]
 
     def test_accepts_is_list_of_one(self, reqs):
         assert isinstance(reqs["accepts"], list) and len(reqs["accepts"]) == 1
@@ -284,9 +286,15 @@ class TestExtensionsBazaarOutput:
 
     def test_output_example_is_dict(self, reqs):
         assert isinstance(reqs["extensions"]["bazaar"]["info"]["output"]["example"], dict)
+        assert reqs["extensions"]["bazaar"]["info"]["output"]["example"], (
+            "Bazaar output example must be a useful structural object, not {}"
+        )
 
     def test_output_description_present(self, reqs):
         assert "description" in reqs["extensions"]["bazaar"]["info"]["output"]
+        description = reqs["extensions"]["bazaar"]["info"]["output"]["description"]
+        assert description.strip()
+        assert description != "JSON response returned after successful payment."
 
     def test_schema_has_output_property(self, reqs):
         schema_props = reqs["extensions"]["bazaar"]["schema"]["properties"]
@@ -312,3 +320,31 @@ class TestExtensionsBazaarOutput:
         decoded = json.loads(base64.b64decode(hdr).decode("utf-8"))
         assert decoded["extensions"]["bazaar"]["info"]["output"]["type"] == "json"
         assert "example" in decoded["extensions"]["bazaar"]["info"]["output"]
+
+
+# ---------------------------------------------------------------------------
+# Indicators regression coverage from observed external agent failures
+# ---------------------------------------------------------------------------
+
+class TestIndicatorPaymentRequiredMetadata:
+    @pytest.mark.parametrize(
+        ("path", "expected_field"),
+        [
+            ("/v1/indicators/latest", "trend_cnt"),
+            ("/v1/indicators/history", "data"),
+        ],
+    )
+    def test_indicator_challenge_has_resource_and_bazaar_metadata(self, monkeypatch, path, expected_field):
+        monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
+        body, hdr = build_x402_challenge(path=path, amount_usd=Decimal("0.0035"), method="GET")
+        decoded = json.loads(base64.b64decode(hdr).decode("utf-8"))
+
+        for challenge in (body["payment_required"], decoded):
+            description = challenge["resource"]["description"]
+            output = challenge["extensions"]["bazaar"]["info"]["output"]
+            assert description.strip()
+            assert "Stock Trends" in description
+            assert output["description"].strip()
+            assert output["description"] != "JSON response returned after successful payment."
+            assert output["example"]
+            assert expected_field in json.dumps(output["example"])

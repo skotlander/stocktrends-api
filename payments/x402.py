@@ -15,6 +15,8 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
+from discovery.endpoint_metadata import get_bazaar_output, get_resource_description
+
 
 logger = logging.getLogger("stocktrends_api.x402")
 
@@ -253,21 +255,17 @@ def build_x402_requirements(
 
     http_method = method.upper()
     resource_url = f"{X402_API_BASE_URL}{path}" if X402_API_BASE_URL else path
+    resource_description = description or get_resource_description(path)
+    bazaar_output = get_bazaar_output(path)
 
     # Bazaar extension shape differs by method class.
     # GET/HEAD/DELETE: query-param style (no body fields required).
     # POST/PUT/PATCH:  body style — declare bodyType and an empty body schema.
-    _BAZAAR_OUTPUT: dict[str, Any] = {
-        "type": "json",
-        "description": "JSON response returned after successful payment.",
-        "example": {},
-    }
-
     _QUERY_METHODS = {"GET", "HEAD", "DELETE"}
     if http_method in _QUERY_METHODS:
         bazaar_info: dict[str, Any] = {
             "input": {"type": "http", "method": http_method},
-            "output": _BAZAAR_OUTPUT,
+            "output": bazaar_output,
         }
         bazaar_schema_input_props: dict[str, Any] = {
             "type": {"type": "string", "const": "http"},
@@ -277,7 +275,7 @@ def build_x402_requirements(
     else:
         bazaar_info = {
             "input": {"type": "http", "method": http_method, "bodyType": "json", "body": {}},
-            "output": _BAZAAR_OUTPUT,
+            "output": bazaar_output,
         }
         bazaar_schema_input_props = {
             "type": {"type": "string", "const": "http"},
@@ -292,7 +290,7 @@ def build_x402_requirements(
         # V2 canonical resource identity (ResourceInfo) — separate from accepts entries.
         "resource": {
             "url": resource_url,
-            "description": description,
+            "description": resource_description,
             "mimeType": mime_type,
         },
         "accepts": [

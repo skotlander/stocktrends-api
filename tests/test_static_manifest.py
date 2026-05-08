@@ -96,6 +96,7 @@ _KNOWN_PUBLIC_TOOL_PATHS: frozenset[str] = frozenset({
     "/ai/context",           # middleware.public_paths
     "/ai/proof/market-edge", # middleware.public_paths
     "/pricing",              # middleware.public_paths
+    "/pricing/catalog",      # middleware.public_paths; public planning infrastructure
     "/workflows",            # middleware.public_paths
     "/breadth/sector/latest", # free-metered, anonymously accessible via runtime policy
 })
@@ -115,6 +116,14 @@ def test_workflows_auth_required_false(manifest):
     assert tool is not None, "/workflows tool entry must exist in tools.json"
     assert tool.get("auth_required") is False, \
         f"/workflows must have auth_required: false, got {tool.get('auth_required')!r}"
+
+
+def test_pricing_catalog_auth_required_false(manifest):
+    """/pricing/catalog is public planning infrastructure under current API behavior."""
+    tool = _tool_by_path(manifest, "/pricing/catalog")
+    assert tool is not None, "/pricing/catalog tool entry must exist in tools.json"
+    assert tool.get("auth_required") is False, \
+        f"/pricing/catalog must have auth_required: false, got {tool.get('auth_required')!r}"
 
 
 def test_auth_required_false_only_for_known_public_tools(manifest):
@@ -166,6 +175,32 @@ def test_selections_published_latest_correct_path(manifest):
     assert tool is not None, "selections_published_latest must be present in tools.json"
     assert tool.get("path") == "/selections/published/latest", \
         f"Expected /selections/published/latest, got {tool.get('path')!r}"
+
+
+def test_indicators_tools_present(manifest):
+    for name, path in (
+        ("indicators_latest", "/indicators/latest"),
+        ("indicators_history", "/indicators/history"),
+    ):
+        tool = _tool_by_name(manifest, name)
+        assert tool is not None, f"{name} must be present in static/tools.json"
+        assert tool.get("path") == path
+        assert "Fetch /v1/pricing/catalog" in tool.get("description", "")
+
+
+def test_all_registry_endpoints_in_static_tools(manifest):
+    from discovery.endpoint_metadata import iter_endpoint_metadata
+
+    static_paths = {tool["path"] for tool in manifest["tools"]}
+    missing = []
+    for entry in iter_endpoint_metadata():
+        expected_path = entry["path"].removeprefix("/v1")
+        if expected_path not in static_paths:
+            missing.append(f"{entry['method']} {entry['path']}")
+
+    assert not missing, (
+        "Registry endpoints missing from static/tools.json:\n" + "\n".join(missing)
+    )
 
 
 # ---------------------------------------------------------------------------

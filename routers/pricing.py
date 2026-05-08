@@ -11,21 +11,38 @@ from db import get_metering_engine
 router = APIRouter(prefix="/pricing", tags=["pricing"])
 
 # Catalog schema version — increment when the shape of /catalog changes.
-_PRICING_CATALOG_VERSION = "1"
+_PRICING_CATALOG_VERSION = "2"
 
 
 @router.get(
     "",
     summary="Pricing discovery metadata",
     description=(
-        "Returns machine-readable pricing metadata for Stock Trends API endpoint families. "
-        "Useful for AI agents, developer tooling, and integrations that need to understand "
-        "which endpoints are free, free-metered, subscription-covered, or support agent-native payment metadata."
+        "Public planning infrastructure for agents and developer tooling. "
+        "Explains payment identity, agent identity, accepted headers, payment rails, "
+        "and how to combine /v1/pricing/catalog, /v1/workflows, and x402 402 previews "
+        "before making paid data requests."
     ),
 )
 def get_pricing():
     return {
         "version": "2",
+        "planning_role": {
+            "purpose": "Explain how agents should identify themselves, choose a rail, and inspect costs before paid execution.",
+            "recommended_sequence": [
+                "GET /v1/ai/tools",
+                "GET /v1/workflows",
+                "GET /v1/pricing/catalog",
+                "GET /v1/pricing",
+                "Call paid endpoint; if x402 returns 402, inspect stocktrends_preview before paying.",
+            ],
+            "related_planning_endpoints": {
+                "pricing_catalog": "/v1/pricing/catalog",
+                "workflow_registry": "/v1/workflows",
+                "cost_estimate": "/v1/cost-estimate",
+                "ai_tools": "/v1/ai/tools",
+            },
+        },
         "agent_identity": {
             "supported": True,
             "purpose": (
@@ -86,7 +103,14 @@ def get_pricing():
             ],
         },
         "payment_identity": {
-            "supported_methods": ["subscription", "mpp", "x402", "crypto"],
+            "supported_methods": ["subscription", "mpp", "x402"],
+            "future_layers": ["stok"],
+            "rail_guidance": {
+                "subscription": "Account-based access with monthly STC allocation.",
+                "x402": "Per-request HTTP 402 challenge/verify flow. Inspect stocktrends_preview before paying.",
+                "mpp": "Session-based payments. STC is consumed from an active payment session and does not use the x402 challenge flow.",
+                "stok": "Future incentive or discount layer; STOK does not replace STC pricing.",
+            },
             "payment_headers": [
                 {
                     "name": "X-StockTrends-Payment-Method",
@@ -130,7 +154,6 @@ def get_pricing():
                     "subscription",
                     "mpp",
                     "x402",
-                    "crypto",
                 ],
                 "agent_headers": [
                     "X-StockTrends-Agent-Id",
@@ -223,11 +246,11 @@ def get_pricing():
     "/catalog",
     summary="Live pricing rule catalog",
     description=(
-        "Returns all active pricing rules from the STC pricing engine. "
+        "Public planning infrastructure that returns all active pricing rules from the STC pricing engine. "
         "Each rule carries the declared endpoint price in STC units (cost_per_request), "
         "the access type, and the endpoint pattern it matches. "
         "Agents should call this endpoint once at startup to build a local cost map "
-        "before making data requests. "
+        "before making data requests, then use /v1/workflows to combine endpoint costs into a strategy. "
         "Response headers include x-st-pricing-version (catalog schema version) and "
         "x-st-pricing-updated-at (UTC timestamp when this catalog was served)."
     ),
@@ -275,6 +298,23 @@ def get_pricing_catalog(request: Request) -> JSONResponse:
     return JSONResponse(
         content={
             "request_id": getattr(request.state, "request_id", None),
+            "planning_role": {
+                "purpose": "Concrete endpoint price map for agent budgeting before paid execution.",
+                "unit": "STC",
+                "unit_description": (
+                    "Stock Trends Credits. Current operational policy treats 1 STC as approximately 1 USD, "
+                    "but STC remains the internal accounting unit."
+                ),
+                "recommended_use": [
+                    "Fetch at agent startup.",
+                    "Join pricing_rule_id values with /v1/workflows steps.",
+                    "Use HTTP 402 stocktrends_preview as the final per-request confirmation before x402 payment.",
+                ],
+                "public_behavior_note": (
+                    "This endpoint is public under current API behavior. A follow-up should reconcile "
+                    "all static auth metadata and metering policy comments so every discovery surface says the same thing."
+                ),
+            },
             "count": len(catalog),
             "rules": catalog,
         },

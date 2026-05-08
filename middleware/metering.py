@@ -1185,7 +1185,12 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                     challenge_body["accepted_payment_methods"] = accepted_methods_str.split(",")
                     # Inject non-sensitive schema preview for known agent endpoints only.
                     # Omitted entirely for unknown paths; never contains live data.
-                    _preview = get_endpoint_preview(path)
+                    _preview = get_endpoint_preview(
+                        path,
+                        pricing_rule_id=pricing_rule_for_headers,
+                        stc_cost=f"{unit_price_usd:.6f}",
+                        effective_price_usd=f"{unit_price_usd:.6f}",
+                    )
                     if _preview is not None:
                         challenge_body["stocktrends_preview"] = _preview
                     payment_required_header = enforcement_result.payment_required_header

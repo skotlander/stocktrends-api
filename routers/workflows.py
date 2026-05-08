@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from db import get_metering_engine
+from discovery.endpoint_metadata import get_endpoint_metadata
 
 logger = logging.getLogger("stocktrends_api.workflows")
 
@@ -57,7 +58,11 @@ WORKFLOW_REGISTRY: list[dict] = [
             "historical regime sequence for context, and probabilistic forward forecast."
         ),
         "tags": ["agent", "research", "regime"],
-        "supported_rails": ["subscription", "x402"],
+        "supported_rails": ["subscription", "x402", "mpp"],
+        "decision_guidance": (
+            "Use when the agent needs market-level context before selecting bullish, bearish, "
+            "or mixed symbol and portfolio workflows."
+        ),
         "steps": [
             {
                 "step_id": "regime_latest",
@@ -90,7 +95,11 @@ WORKFLOW_REGISTRY: list[dict] = [
             "for a buy/sell/hold decision in that regime context."
         ),
         "tags": ["agent", "research", "decision"],
-        "supported_rails": ["subscription", "x402"],
+        "supported_rails": ["subscription", "x402", "mpp"],
+        "decision_guidance": (
+            "Use when the agent has a target symbol and needs deterministic Stock Trends signal "
+            "and regime context before deeper history or portfolio calls."
+        ),
         "steps": [
             {
                 "step_id": "regime_latest",
@@ -116,7 +125,10 @@ WORKFLOW_REGISTRY: list[dict] = [
             "then evaluate the constructed portfolio's risk and return profile."
         ),
         "tags": ["agent", "portfolio", "research"],
-        "supported_rails": ["subscription", "x402"],
+        "supported_rails": ["subscription", "x402", "mpp"],
+        "decision_guidance": (
+            "Use when the agent wants a fresh candidate list and a bounded equal-weight portfolio proposal."
+        ),
         "steps": [
             {
                 "step_id": "screener_top",
@@ -149,7 +161,11 @@ WORKFLOW_REGISTRY: list[dict] = [
             "then compare the two portfolios to quantify the difference."
         ),
         "tags": ["agent", "portfolio"],
-        "supported_rails": ["subscription", "x402"],
+        "supported_rails": ["subscription", "x402", "mpp"],
+        "decision_guidance": (
+            "Use when the agent needs to evaluate an existing allocation, construct an alternative, "
+            "and compare both under the same Stock Trends decision framework."
+        ),
         "steps": [
             {
                 "step_id": "evaluate_current",
@@ -180,7 +196,12 @@ WORKFLOW_REGISTRY: list[dict] = [
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-_VALID_RAIL_PREFERENCES = frozenset({"subscription", "x402", "auto"})
+_VALID_RAIL_PREFERENCES = frozenset({"subscription", "x402", "mpp", "auto"})
+
+
+def _split_endpoint(endpoint: str) -> tuple[str, str]:
+    method, path = endpoint.split(" ", 1)
+    return method.strip().upper(), path.strip()
 
 
 def _collect_registry_rule_ids() -> set[str]:
@@ -234,13 +255,25 @@ def _resolve_workflow_costs(
         if rule_id not in cost_map:
             raise KeyError(rule_id)
         stc_cost = cost_map[rule_id]
+        method, path = _split_endpoint(step["endpoint"])
+        endpoint_metadata = get_endpoint_metadata(path, method) or {}
         steps.append(
             {
                 "step_id": step["step_id"],
                 "endpoint": step["endpoint"],
+                "method": method,
+                "path": path,
                 "pricing_rule_id": rule_id,
                 "stc_cost": stc_cost,
+                "estimated_usd_cost": float(Decimal(str(stc_cost)) * STC_TO_USD),
                 "description": step["description"],
+                "purpose": endpoint_metadata.get("purpose", step["description"]),
+                "workflow_role": endpoint_metadata.get("workflow_role"),
+                "required_inputs": endpoint_metadata.get("required_inputs", {}),
+                "optional_inputs": endpoint_metadata.get("optional_inputs", {}),
+                "safe_example_request": endpoint_metadata.get("safe_example_request"),
+                "output_summary": endpoint_metadata.get("output_summary"),
+                "related_endpoints": endpoint_metadata.get("related_endpoints", []),
                 "optional": step["optional"],
             }
         )
@@ -261,6 +294,8 @@ def _resolve_workflow_costs(
         "Returns the static workflow registry with live per-step STC costs resolved "
         "from api_pricing_rules. Costs are authoritative and consistent with "
         "GET /v1/pricing/catalog. No authentication required. "
+        "Each step includes method, path, pricing_rule_id, STC cost, estimated USD cost, "
+        "input guidance, safe example request, output summary, and decision guidance. "
         "Returns HTTP 500 if any pricing_rule_id in the registry has no active row "
         "in api_pricing_rules — this surfaces drift immediately."
     ),
@@ -302,6 +337,12 @@ def get_workflows() -> JSONResponse:
             "tags": w["tags"],
             "supported_rails": w["supported_rails"],
             "total_stc_cost": total,
+            "total_estimated_usd_cost": float(Decimal(str(total)) * STC_TO_USD),
+            "pricing_note": (
+                "STC is the pricing source of truth. The estimated USD value uses the current "
+                "operational policy of 1 STC approximately 1 USD and is for planning only."
+            ),
+            "decision_guidance": w.get("decision_guidance"),
             "steps": steps,
         }
         for w, steps, total in results
@@ -344,7 +385,7 @@ def get_cost_estimate(
     ),
     rail_preference: Optional[str] = Query(
         None,
-        description="Rail preference for assignment: subscription | x402 | auto (default: auto).",
+        description="Rail preference for assignment: subscription | x402 | mpp | auto (default: auto).",
     ),
 ) -> JSONResponse:
 
@@ -406,12 +447,12 @@ def get_cost_estimate(
     if effective_rail_pref == "subscription":
         assigned_rails = ["subscription"] * step_count
 
-    elif effective_rail_pref == "x402":
-        assigned_rails = ["x402"] * step_count
+    elif effective_rail_pref in {"x402", "mpp"}:
+        assigned_rails = [effective_rail_pref] * step_count
         if quota_remaining is not None:
             notes.append(
                 "quota_remaining was supplied but ignored; "
-                "all steps assigned to x402 per rail_preference"
+                f"all steps assigned to {effective_rail_pref} per rail_preference"
             )
 
     else:  # "auto"
@@ -451,11 +492,15 @@ def get_cost_estimate(
         steps_out.append(
             {
                 "step_id": step["step_id"],
+                "method": step.get("method"),
+                "path": step.get("path"),
                 "pricing_rule_id": step["pricing_rule_id"],
                 "stc_cost": float(stc_cost),
                 "usd_cost": float(usd_cost),
                 "assigned_rail": assigned_rail,
                 "quota_impact": quota_impact,
+                "purpose": step.get("purpose"),
+                "safe_example_request": step.get("safe_example_request"),
             }
         )
 
@@ -465,6 +510,8 @@ def get_cost_estimate(
         resolved_rail = "subscription"
     elif rails_used == {"x402"}:
         resolved_rail = "x402"
+    elif rails_used == {"mpp"}:
+        resolved_rail = "mpp"
     else:
         resolved_rail = "mixed"
 
