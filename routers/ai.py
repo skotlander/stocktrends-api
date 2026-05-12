@@ -726,6 +726,8 @@ def _with_input_location_metadata(tool: dict) -> dict:
 
 
 _PRICING_COST_MAP_TTL_SECONDS = 30
+# Tests that need deterministic pricing metadata should patch _fetch_pricing_cost_map,
+# because it owns the TTL cache wrapped around the raw DB loader.
 _pricing_cost_map_cache: dict[str, Decimal] | None = None
 _pricing_cost_map_cached_at = 0.0
 
