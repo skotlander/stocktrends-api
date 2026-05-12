@@ -42,13 +42,14 @@ def test_root_guides_to_ai_tools_first(client):
     response = client.get("/")
 
     assert response.status_code == 200
-    assert response.json() == {
-        "message": "Start with the machine-readable tools manifest for agent discovery.",
-        "start_here": "/v1/ai/tools",
-        "secondary": "/v1/ai/context",
-        "docs": "/v1/docs",
-        "openapi": "/v1/openapi.json",
-    }
+    body = response.json()
+    assert body["message"] == "Start with the machine-readable tools manifest for agent discovery."
+    assert "Autonomous portfolio intelligence API for AI agents" in body["description"]
+    assert body["start_here"] == "/v1/ai/tools"
+    assert body["secondary"] == "/v1/ai/context"
+    assert body["docs"] == "/v1/docs"
+    assert body["openapi"] == "/v1/openapi.json"
+    assert "/v1/workflows" in body["planning_helpers"]
 
 
 def test_public_not_found_guides_to_ai_tools_first(client):

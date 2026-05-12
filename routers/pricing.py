@@ -7,11 +7,26 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from db import get_metering_engine
+from discovery.endpoint_metadata import iter_endpoint_metadata
 
 router = APIRouter(prefix="/pricing", tags=["pricing"])
 
 # Catalog schema version — increment when the shape of /catalog changes.
 _PRICING_CATALOG_VERSION = "2"
+_SERVICE_POSITIONING = (
+    "Autonomous portfolio intelligence API for AI agents. Provides market regime analysis, "
+    "Stock Trends signal intelligence, probabilistic forward-return modeling, stock selection, "
+    "portfolio construction, portfolio comparison, and symbol decision evaluation for 4-40 week "
+    "investment horizons. Built for agentic research workflows using x402 and MPP payment rails."
+)
+
+
+def _rails_by_pricing_rule_id() -> dict[str, list[str]]:
+    return {
+        entry["pricing_rule_id"]: list(entry.get("supported_rails", []))
+        for entry in iter_endpoint_metadata()
+        if entry.get("pricing_rule_id")
+    }
 
 
 @router.get(
@@ -27,6 +42,7 @@ _PRICING_CATALOG_VERSION = "2"
 def get_pricing():
     return {
         "version": "2",
+        "service_description": _SERVICE_POSITIONING,
         "planning_role": {
             "purpose": "Explain how agents should identify themselves, choose a rail, and inspect costs before paid execution.",
             "recommended_sequence": [
@@ -278,20 +294,25 @@ def get_pricing_catalog(request: Request) -> JSONResponse:
             )
         ).mappings().all()
 
-    catalog = [
-        {
+    rails_by_rule = _rails_by_pricing_rule_id()
+    catalog = []
+    for row in rows:
+        cost = float(row["cost_per_request"]) if row["cost_per_request"] is not None else 0.0
+        catalog.append({
             "pricing_rule_id": row["rule_name"],
             "endpoint_pattern": row["endpoint_pattern"],
             "endpoint_family": row["endpoint_family"],
             "api_version": row["api_version"],
             "access_type": row["access_type"],
-            "cost_per_request": float(row["cost_per_request"]) if row["cost_per_request"] is not None else 0.0,
+            "cost_per_request": cost,
+            "stc_cost": cost,
+            "estimated_usd_cost": cost,
             "cost_unit": row["cost_unit"],
             "requires_subscription": bool(row["requires_subscription"]),
             "requires_payment": bool(row["requires_payment"]),
-        }
-        for row in rows
-    ]
+            "supported_rails": rails_by_rule.get(row["rule_name"], ["subscription"]),
+            "pricing_note": "STC is the pricing source of truth; payment rails translate this STC amount.",
+        })
 
     served_at = datetime.now(timezone.utc).isoformat()
 
@@ -300,6 +321,7 @@ def get_pricing_catalog(request: Request) -> JSONResponse:
             "request_id": getattr(request.state, "request_id", None),
             "planning_role": {
                 "purpose": "Concrete endpoint price map for agent budgeting before paid execution.",
+                "service_description": _SERVICE_POSITIONING,
                 "unit": "STC",
                 "unit_description": (
                     "Stock Trends Credits. Current operational policy treats 1 STC as approximately 1 USD, "

@@ -19,6 +19,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOLS_JSON = REPO_ROOT / "static" / "tools.json"
+LLMS_TXT = REPO_ROOT / "static" / "llms.txt"
 
 
 @pytest.fixture(scope="module")
@@ -93,6 +94,7 @@ def test_stim_top_absent_by_path(manifest):
 # ApiKeyMiddleware.public_paths in middleware/api_key.py.
 # Every tool NOT in this set must have auth_required: true.
 _KNOWN_PUBLIC_TOOL_PATHS: frozenset[str] = frozenset({
+    "/openapi.json",        # middleware.public_paths via /v1/openapi.json
     "/ai/context",           # middleware.public_paths
     "/ai/proof/market-edge", # middleware.public_paths
     "/pricing",              # middleware.public_paths
@@ -142,6 +144,13 @@ def test_auth_required_false_only_for_known_public_tools(manifest):
     )
 
 
+def test_llms_txt_has_agentic_service_positioning():
+    text = LLMS_TXT.read_text(encoding="utf-8")
+    assert "Autonomous portfolio intelligence API for AI agents" in text
+    assert "x402 and MPP payment rails" in text
+    assert "not investment advice" in text.lower()
+
+
 def test_instrument_lookup_auth_required_true(manifest):
     """/instruments/lookup is not a public path — auth_required must be true."""
     tool = _tool_by_path(manifest, "/instruments/lookup")
@@ -186,6 +195,53 @@ def test_indicators_tools_present(manifest):
         assert tool is not None, f"{name} must be present in static/tools.json"
         assert tool.get("path") == path
         assert "Fetch /v1/pricing/catalog" in tool.get("description", "")
+
+
+def test_static_get_parameters_have_query_location(manifest):
+    for name in ("instrument_lookup", "indicators_latest", "indicators_history", "stim_latest", "stim_history"):
+        tool = _tool_by_name(manifest, name)
+        assert tool is not None
+        for param in tool.get("parameters", []):
+            assert param.get("in") == "query", f"{name} parameter {param.get('name')} missing query location"
+
+
+def test_static_planning_helpers_present(manifest):
+    for name, path in (
+        ("openapi_schema", "/openapi.json"),
+        ("instrument_resolve", "/instruments/resolve"),
+        ("stwr_reports_catalog", "/stwr/reports/catalog"),
+        ("meta_indicators", "/meta/indicators"),
+        ("meta_stim", "/meta/stim"),
+        ("meta_stwr", "/meta/stwr"),
+    ):
+        tool = _tool_by_name(manifest, name)
+        assert tool is not None
+        assert tool.get("path") == path
+        assert tool.get("planning_helper") is True
+
+
+def test_static_paid_entries_have_manifest_pricing(manifest):
+    for name, rule_id, rails in (
+        ("stim_latest", "stim_latest_paid", {"subscription", "x402", "mpp"}),
+        ("indicators_latest", "indicators_latest_paid", {"subscription", "x402", "mpp"}),
+        ("compare_portfolios", "portfolio_compare", {"subscription", "x402", "mpp"}),
+    ):
+        tool = _tool_by_name(manifest, name)
+        assert tool is not None
+        assert tool["pricing_rule_id"] == rule_id
+        assert "stc_cost" in tool
+        assert "estimated_usd_cost" in tool
+        assert set(tool["supported_rails"]) == rails
+        assert "STC is the source of truth" in tool["pricing_note"]
+
+
+def test_static_portfolio_compare_safe_example_shape(manifest):
+    tool = _tool_by_name(manifest, "compare_portfolios")
+    payload = tool["safe_example_request"]["json"]
+    assert payload == {
+        "left": [{"symbol_exchange": "IBM-N", "weight": 1}],
+        "right": [{"symbol_exchange": "MSFT-Q", "weight": 1}],
+    }
 
 
 def test_all_registry_endpoints_in_static_tools(manifest):

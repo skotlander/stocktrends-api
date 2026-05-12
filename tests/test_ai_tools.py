@@ -17,6 +17,7 @@ Validates:
 
 import sys
 import importlib
+from decimal import Decimal
 from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
@@ -32,6 +33,7 @@ sys.modules.setdefault("sqlalchemy.orm", _SQLALCHEMY_MOCK)
 sys.modules.setdefault("db", _DB_MOCK)
 
 # Now safe to import project modules
+import routers.ai as ai_router
 from routers.ai import _TOOL_TEMPLATES, _MANIFEST_PUBLIC_PATHS, _build_workflow_summary, ai_context, ai_tools
 from routers.workflows import WORKFLOW_REGISTRY
 from discovery.endpoint_metadata import build_input_schema
@@ -171,7 +173,8 @@ def test_ai_context_tools_manifest_points_to_primary_entrypoint():
 REQUIRED_TOOL_FIELDS = {
     "name", "title", "description", "endpoint", "method",
     "category", "auth_required", "metered", "pricing_rule_id",
-    "supported_rails", "input_schema", "output_summary",
+    "supported_rails", "input_schema", "input_location", "output_summary",
+    "stc_cost", "estimated_usd_cost", "pricing_note", "pricing",
 }
 
 
@@ -294,6 +297,45 @@ def test_registry_overrides_shadowed_tool_templates():
         assert "related_endpoints" in tool
 
 
+def test_get_tools_expose_query_parameters_not_body_parameters():
+    """Observed Bazaar issue: GET tool params must be query params, not body params."""
+    result = ai_tools()
+    tools_by_endpoint = {(tool["endpoint"], tool["method"]): tool for tool in result["tools"]}
+    endpoints = [
+        "/v1/stim/latest",
+        "/v1/stim/history",
+        "/v1/indicators/latest",
+        "/v1/indicators/history",
+        "/v1/prices/latest",
+        "/v1/prices/history",
+        "/v1/stwr/reports/latest",
+        "/v1/stwr/reports/history",
+    ]
+
+    for endpoint in endpoints:
+        tool = tools_by_endpoint[(endpoint, "GET")]
+        assert tool["input_location"] == "query"
+        assert tool["input_schema"]["x-stocktrends-input-location"] == "query"
+        assert "request_body_schema" not in tool
+        assert "json" not in tool["safe_example_request"]
+        assert "query" in tool["safe_example_request"]
+        for param in tool.get("parameters", []):
+            assert param["in"] == "query", f"{endpoint} parameter {param['name']} is not query"
+
+
+def test_portfolio_compare_safe_example_matches_api_shape():
+    result = ai_tools()
+    tool = next(t for t in result["tools"] if t["endpoint"] == "/v1/portfolio/compare")
+    payload = tool["safe_example_request"]["json"]
+    assert payload == {
+        "left": [{"symbol_exchange": "IBM-N", "weight": 1.0}],
+        "right": [{"symbol_exchange": "MSFT-Q", "weight": 1.0}],
+    }
+    assert isinstance(payload["left"], list)
+    assert isinstance(payload["right"], list)
+    assert "positions" not in payload["left"][0]
+
+
 def test_non_metered_tools_have_no_pricing_rule_id():
     """Non-metered tools must not declare a pricing_rule_id."""
     result = ai_tools()
@@ -323,13 +365,16 @@ def test_tool_endpoints_start_with_v1():
         )
 
 
-def test_no_usd_pricing_in_tools():
-    """No tool must hardcode a USD cost field."""
-    import json
+def test_tool_pricing_fields_are_manifest_metadata_not_hardcoded_price_usd():
+    """Tools may expose estimated_usd_cost, but not legacy hardcoded price_usd fields."""
     result = ai_tools()
+    import json
+
     serialized = json.dumps(result)
-    assert "usd_cost" not in serialized
     assert "price_usd" not in serialized
+    for tool in result["tools"]:
+        assert "estimated_usd_cost" in tool
+        assert tool["pricing"]["estimated_usd_cost"] == tool["estimated_usd_cost"]
 
 
 def test_tools_built_fresh_per_request():
@@ -483,6 +528,46 @@ def test_cost_estimate_tool_mentions_mpp_rail():
     tool = next(t for t in result["tools"] if t["endpoint"] == "/v1/cost-estimate")
     rail_enum = tool["input_schema"]["properties"]["rail_preference"]["enum"]
     assert "mpp" in rail_enum
+
+
+def test_cost_estimate_tool_exposes_workflow_id_examples():
+    result = ai_tools()
+    tool = next(t for t in result["tools"] if t["endpoint"] == "/v1/cost-estimate")
+    workflow_id_schema = tool["input_schema"]["properties"]["workflow_id"]
+    expected = {
+        "regime_analysis",
+        "symbol_decision",
+        "portfolio_build",
+        "portfolio_compare_review",
+    }
+    assert set(workflow_id_schema["enum"]) == expected
+    assert workflow_id_schema["example"] == "portfolio_build"
+    assert tool["safe_example_request"]["query"]["workflow_id"] == "portfolio_build"
+
+
+def test_paid_tools_include_manifest_pricing_fields(monkeypatch):
+    monkeypatch.setattr(
+        ai_router,
+        "_fetch_pricing_cost_map",
+        lambda: {
+            "stim_latest_paid": Decimal("0.25"),
+            "portfolio_compare": Decimal("1.50"),
+        },
+    )
+    result = ai_tools()
+    tools = {tool["endpoint"]: tool for tool in result["tools"]}
+
+    for endpoint, expected_rule, expected_cost in (
+        ("/v1/stim/latest", "stim_latest_paid", 0.25),
+        ("/v1/portfolio/compare", "portfolio_compare", 1.5),
+    ):
+        tool = tools[endpoint]
+        assert tool["pricing_rule_id"] == expected_rule
+        assert tool["stc_cost"] == expected_cost
+        assert tool["estimated_usd_cost"] == expected_cost
+        assert tool["pricing"]["cost_source"] == "/v1/pricing/catalog"
+        assert set(tool["supported_rails"]) == {"subscription", "x402", "mpp"}
+        assert "STC is the source of truth" in tool["pricing_note"]
 
 
 def test_pricing_section_has_no_hardcoded_usd_amounts():
@@ -792,3 +877,39 @@ def test_ai_tools_links_planning_surfaces_and_x402_preview():
         "stocktrends_preview",
     ):
         assert expected in serialized
+
+
+def test_planning_helpers_are_promoted_in_tools_and_context():
+    result = ai_tools()
+    tool_endpoints = {tool["endpoint"] for tool in result["tools"]}
+    context = ai_context()
+    context_helpers = set(context["endpoint_groups"]["planning_helpers"])
+    expected = {
+        "/v1/openapi.json",
+        "/v1/workflows",
+        "/v1/instruments/lookup",
+        "/v1/instruments/resolve",
+        "/v1/stwr/reports/catalog",
+        "/v1/meta/indicators",
+        "/v1/meta/stim",
+        "/v1/meta/stwr",
+        "/v1/ai/proof/market-edge",
+    }
+    assert expected.issubset(tool_endpoints)
+    assert (expected - {"/v1/openapi.json"}).issubset(context_helpers)
+
+
+def test_service_positioning_present_in_ai_surfaces():
+    result = ai_tools()
+    context = ai_context()
+    expected = "Autonomous portfolio intelligence API for AI agents"
+    assert expected in result["service_description"]
+    assert expected in context["description"]
+
+
+def test_mpp_rail_metadata_still_present_for_paid_tools():
+    result = ai_tools()
+    for endpoint in ("/v1/stim/latest", "/v1/portfolio/compare", "/v1/agent/screener/top"):
+        tool = next(t for t in result["tools"] if t["endpoint"] == endpoint)
+        assert "mpp" in tool["supported_rails"]
+        assert "mpp" in tool["pricing"]["supported_rails"]

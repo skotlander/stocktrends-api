@@ -2,6 +2,7 @@
   "version": "1.3",
   "name": "Stock Trends API Tools",
   "provider": "Stock Trends Publications",
+  "service_description": "Autonomous portfolio intelligence API for AI agents. Provides market regime analysis, Stock Trends signal intelligence, probabilistic forward-return modeling, stock selection, portfolio construction, portfolio comparison, and symbol decision evaluation for 4-40 week investment horizons. Built for agentic research workflows using x402 and MPP payment rails.",
   "base_url": "https://api.stocktrends.com/v1",
   "openapi": "https://api.stocktrends.com/v1/openapi.json",
   "docs": "https://api.stocktrends.com/v1/docs",
@@ -40,6 +41,16 @@
       "category": "ai"
     },
     {
+      "name": "openapi_schema",
+      "title": "OpenAPI Schema",
+      "description": "Planning helper. Exact request contracts, parameter locations, response schemas, and auth headers for Stock Trends API v1.",
+      "method": "GET",
+      "path": "/openapi.json",
+      "auth_required": false,
+      "category": "discovery",
+      "planning_helper": true
+    },
+    {
       "name": "pricing_metadata",
       "title": "Pricing Metadata",
       "description": "Returns pricing discovery metadata: supported payment methods, endpoint families, and agent identity guidance. Public, no auth required.",
@@ -64,7 +75,26 @@
       "method": "GET",
       "path": "/cost-estimate",
       "auth_required": true,
-      "category": "pricing"
+      "category": "pricing",
+      "parameters": [
+        {
+          "name": "workflow_id",
+          "in": "query",
+          "type": "string",
+          "required": true,
+          "allowed_values": ["regime_analysis", "symbol_decision", "portfolio_build", "portfolio_compare_review"],
+          "example": "portfolio_build",
+          "description": "Workflow ID from /v1/workflows."
+        },
+        {
+          "name": "rail_preference",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "allowed_values": ["subscription", "x402", "mpp", "auto"],
+          "default": "auto"
+        }
+      ]
     },
     {
       "name": "workflows",
@@ -95,11 +125,85 @@
       "parameters": [
         {
           "name": "symbol",
+          "in": "query",
           "type": "string",
           "required": true,
           "description": "Ticker symbol, for example AAPL."
         }
       ]
+    },
+    {
+      "name": "instrument_resolve",
+      "title": "Instrument Resolve",
+      "description": "Planning helper. Resolves symbol_exchange or symbol plus exchange into one instrument before downstream paid intelligence calls.",
+      "method": "GET",
+      "path": "/instruments/resolve",
+      "auth_required": true,
+      "category": "instruments",
+      "planning_helper": true,
+      "parameters": [
+        {
+          "name": "symbol_exchange",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "example": "IBM-N"
+        },
+        {
+          "name": "symbol",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "example": "IBM"
+        },
+        {
+          "name": "exchange",
+          "in": "query",
+          "type": "string",
+          "required": false,
+          "allowed_values": ["N", "Q", "A", "B", "T", "I"]
+        }
+      ]
+    },
+    {
+      "name": "stwr_reports_catalog",
+      "title": "STWR Reports Catalog",
+      "description": "Planning helper. Lists valid Stock Trends Weekly Reporter report codes before paid report requests.",
+      "method": "GET",
+      "path": "/stwr/reports/catalog",
+      "auth_required": true,
+      "category": "stwr",
+      "planning_helper": true
+    },
+    {
+      "name": "meta_indicators",
+      "title": "Indicator Metadata",
+      "description": "Planning helper. Field definitions for trend, trend_cnt, mt_cnt, rsi, rsi_updn, and vol_tag.",
+      "method": "GET",
+      "path": "/meta/indicators",
+      "auth_required": true,
+      "category": "meta",
+      "planning_helper": true
+    },
+    {
+      "name": "meta_stim",
+      "title": "ST-IM Metadata",
+      "description": "Planning helper. ST-IM field definitions, confidence-bound fields, and base-period mean returns.",
+      "method": "GET",
+      "path": "/meta/stim",
+      "auth_required": true,
+      "category": "meta",
+      "planning_helper": true
+    },
+    {
+      "name": "meta_stwr",
+      "title": "STWR Metadata",
+      "description": "Planning helper. Stock Trends Weekly Reporter report family metadata.",
+      "method": "GET",
+      "path": "/meta/stwr",
+      "auth_required": true,
+      "category": "meta",
+      "planning_helper": true
     },
     {
       "name": "agent_screener_top",
@@ -108,7 +212,12 @@
       "method": "GET",
       "path": "/agent/screener/top",
       "auth_required": true,
-      "category": "agent_screener"
+      "category": "agent_screener",
+      "pricing_rule_id": "agent_screener_top",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "indicators_latest",
@@ -118,9 +227,15 @@
       "path": "/indicators/latest",
       "auth_required": true,
       "category": "indicators",
+      "pricing_rule_id": "indicators_latest_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost.",
       "parameters": [
         {
           "name": "symbol_exchange",
+          "in": "query",
           "type": "string",
           "required": true,
           "example": "IBM-N",
@@ -128,6 +243,7 @@
         },
         {
           "name": "cs_only",
+          "in": "query",
           "type": "boolean",
           "required": false,
           "default": true,
@@ -143,9 +259,15 @@
       "path": "/indicators/history",
       "auth_required": true,
       "category": "indicators",
+      "pricing_rule_id": "indicators_history_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost.",
       "parameters": [
         {
           "name": "symbol_exchange",
+          "in": "query",
           "type": "string",
           "required": true,
           "example": "IBM-N",
@@ -153,6 +275,7 @@
         },
         {
           "name": "limit",
+          "in": "query",
           "type": "integer",
           "required": false,
           "default": 260,
@@ -169,7 +292,12 @@
       "method": "GET",
       "path": "/prices/latest",
       "auth_required": true,
-      "category": "prices"
+      "category": "prices",
+      "pricing_rule_id": "prices_latest_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "prices_history",
@@ -178,7 +306,12 @@
       "method": "GET",
       "path": "/prices/history",
       "auth_required": true,
-      "category": "prices"
+      "category": "prices",
+      "pricing_rule_id": "prices_history_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "stim_latest",
@@ -188,9 +321,15 @@
       "path": "/stim/latest",
       "auth_required": true,
       "category": "stim",
+      "pricing_rule_id": "stim_latest_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost.",
       "parameters": [
         {
           "name": "symbol_exchange",
+          "in": "query",
           "type": "string",
           "required": true,
           "description": "Symbol and exchange, e.g. IBM-N."
@@ -205,9 +344,15 @@
       "path": "/stim/history",
       "auth_required": true,
       "category": "stim",
+      "pricing_rule_id": "stim_history_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost.",
       "parameters": [
         {
           "name": "symbol_exchange",
+          "in": "query",
           "type": "string",
           "required": true,
           "description": "Symbol and exchange, e.g. IBM-N."
@@ -221,7 +366,12 @@
       "method": "GET",
       "path": "/selections/latest",
       "auth_required": true,
-      "category": "selections"
+      "category": "selections",
+      "pricing_rule_id": "selections_latest_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "selections_history",
@@ -230,7 +380,12 @@
       "method": "GET",
       "path": "/selections/history",
       "auth_required": true,
-      "category": "selections"
+      "category": "selections",
+      "pricing_rule_id": "selections_history_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "selections_published_latest",
@@ -239,7 +394,12 @@
       "method": "GET",
       "path": "/selections/published/latest",
       "auth_required": true,
-      "category": "selections"
+      "category": "selections",
+      "pricing_rule_id": "selections_published_latest_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "selections_published_history",
@@ -248,7 +408,12 @@
       "method": "GET",
       "path": "/selections/published/history",
       "auth_required": true,
-      "category": "selections"
+      "category": "selections",
+      "pricing_rule_id": "selections_published_history_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "stwr_reports_latest",
@@ -257,7 +422,12 @@
       "method": "GET",
       "path": "/stwr/reports/latest",
       "auth_required": true,
-      "category": "stwr"
+      "category": "stwr",
+      "pricing_rule_id": "stwr_reports_latest_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "stwr_reports_history",
@@ -266,7 +436,12 @@
       "method": "GET",
       "path": "/stwr/reports/history",
       "auth_required": true,
-      "category": "stwr"
+      "category": "stwr",
+      "pricing_rule_id": "stwr_reports_history_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "market_regime_latest",
@@ -275,7 +450,12 @@
       "method": "GET",
       "path": "/market/regime/latest",
       "auth_required": true,
-      "category": "market"
+      "category": "market",
+      "pricing_rule_id": "market_regime_latest",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "market_regime_history",
@@ -284,7 +464,12 @@
       "method": "GET",
       "path": "/market/regime/history",
       "auth_required": true,
-      "category": "market"
+      "category": "market",
+      "pricing_rule_id": "market_regime_history",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "market_regime_forecast",
@@ -293,7 +478,12 @@
       "method": "GET",
       "path": "/market/regime/forecast",
       "auth_required": true,
-      "category": "market"
+      "category": "market",
+      "pricing_rule_id": "market_regime_forecast",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "evaluate_symbol",
@@ -302,7 +492,12 @@
       "method": "POST",
       "path": "/decision/evaluate-symbol",
       "auth_required": true,
-      "category": "decision"
+      "category": "decision",
+      "pricing_rule_id": "evaluate_symbol",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "construct_portfolio",
@@ -312,6 +507,11 @@
       "path": "/portfolio/construct",
       "auth_required": true,
       "category": "portfolio",
+      "pricing_rule_id": "portfolio_construct",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost.",
       "parameters": [
         {
           "name": "universe",
@@ -355,7 +555,12 @@
       "method": "POST",
       "path": "/portfolio/evaluate",
       "auth_required": true,
-      "category": "portfolio"
+      "category": "portfolio",
+      "pricing_rule_id": "portfolio_evaluate",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "compare_portfolios",
@@ -364,7 +569,20 @@
       "method": "POST",
       "path": "/portfolio/compare",
       "auth_required": true,
-      "category": "portfolio"
+      "category": "portfolio",
+      "pricing_rule_id": "portfolio_compare",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost.",
+      "safe_example_request": {
+        "method": "POST",
+        "path": "/v1/portfolio/compare",
+        "json": {
+          "left": [{"symbol_exchange": "IBM-N", "weight": 1}],
+          "right": [{"symbol_exchange": "MSFT-Q", "weight": 1}]
+        }
+      }
     },
     {
       "name": "breadth_sector_latest",
@@ -382,7 +600,12 @@
       "method": "GET",
       "path": "/breadth/sector/history",
       "auth_required": true,
-      "category": "breadth"
+      "category": "breadth",
+      "pricing_rule_id": "breadth_sector_history_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "leadership_summary_latest",
@@ -391,7 +614,12 @@
       "method": "GET",
       "path": "/leadership/summary/latest",
       "auth_required": true,
-      "category": "leadership"
+      "category": "leadership",
+      "pricing_rule_id": "default_subscription",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     }
   ],
   "usage_guidance": [
@@ -399,6 +627,8 @@
     "Call /v1/ai/proof/market-edge (no auth) to preview signal field structure before purchasing access.",
     "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
     "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
+    "Use /v1/openapi.json to verify exact parameter locations before constructing calls.",
+    "Use /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, and /v1/meta/* endpoints as planning helpers before paid calls.",
     "Fetch /v1/pricing/catalog at agent startup to resolve live STC costs — do not hardcode.",
     "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and supported rails.",
     "Use /v1/cost-estimate before expensive workflows.",

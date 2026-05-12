@@ -1,9 +1,10 @@
+from decimal import Decimal
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Response
 from sqlalchemy import text
-from db import get_engine
-from routers.workflows import WORKFLOW_REGISTRY
+from db import get_engine, get_metering_engine
+from routers.workflows import WORKFLOW_REGISTRY, STC_TO_USD
 from discovery.endpoint_metadata import build_tool_template, iter_endpoint_metadata
 from pricing.classifier import classify_request as _classify_request, NON_METERED_PATHS
 from payments.policy_provider import (
@@ -15,16 +16,32 @@ from payments.policy_provider import (
 
 router = APIRouter(prefix="/ai", tags=["ai"])
 
+SERVICE_POSITIONING = (
+    "Autonomous portfolio intelligence API for AI agents. Provides market regime analysis, "
+    "Stock Trends signal intelligence, probabilistic forward-return modeling, stock selection, "
+    "portfolio construction, portfolio comparison, and symbol decision evaluation for 4-40 week "
+    "investment horizons. Built for agentic research workflows using x402 and MPP payment rails."
+)
+
+WORKFLOW_ID_EXAMPLES = [
+    "regime_analysis",
+    "symbol_decision",
+    "portfolio_build",
+    "portfolio_compare_review",
+]
+
 # ---------------------------------------------------------------------------
 # _MANIFEST_PUBLIC_PATHS mirrors ApiKeyMiddleware.public_paths for the paths
 # that appear in this manifest.  Tests verify this stays in sync.
 # ---------------------------------------------------------------------------
 _MANIFEST_PUBLIC_PATHS: frozenset = frozenset({
+    "/v1/openapi.json",
     "/v1/pricing",
     "/v1/pricing/catalog",
     "/v1/workflows",
     "/v1/ai/context",
     "/v1/ai/tools",
+    "/v1/ai/proof/market-edge",
 })
 
 
@@ -136,6 +153,32 @@ _TOOL_TEMPLATES = [
         "output_summary": "MCP tools manifest: tools, workflows, pricing, auth.",
     },
     {
+        "name": "openapi_schema",
+        "title": "OpenAPI Schema",
+        "description": (
+            "Machine-readable OpenAPI contract for exact parameter locations, request bodies, "
+            "response schemas, and auth headers. Planning helper for autonomous agents."
+        ),
+        "endpoint": "/v1/openapi.json",
+        "method": "GET",
+        "category": "discovery",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "output_summary": "OpenAPI JSON schema for Stock Trends API v1.",
+    },
+    {
+        "name": "ai_proof_market_edge",
+        "title": "Proof of Value - Market Edge",
+        "description": (
+            "Free synthetic-only planning helper. Shows Stock Trends signal fields, trend codes, "
+            "RSI baseline semantics, and agent workflow value without exposing paid market data."
+        ),
+        "endpoint": "/v1/ai/proof/market-edge",
+        "method": "GET",
+        "category": "discovery",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "output_summary": "Synthetic signal example and next-step payment guidance.",
+    },
+    {
         "name": "pricing_metadata",
         "title": "Pricing Metadata",
         "description": (
@@ -191,7 +234,10 @@ _TOOL_TEMPLATES = [
             "properties": {
                 "workflow_id": {
                     "type": "string",
-                    "description": "Workflow ID. See GET /v1/workflows for available IDs.",
+                    "enum": WORKFLOW_ID_EXAMPLES,
+                    "example": "portfolio_build",
+                    "examples": WORKFLOW_ID_EXAMPLES,
+                    "description": "Workflow ID. Safe executable examples are listed in enum; see GET /v1/workflows for full details.",
                 },
                 "quota_remaining": {
                     "type": "integer",
@@ -207,6 +253,120 @@ _TOOL_TEMPLATES = [
             "required": ["workflow_id"],
         },
         "output_summary": "Estimated total STC cost and per-step rail assignment for the workflow.",
+        "safe_example_request": {
+            "method": "GET",
+            "path": "/v1/cost-estimate",
+            "query": {"workflow_id": "portfolio_build", "rail_preference": "auto"},
+        },
+    },
+    # ---- Planning helpers --------------------------------------------------
+    {
+        "name": "instrument_lookup",
+        "title": "Instrument Lookup",
+        "description": (
+            "Planning helper for resolving a ticker into Stock Trends instrument rows and "
+            "symbol_exchange values before paid symbol, ST-IM, or portfolio calls."
+        ),
+        "endpoint": "/v1/instruments/lookup",
+        "method": "GET",
+        "category": "planning_helper",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string", "description": "Ticker symbol, for example IBM.", "example": "IBM"},
+                "cs_only": {"type": "boolean", "default": True, "description": "Filter to common stocks only."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 500, "default": 50},
+                "details": {"type": "boolean", "default": False},
+            },
+            "required": ["symbol"],
+        },
+        "safe_example_request": {"method": "GET", "path": "/v1/instruments/lookup", "query": {"symbol": "IBM"}},
+        "output_summary": "Candidate instruments and symbol_exchange keys such as IBM-N.",
+    },
+    {
+        "name": "instrument_resolve",
+        "title": "Instrument Resolve",
+        "description": (
+            "Planning helper that resolves symbol_exchange or symbol plus exchange into one "
+            "instrument before downstream paid intelligence calls."
+        ),
+        "endpoint": "/v1/instruments/resolve",
+        "method": "GET",
+        "category": "planning_helper",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol_exchange": {"type": "string", "description": "Combined symbol and exchange.", "example": "IBM-N"},
+                "symbol": {"type": "string", "description": "Ticker symbol.", "example": "IBM"},
+                "exchange": {"type": "string", "enum": ["N", "Q", "A", "B", "T", "I"], "description": "Exchange code."},
+                "prefer_exchange": {"type": "string", "default": "N"},
+                "cs_only": {"type": "boolean", "default": True},
+                "details": {"type": "boolean", "default": False},
+            },
+            "required": [],
+            "oneOf": [
+                {"required": ["symbol_exchange"]},
+                {"required": ["symbol", "exchange"]},
+            ],
+        },
+        "safe_example_request": {"method": "GET", "path": "/v1/instruments/resolve", "query": {"symbol_exchange": "IBM-N"}},
+        "output_summary": "One resolved instrument, or ambiguity guidance with candidate matches.",
+    },
+    {
+        "name": "stwr_reports_catalog",
+        "title": "STWR Reports Catalog",
+        "description": (
+            "Planning helper listing Stock Trends Weekly Reporter report codes. Use before "
+            "paid /v1/stwr/reports/latest or /v1/stwr/reports/history calls."
+        ),
+        "endpoint": "/v1/stwr/reports/catalog",
+        "method": "GET",
+        "category": "planning_helper",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "safe_example_request": {"method": "GET", "path": "/v1/stwr/reports/catalog", "query": {}},
+        "output_summary": "Report codes, names, and descriptions.",
+    },
+    {
+        "name": "meta_indicators",
+        "title": "Indicator Metadata",
+        "description": (
+            "Planning helper with definitions for Stock Trends fields such as trend, trend_cnt, "
+            "mt_cnt, rsi, rsi_updn, and vol_tag."
+        ),
+        "endpoint": "/v1/meta/indicators",
+        "method": "GET",
+        "category": "planning_helper",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "safe_example_request": {"method": "GET", "path": "/v1/meta/indicators", "query": {}},
+        "output_summary": "Indicator field definitions and trend-code meanings.",
+    },
+    {
+        "name": "meta_stim",
+        "title": "ST-IM Metadata",
+        "description": (
+            "Planning helper explaining ST-IM fields, base-period mean returns, confidence bounds, "
+            "and 4, 13, and 40 week horizons."
+        ),
+        "endpoint": "/v1/meta/stim",
+        "method": "GET",
+        "category": "planning_helper",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "safe_example_request": {"method": "GET", "path": "/v1/meta/stim", "query": {}},
+        "output_summary": "ST-IM field definitions and base-period mean return metadata.",
+    },
+    {
+        "name": "meta_stwr",
+        "title": "STWR Metadata",
+        "description": (
+            "Planning helper summarizing Stock Trends Weekly Reporter report families and "
+            "how to choose report codes before paid report calls."
+        ),
+        "endpoint": "/v1/meta/stwr",
+        "method": "GET",
+        "category": "planning_helper",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "safe_example_request": {"method": "GET", "path": "/v1/meta/stwr", "query": {}},
+        "output_summary": "STWR report family metadata and report-code guidance.",
     },
     # ---- Decision ----------------------------------------------------------
     {
@@ -553,6 +713,105 @@ def _append_registry_tool_templates(templates: list[dict]) -> list[dict]:
 _TOOL_TEMPLATES = _append_registry_tool_templates(_TOOL_TEMPLATES)
 
 
+def _input_location_for_method(method: str) -> str:
+    return "query" if method.upper() in {"GET", "HEAD", "DELETE"} else "body"
+
+
+def _schema_to_parameters(schema: dict, location: str) -> list[dict]:
+    if not isinstance(schema, dict):
+        return []
+    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    required = set(schema.get("required") or [])
+    parameters = []
+    for name, prop_schema in properties.items():
+        param = {
+            "name": name,
+            "in": location,
+            "required": name in required,
+            "schema": prop_schema if isinstance(prop_schema, dict) else {},
+        }
+        if isinstance(prop_schema, dict):
+            if prop_schema.get("description"):
+                param["description"] = prop_schema["description"]
+            if "example" in prop_schema:
+                param["example"] = prop_schema["example"]
+        if location == "query":
+            param["style"] = "form"
+            param["explode"] = True
+        parameters.append(param)
+    return parameters
+
+
+def _with_input_location_metadata(tool: dict) -> dict:
+    location = tool.get("input_location") or _input_location_for_method(tool["method"])
+    schema = tool.get("input_schema")
+    if not isinstance(schema, dict):
+        schema = {"type": "object", "properties": {}, "required": []}
+
+    schema = dict(schema)
+    schema.setdefault("x-stocktrends-input-location", location)
+    tool["input_location"] = location
+    tool["input_schema"] = schema
+
+    if location == "query":
+        tool["parameters"] = tool.get("parameters") or _schema_to_parameters(schema, location)
+        tool.pop("request_body_schema", None)
+    else:
+        tool["request_body_schema"] = tool.get("request_body_schema") or schema
+    return tool
+
+
+def _fetch_pricing_cost_map() -> dict[str, Decimal]:
+    try:
+        engine = get_metering_engine()
+        with engine.begin() as conn:
+            rows = conn.execute(
+                text(
+                    """
+                    SELECT rule_name, cost_per_request
+                    FROM api_pricing_rules
+                    WHERE is_active = 1
+                    """
+                )
+            ).mappings().all()
+    except Exception:
+        return {}
+
+    cost_map: dict[str, Decimal] = {}
+    for row in rows:
+        try:
+            rule_name = str(row["rule_name"])
+            cost = row["cost_per_request"]
+        except Exception:
+            continue
+        if rule_name and cost is not None:
+            cost_map[rule_name] = Decimal(str(cost))
+    return cost_map
+
+
+def _with_pricing_metadata(tool: dict, cost_map: dict[str, Decimal]) -> dict:
+    pricing_rule_id = tool.get("pricing_rule_id")
+    stc_cost = cost_map.get(pricing_rule_id) if pricing_rule_id else None
+    estimated_usd_cost = stc_cost * STC_TO_USD if stc_cost is not None else None
+    pricing_note = (
+        "STC is the source of truth. stc_cost is resolved from /v1/pricing/catalog when "
+        "available; estimated_usd_cost uses the current planning reference of 1 STC approximately 1 USD."
+    )
+
+    tool["stc_cost"] = float(stc_cost) if stc_cost is not None else None
+    tool["estimated_usd_cost"] = float(estimated_usd_cost) if estimated_usd_cost is not None else None
+    tool["pricing_note"] = pricing_note if pricing_rule_id else "No paid STC price applies to this discovery entry."
+    tool["pricing"] = {
+        "pricing_rule_id": pricing_rule_id,
+        "stc_cost": tool["stc_cost"],
+        "estimated_usd_cost": tool["estimated_usd_cost"],
+        "cost_source": "/v1/pricing/catalog",
+        "supported_rails": list(tool.get("supported_rails", [])),
+        "note": tool["pricing_note"],
+    }
+    return tool
+
+
 def _build_tools() -> list:
     """
     Build the tools list by merging each template with runtime-derived
@@ -562,9 +821,13 @@ def _build_tools() -> list:
     reflects current runtime policy rather than startup-time policy.
     """
     result = []
+    cost_map = _fetch_pricing_cost_map()
     for template in _TOOL_TEMPLATES:
         meta = _access_metadata(template["endpoint"], template["method"])
-        result.append({**template, **meta})
+        tool = {**template, **meta}
+        tool = _with_input_location_metadata(tool)
+        tool = _with_pricing_metadata(tool, cost_map)
+        result.append(tool)
     return result
 
 
@@ -578,6 +841,10 @@ def _build_workflow_summary(workflow: dict) -> dict:
         "supported_rails": workflow["supported_rails"],
         "step_count": len(workflow["steps"]),
         "pricing_rule_ids": [step["pricing_rule_id"] for step in workflow["steps"]],
+        "best_for": workflow.get("best_for"),
+        "agent_goal_examples": workflow.get("agent_goal_examples", []),
+        "symbol_selection_guidance": workflow.get("symbol_selection_guidance"),
+        "next_step_guidance": workflow.get("next_step_guidance", []),
         "note": "Use GET /v1/workflows for live per-step STC costs.",
     }
 
@@ -608,7 +875,8 @@ def ai_context():
     return {
         "dataset": "Stock Trends Market Indicators",
         "provider": "Stock Trends Publications",
-        "description": "Weekly structured market intelligence dataset covering North American equities and ETFs, including Stock Trends trend classification, trend persistence, trend maturity, relative strength, unusual volume signals, breadth, leadership, ST-IM (Stock Trends Inference Model) forward return distributions, market regime analytics, and deterministic decision/portfolio workflows.",
+        "description": SERVICE_POSITIONING,
+        "dataset_description": "Weekly structured market intelligence dataset covering North American equities and ETFs, including Stock Trends trend classification, trend persistence, trend maturity, relative strength, unusual volume signals, breadth, leadership, ST-IM (Stock Trends Inference Model) forward return distributions, market regime analytics, and deterministic decision/portfolio workflows.",
         "discovery_entrypoints": {
             "primary_machine_readable": "/v1/ai/tools",
             "secondary_explanatory": "/v1/ai/context",
@@ -650,8 +918,19 @@ def ai_context():
             "discovery": [
                 "/v1/ai/tools",
                 "/v1/ai/context",
+                "/v1/ai/proof/market-edge",
                 "/v1/docs",
                 "/v1/openapi.json"
+            ],
+            "planning_helpers": [
+                "/v1/workflows",
+                "/v1/instruments/lookup",
+                "/v1/instruments/resolve",
+                "/v1/stwr/reports/catalog",
+                "/v1/meta/indicators",
+                "/v1/meta/stim",
+                "/v1/meta/stwr",
+                "/v1/ai/proof/market-edge"
             ],
             "pricing": [
                 "/v1/pricing",
@@ -703,6 +982,7 @@ def ai_context():
             "public_discovery": [
                 "/v1/ai/tools",
                 "/v1/ai/context",
+                "/v1/ai/proof/market-edge",
                 "/v1/docs",
                 "/v1/openapi.json"
             ],
@@ -746,6 +1026,7 @@ def ai_context():
             "Before calling premium endpoints, call /v1/ai/proof/market-edge (no auth required) to inspect signal structure and confirm field schemas before purchasing access.",
             "Use /v1/docs and /v1/openapi.json for exact request and response contracts.",
             "Use /v1/workflows to select an investment-research strategy and recommended endpoint sequence.",
+            "Use planning helpers (/v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/stim, /v1/meta/stwr) to resolve symbols and understand metadata before paid calls.",
             "Use /v1/pricing/catalog to discover live pricing rules before calling premium endpoints.",
             "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and supported rails.",
             "For x402, inspect the HTTP 402 stocktrends_preview before payment to confirm purpose, inputs, response shape, related endpoints, pricing_rule_id, cost, and rails.",
@@ -830,6 +1111,7 @@ def ai_tools():
     return {
         "provider": "stocktrends",
         "version": "v1",
+        "service_description": SERVICE_POSITIONING,
         "discovery_entrypoints": {
             "primary_machine_readable": "/v1/ai/tools",
             "secondary_explanatory": "/v1/ai/context",
@@ -865,6 +1147,7 @@ def ai_tools():
             "Prefer /v1/ai/tools as the primary machine-readable entrypoint.",
             "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
             "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
+            "Use helper endpoints for autonomous planning: /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/stim, /v1/meta/stwr, and /v1/ai/proof/market-edge.",
             "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and rails.",
             "Use /v1/docs or /v1/openapi.json for exact request/response contracts.",
             "Paid endpoint entries list their supported rails; current agent-pay endpoints support subscription, x402, and mpp.",
@@ -972,6 +1255,8 @@ def ai_tools():
         "notes": [
             "Start with /v1/ai/tools as the primary machine-readable entry point for agents.",
             "Use /v1/workflows to choose a strategy, then /v1/pricing/catalog to budget each endpoint.",
+            "Use /v1/instruments/lookup and /v1/instruments/resolve to produce symbol_exchange values before paid symbol workflows.",
+            "Use /v1/stwr/reports/catalog and /v1/meta/* endpoints as planning helpers, not side documentation.",
             "Use /v1/pricing to understand payment rails, agent identity headers, and accepted payment headers.",
             "All paid endpoints price in STC. Fetch /v1/pricing/catalog at agent startup.",
             "For x402, inspect the 402 stocktrends_preview before paying.",

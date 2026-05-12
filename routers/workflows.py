@@ -63,6 +63,20 @@ WORKFLOW_REGISTRY: list[dict] = [
             "Use when the agent needs market-level context before selecting bullish, bearish, "
             "or mixed symbol and portfolio workflows."
         ),
+        "best_for": "Market context before symbol selection, screening, or portfolio construction.",
+        "agent_goal_examples": [
+            "Decide whether a portfolio agent should use bullish, bearish, or mixed candidate filters.",
+            "Summarize current regime and recent regime direction before selecting symbols.",
+        ],
+        "symbol_selection_guidance": (
+            "This workflow does not select symbols directly; use its regime result to choose "
+            "bias filters for /v1/agent/screener/top or /v1/portfolio/construct."
+        ),
+        "next_step_guidance": [
+            "Use /v1/agent/screener/top to discover candidates.",
+            "Use /v1/decision/evaluate-symbol for a known symbol.",
+            "Use /v1/portfolio/construct when the goal is an allocation proposal.",
+        ],
         "steps": [
             {
                 "step_id": "regime_latest",
@@ -100,6 +114,19 @@ WORKFLOW_REGISTRY: list[dict] = [
             "Use when the agent has a target symbol and needs deterministic Stock Trends signal "
             "and regime context before deeper history or portfolio calls."
         ),
+        "best_for": "Evaluating a known symbol in current market-regime context.",
+        "agent_goal_examples": [
+            "Evaluate IBM-N after resolving it from /v1/instruments/resolve.",
+            "Score a symbol carried forward from a screener, STWR report, or portfolio position.",
+        ],
+        "symbol_selection_guidance": (
+            "Provide symbol_exchange directly when available. If only a ticker is known, first call "
+            "/v1/instruments/lookup or /v1/instruments/resolve and reuse the returned symbol_exchange."
+        ),
+        "next_step_guidance": [
+            "Use /v1/indicators/latest or /v1/stim/latest for deeper single-symbol context.",
+            "Use /v1/portfolio/evaluate when comparing the symbol inside an allocation.",
+        ],
         "steps": [
             {
                 "step_id": "regime_latest",
@@ -129,6 +156,20 @@ WORKFLOW_REGISTRY: list[dict] = [
         "decision_guidance": (
             "Use when the agent wants a fresh candidate list and a bounded equal-weight portfolio proposal."
         ),
+        "best_for": "First portfolio workflow for agents that need to discover symbols and build an allocation.",
+        "agent_goal_examples": [
+            "Build a 5-stock equal-weight candidate portfolio from fresh Stock Trends signals.",
+            "Use screener output symbols as the candidate context for a portfolio construction run.",
+        ],
+        "symbol_selection_guidance": (
+            "Start with /v1/agent/screener/top. Reuse results[].symbol_exchange from the screener "
+            "when calling /v1/decision/evaluate-symbol, /v1/stim/latest, /v1/portfolio/evaluate, "
+            "or /v1/portfolio/compare. Skip duplicate paid symbol calls for repeated symbol_exchange values."
+        ),
+        "next_step_guidance": [
+            "Use /v1/portfolio/compare to compare the constructed portfolio against an existing allocation.",
+            "Use /v1/stim/latest for selected symbols when forward-return distributions are needed.",
+        ],
         "steps": [
             {
                 "step_id": "screener_top",
@@ -166,6 +207,20 @@ WORKFLOW_REGISTRY: list[dict] = [
             "Use when the agent needs to evaluate an existing allocation, construct an alternative, "
             "and compare both under the same Stock Trends decision framework."
         ),
+        "best_for": "Comparing a current allocation against a proposed Stock Trends-informed alternative.",
+        "agent_goal_examples": [
+            "Evaluate a user portfolio, construct a proposed alternative, then compare score and alignment.",
+            "Review whether a newly constructed portfolio improves regime alignment versus a baseline.",
+        ],
+        "symbol_selection_guidance": (
+            "The compare endpoint expects left and right as direct arrays of positions, not wrapper "
+            "objects. Reuse portfolio arrays returned by /v1/portfolio/construct or positions supplied "
+            "to /v1/portfolio/evaluate."
+        ),
+        "next_step_guidance": [
+            "Use comparison.winner, score_delta, and alignment_advantage to summarize differences.",
+            "Reuse any symbol_exchange values in losing positions for deeper /v1/decision/evaluate-symbol review.",
+        ],
         "steps": [
             {
                 "step_id": "evaluate_current",
@@ -190,6 +245,13 @@ WORKFLOW_REGISTRY: list[dict] = [
             },
         ],
     },
+]
+
+WORKFLOW_ID_EXAMPLES = [
+    "regime_analysis",
+    "symbol_decision",
+    "portfolio_build",
+    "portfolio_compare_review",
 ]
 
 # ---------------------------------------------------------------------------
@@ -266,6 +328,8 @@ def _resolve_workflow_costs(
                 "pricing_rule_id": rule_id,
                 "stc_cost": stc_cost,
                 "estimated_usd_cost": float(Decimal(str(stc_cost)) * STC_TO_USD),
+                "supported_rails": endpoint_metadata.get("supported_rails", workflow.get("supported_rails", [])),
+                "pricing_note": "STC is the source of truth; payment rails translate this STC cost.",
                 "description": step["description"],
                 "purpose": endpoint_metadata.get("purpose", step["description"]),
                 "workflow_role": endpoint_metadata.get("workflow_role"),
@@ -343,12 +407,39 @@ def get_workflows() -> JSONResponse:
                 "operational policy of 1 STC approximately 1 USD and is for planning only."
             ),
             "decision_guidance": w.get("decision_guidance"),
+            "best_for": w.get("best_for"),
+            "agent_goal_examples": w.get("agent_goal_examples", []),
+            "symbol_selection_guidance": w.get("symbol_selection_guidance"),
+            "next_step_guidance": w.get("next_step_guidance", []),
             "steps": steps,
         }
         for w, steps, total in results
     ]
 
-    return JSONResponse(content={"workflows": workflows})
+    return JSONResponse(
+        content={
+            "recommended_starting_workflow": {
+                "workflow_id": "portfolio_build",
+                "reason": (
+                    "Recommended first workflow for autonomous portfolio agents because it starts "
+                    "with symbol discovery, constructs a bounded portfolio, and produces reusable "
+                    "symbol_exchange values for downstream evaluation and comparison."
+                ),
+            },
+            "agent_guidance": {
+                "ordered_planning_steps": [
+                    "Fetch /v1/ai/tools for tool metadata and parameter locations.",
+                    "Fetch /v1/pricing/catalog to resolve current STC costs by pricing_rule_id.",
+                    "Choose a workflow here, then execute steps in order.",
+                    "Reuse symbol_exchange values from screeners, selections, or portfolio_construct outputs.",
+                    "Skip duplicate paid symbol calls when a symbol_exchange was already resolved in the workflow.",
+                ],
+                "payment_rails": ["subscription", "x402", "mpp"],
+                "pricing_note": "STC is the pricing source of truth across all rails.",
+            },
+            "workflows": workflows,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +464,15 @@ def get_workflows() -> JSONResponse:
 )
 def get_cost_estimate(
     request: Request,
-    workflow_id: str = Query(..., description="Workflow ID. See GET /v1/workflows for available IDs."),
+    workflow_id: str = Query(
+        ...,
+        description=(
+            "Workflow ID. Safe executable examples: regime_analysis, symbol_decision, "
+            "portfolio_build, portfolio_compare_review. See GET /v1/workflows for details."
+        ),
+        examples=WORKFLOW_ID_EXAMPLES,
+        json_schema_extra={"enum": WORKFLOW_ID_EXAMPLES},
+    ),
     quota_remaining: Optional[int] = Query(
         None,
         ge=0,

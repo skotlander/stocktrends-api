@@ -11,7 +11,9 @@ The developer portal (https://developer.stocktrends.com) is for onboarding, plan
 
 ## Overview
 
-The Stock Trends API is a financial intelligence API for AI agents and financial applications.
+The Stock Trends API is an Autonomous portfolio intelligence API for AI agents. Provides market regime analysis, Stock Trends signal intelligence, probabilistic forward-return modeling, stock selection, portfolio construction, portfolio comparison, and symbol decision evaluation for 4-40 week investment horizons. Built for agentic research workflows using x402 and MPP payment rails.
+
+It is not investment advice and does not guarantee trading outcomes. Agents should present outputs as research context, not instructions to buy or sell securities.
 
 It provides:
 
@@ -122,6 +124,27 @@ https://developer.stocktrends.com/mpp
 
 * `GET /ai/proof/market-edge`
   Free, non-metered, no auth required. Returns a static synthetic demonstration of Stock Trends signal structure, field schemas, and value proposition. All instrument data is fictional. Use this to confirm field names (trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag) and RSI baseline semantics (baseline 100, not traditional Wilder RSI) before purchasing access.
+
+### Planning Helpers
+
+Use these helper endpoints during autonomous planning before paid execution:
+
+* `GET /openapi.json`
+  Exact request contracts, parameter locations, response schemas, and auth headers.
+* `GET /workflows`
+  Recommended workflow order, per-step pricing_rule_id, live STC costs, safe examples, expected outputs, and supported rails.
+* `GET /instruments/lookup`
+  Resolve a ticker into candidate Stock Trends instruments and symbol_exchange keys.
+* `GET /instruments/resolve`
+  Resolve symbol_exchange or symbol plus exchange into one instrument before downstream calls.
+* `GET /stwr/reports/catalog`
+  Discover valid STWR report codes before paid report requests.
+* `GET /meta/indicators`
+  Field definitions for trend, trend_cnt, mt_cnt, rsi, rsi_updn, and vol_tag.
+* `GET /meta/stim`
+  ST-IM field definitions and base-period mean returns.
+* `GET /meta/stwr`
+  STWR report family metadata.
 
 ### Pricing
 
@@ -246,8 +269,12 @@ Publicly accessible resources include:
 
 * `GET /v1/ai/tools`
 * `GET /v1/ai/context`
+* `GET /v1/ai/proof/market-edge`
 * `GET /v1/docs`
 * `GET /v1/openapi.json`
+* `GET /v1/pricing`
+* `GET /v1/pricing/catalog`
+* `GET /v1/workflows`
 
 Use these for discovery, schema inspection, and grounding. Start with `/v1/ai/tools`.
 
@@ -331,6 +358,8 @@ Key pricing endpoints:
 * `GET /pricing`
 * `GET /pricing/catalog`
 * `GET /cost-estimate`
+
+STC is the source of truth for endpoint pricing. Discovery entries may include `pricing_rule_id`, `stc_cost`, `estimated_usd_cost`, and `supported_rails`; agents should still treat `/pricing/catalog` and response headers as authoritative at execution time.
 
 Usage may be associated with:
 
@@ -454,6 +483,9 @@ Agents should:
 * STIM (Stock Trends Inference Model) produces probabilistic forward return distributions — it is not a momentum indicator
 * Use pricing endpoints before expensive workflows
 * Use `/cost-estimate` when cost must be known in advance
+* Use `/workflows` as the recommended starting point for portfolio agents; `portfolio_build` is the first workflow when the agent needs fresh symbol discovery and portfolio construction
+* Reuse `symbol_exchange` values from screener, selections, STWR reports, and `portfolio_construct` outputs in downstream calls
+* For `/portfolio/compare`, send `left` and `right` as direct arrays of positions: `{"left":[{"symbol_exchange":"IBM-N","weight":1}],"right":[{"symbol_exchange":"MSFT-Q","weight":1}]}`
 * Use `/agent/screener/top` as a strong first premium endpoint
 * Use decision and portfolio endpoints for actionable outputs
 * Use regime, breadth, and leadership endpoints for context

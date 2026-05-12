@@ -756,8 +756,21 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         purpose="Compare current and proposed portfolios.",
         investment_agent_value="Helps agents quantify whether a proposed portfolio improves Stock Trends score and regime alignment.",
         workflow_role="Portfolio comparison.",
-        required_inputs={"left": {"type": "object", "required": True}, "right": {"type": "object", "required": True}},
-        safe_example_request={"method": "POST", "path": "/v1/portfolio/compare", "json": {"left": {"positions": [{"symbol_exchange": "IBM-N", "weight": 1.0}]}, "right": {"positions": [{"symbol_exchange": "MSFT-Q", "weight": 1.0}]}}},
+        required_inputs={
+            "left": {
+                "type": "array",
+                "required": True,
+                "description": "Left portfolio as a direct array of symbol-weight positions.",
+                "items": {"type": "object"},
+            },
+            "right": {
+                "type": "array",
+                "required": True,
+                "description": "Right portfolio as a direct array of symbol-weight positions.",
+                "items": {"type": "object"},
+            },
+        },
+        safe_example_request={"method": "POST", "path": "/v1/portfolio/compare", "json": {"left": [{"symbol_exchange": "IBM-N", "weight": 1.0}], "right": [{"symbol_exchange": "MSFT-Q", "weight": 1.0}]}},
         response_shape=["request_id", "weekdate", "left.positions[].symbol_exchange", "left.portfolio_score", "right.positions[].symbol_exchange", "right.portfolio_score", "comparison.winner", "comparison.score_delta", "comparison.alignment_advantage", "comparison.overlap_count", "regime_context.current_regime", "comparison_notes"],
         example_object={"request_id": "req_demo", "comparison": {"winner": "right", "score_delta": 0.0}},
         output_summary="Side-by-side portfolio evaluations and comparison metrics.",
@@ -1060,6 +1073,27 @@ def build_endpoint_preview(
     return preview
 
 
+def _input_location_for_method(method: str) -> str:
+    return "query" if method.upper() in {"GET", "HEAD", "DELETE"} else "body"
+
+
+def _schema_property_from_input_meta(meta: dict[str, Any]) -> dict[str, Any]:
+    schema = {
+        key: copy.deepcopy(value)
+        for key, value in meta.items()
+        if key not in {"required", "safe_default", "safe_default_for_demo", "example", "description"}
+    }
+    if "description" in meta:
+        schema["description"] = meta["description"]
+    if "example" in meta:
+        schema["example"] = meta["example"]
+    if "safe_default" in meta:
+        schema["default"] = meta["safe_default"]
+    if "safe_default_for_demo" in meta:
+        schema["safe_default_for_demo"] = meta["safe_default_for_demo"]
+    return schema
+
+
 def build_input_schema(path: str) -> dict[str, Any] | None:
     entry = _ENDPOINT_METADATA_BY_PATH.get(path)
     if entry is None:
@@ -1069,20 +1103,7 @@ def build_input_schema(path: str) -> dict[str, Any] | None:
     required: list[str] = []
     for source in ("required_inputs", "optional_inputs"):
         for name, meta in entry.get(source, {}).items():
-            schema = {
-                key: copy.deepcopy(value)
-                for key, value in meta.items()
-                if key not in {"required", "safe_default", "safe_default_for_demo", "example", "description"}
-            }
-            if "description" in meta:
-                schema["description"] = meta["description"]
-            if "example" in meta:
-                schema["example"] = meta["example"]
-            if "safe_default" in meta:
-                schema["default"] = meta["safe_default"]
-            if "safe_default_for_demo" in meta:
-                schema["safe_default_for_demo"] = meta["safe_default_for_demo"]
-            properties[name] = schema
+            properties[name] = _schema_property_from_input_meta(meta)
             if meta.get("required") is True:
                 required.append(name)
 
@@ -1090,10 +1111,37 @@ def build_input_schema(path: str) -> dict[str, Any] | None:
         "type": "object",
         "properties": properties,
         "required": required,
+        "x-stocktrends-input-location": _input_location_for_method(entry["method"]),
     }
     if entry.get("input_rule"):
         schema["description"] = entry["input_rule"]
     return schema
+
+
+def build_tool_parameters(path: str) -> list[dict[str, Any]] | None:
+    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    if entry is None:
+        return None
+
+    location = _input_location_for_method(entry["method"])
+    params: list[dict[str, Any]] = []
+    for source in ("required_inputs", "optional_inputs"):
+        for name, meta in entry.get(source, {}).items():
+            param: dict[str, Any] = {
+                "name": name,
+                "in": location,
+                "required": bool(meta.get("required")),
+                "schema": _schema_property_from_input_meta(meta),
+            }
+            if "description" in meta:
+                param["description"] = meta["description"]
+            if "example" in meta:
+                param["example"] = meta["example"]
+            if location == "query":
+                param["style"] = "form"
+                param["explode"] = True
+            params.append(param)
+    return params
 
 
 def build_tool_template(path: str) -> dict[str, Any] | None:
@@ -1101,7 +1149,9 @@ def build_tool_template(path: str) -> dict[str, Any] | None:
     if entry is None:
         return None
 
-    return {
+    input_location = _input_location_for_method(entry["method"])
+    input_schema = build_input_schema(path) or {"type": "object", "properties": {}, "required": []}
+    template = {
         "name": entry["tool_name"],
         "title": entry["title"],
         "description": (
@@ -1111,7 +1161,8 @@ def build_tool_template(path: str) -> dict[str, Any] | None:
         "endpoint": entry["path"],
         "method": entry["method"],
         "category": entry["category"],
-        "input_schema": build_input_schema(path) or {"type": "object", "properties": {}, "required": []},
+        "input_location": input_location,
+        "input_schema": input_schema,
         "output_summary": entry["output_summary"],
         "workflow_role": entry["workflow_role"],
         "investment_agent_value": entry["investment_agent_value"],
@@ -1121,3 +1172,8 @@ def build_tool_template(path: str) -> dict[str, Any] | None:
         "related_endpoints": copy.deepcopy(entry.get("related_endpoints", [])),
         "next_recommended_calls": copy.deepcopy(entry.get("next_recommended_calls", [])),
     }
+    if input_location == "query":
+        template["parameters"] = build_tool_parameters(path) or []
+    else:
+        template["request_body_schema"] = input_schema
+    return template

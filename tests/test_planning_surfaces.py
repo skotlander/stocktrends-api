@@ -93,6 +93,10 @@ def test_pricing_catalog_exposes_concrete_paid_endpoint_pricing(monkeypatch):
     assert body["planning_role"]["public_behavior_note"]
     rules = {rule["pricing_rule_id"]: rule for rule in body["rules"]}
     assert rules["indicators_latest_paid"]["cost_per_request"] == 0.0035
+    assert rules["indicators_latest_paid"]["stc_cost"] == 0.0035
+    assert rules["indicators_latest_paid"]["estimated_usd_cost"] == 0.0035
+    assert set(rules["indicators_latest_paid"]["supported_rails"]) == {"subscription", "x402", "mpp"}
+    assert "STC is the pricing source of truth" in rules["indicators_latest_paid"]["pricing_note"]
     assert rules["indicators_latest_paid"]["requires_payment"] is True
     assert rules["indicators_history_paid"]["endpoint_pattern"] == "/v1/indicators/history"
 
@@ -116,10 +120,15 @@ def test_workflows_expose_machine_plannable_steps(monkeypatch):
     body = json.loads(response.body)
     workflows = body["workflows"]
 
+    assert body["recommended_starting_workflow"]["workflow_id"] == "portfolio_build"
+    assert "mpp" in body["agent_guidance"]["payment_rails"]
     assert workflows
     for workflow in workflows:
         assert workflow["workflow_id"]
         assert workflow["decision_guidance"]
+        assert workflow["best_for"]
+        assert workflow["agent_goal_examples"]
+        assert workflow["next_step_guidance"]
         assert "mpp" in workflow["supported_rails"]
         assert workflow["total_stc_cost"] > 0
         assert workflow["total_estimated_usd_cost"] == workflow["total_stc_cost"]
@@ -131,6 +140,8 @@ def test_workflows_expose_machine_plannable_steps(monkeypatch):
                 "pricing_rule_id",
                 "stc_cost",
                 "estimated_usd_cost",
+                "supported_rails",
+                "pricing_note",
                 "purpose",
                 "safe_example_request",
                 "output_summary",
@@ -158,3 +169,9 @@ def test_portfolio_workflow_post_steps_include_schema_examples(monkeypatch):
     for step in post_steps:
         assert "json" in step["safe_example_request"]
         assert step["required_inputs"] or step["optional_inputs"]
+
+    compare_step = next(step for step in post_steps if step["path"] == "/v1/portfolio/compare")
+    assert compare_step["safe_example_request"]["json"] == {
+        "left": [{"symbol_exchange": "IBM-N", "weight": 1.0}],
+        "right": [{"symbol_exchange": "MSFT-Q", "weight": 1.0}],
+    }

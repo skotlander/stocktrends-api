@@ -36,6 +36,12 @@ logging.basicConfig(level=logging.INFO)
 
 APP_TITLE = "Stock Trends API"
 APP_VERSION = "1.0.0"
+APP_DESCRIPTION = (
+    "Autonomous portfolio intelligence API for AI agents. Provides market regime analysis, "
+    "Stock Trends signal intelligence, probabilistic forward-return modeling, stock selection, "
+    "portfolio construction, portfolio comparison, and symbol decision evaluation for 4-40 week "
+    "investment horizons. Built for agentic research workflows using x402 and MPP payment rails."
+)
 
 FREE_METERED_V1_PATHS = {
     "/ai/context",
@@ -106,7 +112,7 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
     openapi_schema = get_openapi(
         title=f"{APP_TITLE} v1",
         version=APP_VERSION,
-        description="Stock Trends API v1 with Agent Identity and Pricing.",
+        description=APP_DESCRIPTION,
         routes=v1_app.routes,
     )
 
@@ -250,6 +256,18 @@ app.add_exception_handler(StarletteHTTPException, _discovery_http_exception_hand
 def root():
     return {
         "message": "Start with the machine-readable tools manifest for agent discovery.",
+        "description": APP_DESCRIPTION,
+        "planning_helpers": [
+            "/v1/workflows",
+            "/v1/pricing/catalog",
+            "/v1/instruments/lookup",
+            "/v1/instruments/resolve",
+            "/v1/stwr/reports/catalog",
+            "/v1/meta/indicators",
+            "/v1/meta/stim",
+            "/v1/meta/stwr",
+            "/v1/ai/proof/market-edge",
+        ],
         **_discovery_links(),
     }
 
@@ -265,8 +283,14 @@ def ai_plugin():
             "schema_version": "v1",
             "name_for_human": "Stock Trends API",
             "name_for_model": "stock_trends_api",
-            "description_for_human": "Decision, portfolio, pricing, and market intelligence API for AI agents and financial applications.",
-            "description_for_model": "Start with /v1/ai/tools, then use /v1/workflows, /v1/pricing/catalog, and /v1/pricing to plan strategy, budget STC cost, and understand rails before paid execution. Evaluate symbols, construct and compare portfolios, inspect x402 402 stocktrends_preview metadata, and access structured Stock Trends market intelligence using documented OpenAPI endpoints. Authentication or machine payment is required for protected data endpoints.",
+            "description_for_human": APP_DESCRIPTION,
+            "description_for_model": (
+                f"{APP_DESCRIPTION} Start with /v1/ai/tools, then use /v1/workflows, "
+                "/v1/pricing/catalog, /v1/pricing, /v1/instruments/lookup, /v1/instruments/resolve, "
+                "/v1/stwr/reports/catalog, and /v1/meta/* planning helpers before paid execution. "
+                "Inspect x402 402 stocktrends_preview metadata before payment. Authentication or "
+                "machine payment is required for protected data endpoints."
+            ),
             "auth": {
                 "type": "api_key",
                 "in": "header",
