@@ -172,7 +172,8 @@ def test_ai_context_tools_manifest_points_to_primary_entrypoint():
 
 REQUIRED_TOOL_FIELDS = {
     "name", "title", "description", "endpoint", "method",
-    "category", "auth_required", "metered", "pricing_rule_id",
+    "category", "auth_required", "metered", "pricing_rule_id", "access_type",
+    "requires_payment",
     "supported_rails", "input_schema", "input_location", "output_summary",
     "stc_cost", "estimated_usd_cost", "pricing_note", "pricing",
 }
@@ -209,6 +210,9 @@ def test_required_tools_present():
         ("/v1/decision/evaluate-symbol", "POST"),
         ("/v1/workflows", "GET"),
         ("/v1/cost-estimate", "GET"),
+        ("/v1/leadership/definitions", "GET"),
+        ("/v1/leadership/summary/latest", "GET"),
+        ("/v1/leadership/rotation/history", "GET"),
     }
     missing = required - endpoints
     assert not missing, f"Required tools missing: {missing}"
@@ -887,6 +891,7 @@ def test_planning_helpers_are_promoted_in_tools_and_context():
     context_helpers = set(context["endpoint_groups"]["planning_helpers"])
     expected = {
         "/v1/openapi.json",
+        "/v1/cost-estimate",
         "/v1/workflows",
         "/v1/instruments/lookup",
         "/v1/instruments/resolve",
@@ -894,6 +899,7 @@ def test_planning_helpers_are_promoted_in_tools_and_context():
         "/v1/meta/indicators",
         "/v1/meta/stim",
         "/v1/meta/stwr",
+        "/v1/leadership/definitions",
         "/v1/ai/proof/market-edge",
     }
     assert expected.issubset(tool_endpoints)
@@ -911,7 +917,76 @@ def test_service_positioning_present_in_ai_surfaces():
 
 def test_mpp_rail_metadata_still_present_for_paid_tools():
     result = ai_tools()
-    for endpoint in ("/v1/stim/latest", "/v1/portfolio/compare", "/v1/agent/screener/top"):
+    for endpoint in (
+        "/v1/stim/latest",
+        "/v1/portfolio/compare",
+        "/v1/agent/screener/top",
+        "/v1/leadership/summary/latest",
+        "/v1/leadership/rotation/history",
+    ):
         tool = next(t for t in result["tools"] if t["endpoint"] == endpoint)
         assert "mpp" in tool["supported_rails"]
         assert "mpp" in tool["pricing"]["supported_rails"]
+
+
+def test_public_planning_helper_tools_are_free_and_public():
+    result = ai_tools()
+    tools = {tool["endpoint"]: tool for tool in result["tools"]}
+    public_helpers = {
+        "/v1/cost-estimate",
+        "/v1/instruments/lookup",
+        "/v1/instruments/resolve",
+        "/v1/stwr/reports/catalog",
+        "/v1/meta/indicators",
+        "/v1/meta/stim",
+        "/v1/meta/stwr",
+        "/v1/leadership/definitions",
+    }
+
+    for endpoint in public_helpers:
+        tool = tools[endpoint]
+        assert tool["auth_required"] is False
+        assert tool["metered"] is False
+        assert tool["access_type"] == "free"
+        assert tool["requires_payment"] is False
+        assert tool["supported_rails"] == []
+
+
+def test_leadership_paid_tools_are_x402_mpp_enabled():
+    result = ai_tools()
+    tools = {tool["endpoint"]: tool for tool in result["tools"]}
+    expected = {
+        "/v1/leadership/summary/latest": "leadership_summary_latest_paid",
+        "/v1/leadership/rotation/history": "leadership_rotation_history_paid",
+    }
+
+    for endpoint, rule_id in expected.items():
+        tool = tools[endpoint]
+        assert tool["auth_required"] is True
+        assert tool["metered"] is True
+        assert tool["access_type"] == "paid"
+        assert tool["requires_payment"] is True
+        assert tool["pricing_rule_id"] == rule_id
+        assert tool["supported_rails"] == ["subscription", "x402", "mpp"]
+        assert tool["pricing"]["supported_rails"] == ["subscription", "x402", "mpp"]
+
+
+def test_paid_leadership_not_in_public_allowlists():
+    import pathlib
+    import main as main_module
+
+    source = pathlib.Path("middleware/api_key.py").read_text(encoding="utf-8")
+    assert hasattr(main_module, "FREE_METERED_V1_PATHS")
+    assert isinstance(main_module.FREE_METERED_V1_PATHS, set)
+
+    paid_paths = {
+        "/v1/leadership/summary/latest",
+        "/v1/leadership/rotation/history",
+    }
+
+    for path in paid_paths:
+        assert path not in _MANIFEST_PUBLIC_PATHS
+        assert path not in NON_METERED_PATHS
+        assert path not in main_module.FREE_METERED_V1_PATHS
+        assert path.removeprefix("/v1") not in main_module.FREE_METERED_V1_PATHS
+        assert f'"{path}"' not in source

@@ -237,7 +237,7 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                 {"BearerAuth": []},
             ]
 
-            if path.startswith("/stim") or path.startswith("/indicators") or path.startswith("/prices") or path.startswith("/selections") or path.startswith("/stwr") or path.startswith("/agents") or path.startswith("/agent/screener") or path.startswith("/market") or path.startswith("/decision") or path.startswith("/portfolio") or path.startswith("/breadth/sector/history") or path in ("/pricing", "/pricing/catalog", "/workflows", "/cost-estimate"):
+            if path.startswith("/stim") or path.startswith("/indicators") or path.startswith("/prices") or path.startswith("/selections") or path.startswith("/stwr") or path.startswith("/agents") or path.startswith("/agent/screener") or path.startswith("/market") or path.startswith("/decision") or path.startswith("/portfolio") or path.startswith("/breadth/sector/history") or path in ("/leadership/summary/latest", "/leadership/rotation/history", "/pricing", "/pricing/catalog", "/workflows", "/cost-estimate"):
                 _ensure_parameter_refs(operation, agent_refs + payment_refs)
 
     v1_app.openapi_schema = openapi_schema
@@ -254,6 +254,7 @@ def root():
         "message": "Start with the machine-readable tools manifest for agent discovery.",
         "description": APP_DESCRIPTION,
         "planning_helpers": [
+            "/v1/cost-estimate",
             "/v1/workflows",
             "/v1/pricing/catalog",
             "/v1/instruments/lookup",
@@ -262,6 +263,7 @@ def root():
             "/v1/meta/indicators",
             "/v1/meta/stim",
             "/v1/meta/stwr",
+            "/v1/leadership/definitions",
             "/v1/ai/proof/market-edge",
         ],
         **_discovery_links(),

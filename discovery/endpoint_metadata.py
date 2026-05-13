@@ -120,6 +120,8 @@ def _metadata(
     next_recommended_calls: list[str] | None = None,
     tags: list[str] | None = None,
     supported_rails: list[str] | None = None,
+    access_type: str = "paid",
+    requires_payment: bool = True,
 ) -> dict[str, Any]:
     return {
         "path": path,
@@ -128,7 +130,9 @@ def _metadata(
         "title": title,
         "category": category,
         "pricing_rule_id": pricing_rule_id,
-        "supported_rails": list(supported_rails or SUPPORTED_RAILS),
+        "supported_rails": list(SUPPORTED_RAILS if supported_rails is None else supported_rails),
+        "access_type": access_type,
+        "requires_payment": requires_payment,
         "resource_description": resource_description,
         "bazaar_output": {
             "type": "json",
@@ -868,14 +872,59 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         related_endpoints=["/v1/breadth/sector/latest", "/v1/market/regime/history"],
         next_recommended_calls=["/v1/market/regime/latest", "/v1/leadership/summary/latest"],
     ),
+    "/v1/leadership/definitions": _metadata(
+        path="/v1/leadership/definitions",
+        method="GET",
+        tool_name="leadership_definitions",
+        title="Leadership Definitions",
+        category="planning_helper",
+        pricing_rule_id="leadership_definitions_public",
+        supported_rails=[],
+        access_type="free",
+        requires_payment=False,
+        resource_description=(
+            "Public planning helper defining Stock Trends leadership screens, ranking fields, "
+            "and taxonomy levels before paid leadership intelligence calls."
+        ),
+        bazaar_output_description=(
+            "Returns leadership concept definitions, RSI/trend field meanings, taxonomy levels, "
+            "and notes about ranking behavior."
+        ),
+        purpose="Understand leadership screen definitions and ranking fields before paid leadership calls.",
+        investment_agent_value=(
+            "Lets agents plan leadership workflows without paying or exposing live leadership data."
+        ),
+        workflow_role="Leadership planning metadata.",
+        safe_example_request={"method": "GET", "path": "/v1/leadership/definitions", "query": {}},
+        response_shape=[
+            "concept",
+            "indicators.rsi",
+            "indicators.trend",
+            "indicators.trend_cnt",
+            "indicators.mt_cnt",
+            "taxonomy_source",
+            "taxonomy_levels[]",
+            "notes.ranking",
+        ],
+        example_object={
+            "concept": "Stock Trends leadership screens identify instruments with strong relative strength and trend alignment.",
+            "taxonomy_levels": ["sector", "industry_group", "industry"],
+            "notes": {"ranking": "summary/latest uses RSI desc (then mt_cnt desc)."},
+        },
+        output_summary="Leadership definitions, indicator meanings, taxonomy levels, and ranking notes.",
+        notes=["Public helper; no API key or payment required."],
+        related_endpoints=["/v1/leadership/summary/latest", "/v1/leadership/rotation/history"],
+        next_recommended_calls=["/v1/leadership/summary/latest"],
+        tags=["leadership", "planning_helper"],
+    ),
     "/v1/leadership/summary/latest": _metadata(
         path="/v1/leadership/summary/latest",
         method="GET",
         tool_name="leadership_summary_latest",
         title="Leadership Summary Latest",
         category="leadership",
-        pricing_rule_id="default_subscription",
-        supported_rails=["subscription"],
+        pricing_rule_id="leadership_summary_latest_paid",
+        supported_rails=SUPPORTED_RAILS,
         resource_description=(
             "Latest Stock Trends leadership summary identifying overall, sector, and "
             "industry-group leaders using relative performance and trend-alignment filters."
@@ -982,6 +1031,112 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         next_recommended_calls=["/v1/market/regime/latest", "/v1/indicators/latest"],
         tags=["leadership", "breadth", "context"],
     ),
+    "/v1/leadership/rotation/history": _metadata(
+        path="/v1/leadership/rotation/history",
+        method="GET",
+        tool_name="leadership_rotation_history",
+        title="Leadership Rotation History",
+        category="leadership",
+        pricing_rule_id="leadership_rotation_history_paid",
+        supported_rails=SUPPORTED_RAILS,
+        resource_description=(
+            "Historical sector leadership rotation derived from Stock Trends trend distribution, "
+            "relative performance, and trend maturity measures."
+        ),
+        bazaar_output_description=(
+            "Returns weekly leadership rotation rows or grouped weeks with sector, bullish share, "
+            "average RSI, average trend maturity, leadership_score, and rank_in_week."
+        ),
+        purpose="Retrieve historical sector leadership rotation over time.",
+        investment_agent_value=(
+            "Helps agents identify where leadership is rotating across sectors before combining "
+            "that context with regime, breadth, and symbol-level workflows."
+        ),
+        workflow_role="Historical leadership rotation context.",
+        optional_inputs={
+            "exchange": copy.deepcopy(EXCHANGE_INPUT),
+            "start": copy.deepcopy(START_INPUT),
+            "end": copy.deepcopy(END_INPUT),
+            "type": {
+                "type": "string",
+                "required": False,
+                "safe_default": "CS",
+                "example": "CS",
+                "description": "Instrument type filter. CS is the safe default for common-stock leadership rotation.",
+            },
+            "top_k": {
+                "type": "integer",
+                "required": False,
+                "safe_default": 5,
+                "minimum": 1,
+                "maximum": 50,
+                "example": 5,
+                "description": "Top sectors per week. Omit for all sectors.",
+            },
+            "min_constituents": {
+                "type": "integer",
+                "required": False,
+                "safe_default": 25,
+                "minimum": 1,
+                "maximum": 5000,
+                "example": 25,
+            },
+            "group_by_week": {
+                "type": "boolean",
+                "required": False,
+                "safe_default": True,
+                "example": True,
+            },
+        },
+        safe_example_request={
+            "method": "GET",
+            "path": "/v1/leadership/rotation/history",
+            "query": {"exchange": "N", "type": "CS", "top_k": 5, "group_by_week": True},
+        },
+        response_shape=[
+            "request_id", "exchange", "start", "end", "filters.type",
+            "filters.min_constituents", "filters.top_k", "week_count", "count",
+            "weeks[].weekdate", "weeks[].count", "weeks[].data[].sector_code",
+            "weeks[].data[].sector_name", "weeks[].data[].bull_pct",
+            "weeks[].data[].avg_rsi", "weeks[].data[].avg_mt_cnt",
+            "weeks[].data[].leadership_score", "weeks[].data[].rank_in_week",
+            "note",
+        ],
+        example_object={
+            "request_id": "req_demo",
+            "exchange": "N",
+            "filters": {"type": "CS", "min_constituents": 25, "top_k": 5},
+            "week_count": 1,
+            "count": 1,
+            "weeks": [
+                {
+                    "weekdate": "YYYY-MM-DD",
+                    "count": 1,
+                    "data": [
+                        {
+                            "sector_name": "Sample Sector",
+                            "bull_pct": 0.65,
+                            "avg_rsi": 108.0,
+                            "avg_mt_cnt": 9.0,
+                            "leadership_score": 72.45,
+                            "rank_in_week": 1,
+                        }
+                    ],
+                }
+            ],
+        },
+        output_summary=(
+            "Historical sector leadership rotation with bullish share, average RSI, "
+            "trend maturity, leadership_score, and weekly rank."
+        ),
+        notes=[
+            "RSI baseline is 100; values above 100 indicate outperformance versus benchmark.",
+            "Use bounded date ranges for autonomous workflows.",
+        ],
+        related_endpoints=["/v1/leadership/summary/latest", "/v1/breadth/sector/history", "/v1/market/regime/history"],
+        next_recommended_calls=["/v1/market/regime/history", "/v1/indicators/history"],
+        tags=["leadership", "rotation", "history"],
+    ),
 }
 
 
@@ -1049,6 +1204,8 @@ def build_endpoint_preview(
             "purpose": entry["purpose"],
             "category": entry["category"],
             "workflow_role": entry["workflow_role"],
+            "access_type": entry.get("access_type", "paid"),
+            "requires_payment": bool(entry.get("requires_payment", True)),
         },
         "investment_agent_value": entry["investment_agent_value"],
         "supported_rails": list(entry["supported_rails"]),
@@ -1186,6 +1343,8 @@ def build_tool_template(path: str) -> dict[str, Any] | None:
         "endpoint": entry["path"],
         "method": entry["method"],
         "category": entry["category"],
+        "access_type": entry.get("access_type", "paid"),
+        "requires_payment": bool(entry.get("requires_payment", True)),
         "input_location": input_location,
         "input_schema": input_schema,
         "output_summary": entry["output_summary"],

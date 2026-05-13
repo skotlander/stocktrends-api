@@ -31,7 +31,15 @@ _MANIFEST_PUBLIC_PATHS: frozenset = frozenset({
     "/v1/openapi.json",
     "/v1/pricing",
     "/v1/pricing/catalog",
+    "/v1/cost-estimate",
     "/v1/workflows",
+    "/v1/instruments/lookup",
+    "/v1/instruments/resolve",
+    "/v1/stwr/reports/catalog",
+    "/v1/meta/indicators",
+    "/v1/meta/stim",
+    "/v1/meta/stwr",
+    "/v1/leadership/definitions",
     "/v1/ai/context",
     "/v1/ai/tools",
     "/v1/ai/proof/market-edge",
@@ -56,7 +64,7 @@ def _access_metadata(path: str, method: str = "GET") -> dict:
                                                 agent-pay callers — not safely
                                                 representable as a single value)
       4. Metered subscription path     → decision.log_pricing_rule_id
-      5. Auth-required non-metered     → None  (e.g. /v1/cost-estimate)
+      5. Auth-required non-metered     → None
       6. Free public                   → None
     """
     decision = _classify_request(
@@ -70,14 +78,20 @@ def _access_metadata(path: str, method: str = "GET") -> dict:
 
     endpoint_policy = _get_endpoint_policy(path, method.upper())
 
+    access_type = "free"
+    requires_payment = False
+
     if endpoint_policy and endpoint_policy.pricing_rule_id:
         # Exact endpoint policy: rule and rails are stable.
         pricing_rule_id = endpoint_policy.pricing_rule_id
         supported_rails = list(endpoint_policy.allowed_rails)
+        access_type = "paid"
+        requires_payment = bool(endpoint_policy.machine_payment_rails)
     elif _is_free_metered_path(path):
         # Tracked but not billed; rule is stable.
         pricing_rule_id = "default_free_metered"
         supported_rails = []
+        access_type = "free_metered"
     elif _is_agent_pay_route(path, method.upper()) and not endpoint_policy:
         # STIM prefix paths: the runtime rule ID depends on the caller's
         # access method (subscription vs agent-pay) so it cannot be
@@ -87,14 +101,19 @@ def _access_metadata(path: str, method: str = "GET") -> dict:
         pricing_rule_id = None
         agent_pay_rails = list(_get_agent_pay_bypass_methods(path, method.upper()))
         supported_rails = ["subscription"] + agent_pay_rails
+        access_type = "paid"
+        requires_payment = bool(agent_pay_rails)
     elif decision.is_metered:
         # Subscription-covered metered path (e.g. /v1/pricing/catalog).
         pricing_rule_id = decision.log_pricing_rule_id
         supported_rails = ["subscription"]
+        access_type = "paid" if path not in _MANIFEST_PUBLIC_PATHS else "free"
+        requires_payment = False
     elif path not in _MANIFEST_PUBLIC_PATHS:
-        # Auth-required, non-metered (e.g. /v1/cost-estimate).
+        # Auth-required, non-metered.
         pricing_rule_id = None
         supported_rails = ["subscription"]
+        access_type = "subscription"
     else:
         # Truly free/public.
         pricing_rule_id = None
@@ -105,6 +124,8 @@ def _access_metadata(path: str, method: str = "GET") -> dict:
         "metered": bool(decision.is_metered),
         "pricing_rule_id": pricing_rule_id,
         "supported_rails": supported_rails,
+        "access_type": access_type,
+        "requires_payment": requires_payment,
     }
 
 
@@ -217,7 +238,7 @@ _TOOL_TEMPLATES = [
         "title": "Workflow Cost Estimate",
         "description": (
             "Returns a deterministic cost estimate for a named workflow. "
-            "Costs resolved from live pricing rules. Requires a valid API key. Non-metered."
+            "Costs resolved from live pricing rules. Public, free, and non-metered."
         ),
         "endpoint": "/v1/cost-estimate",
         "method": "GET",
@@ -911,6 +932,7 @@ def ai_context():
                 "/v1/openapi.json"
             ],
             "planning_helpers": [
+                "/v1/cost-estimate",
                 "/v1/workflows",
                 "/v1/instruments/lookup",
                 "/v1/instruments/resolve",
@@ -918,6 +940,7 @@ def ai_context():
                 "/v1/meta/indicators",
                 "/v1/meta/stim",
                 "/v1/meta/stwr",
+                "/v1/leadership/definitions",
                 "/v1/ai/proof/market-edge"
             ],
             "pricing": [
@@ -1014,7 +1037,7 @@ def ai_context():
             "Before calling premium endpoints, call /v1/ai/proof/market-edge (no auth required) to inspect signal structure and confirm field schemas before purchasing access.",
             "Use /v1/docs and /v1/openapi.json for exact request and response contracts.",
             "Use /v1/workflows to select an investment-research strategy and recommended endpoint sequence.",
-            "Use planning helpers (/v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/stim, /v1/meta/stwr) to resolve symbols and understand metadata before paid calls.",
+            "Use planning helpers (/v1/cost-estimate, /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/stim, /v1/meta/stwr, /v1/leadership/definitions) to resolve symbols, estimate costs, and understand metadata before paid calls.",
             "Use /v1/pricing/catalog to discover live pricing rules before calling premium endpoints.",
             "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and supported rails.",
             "For x402, inspect the HTTP 402 stocktrends_preview before payment to confirm purpose, inputs, response shape, related endpoints, pricing_rule_id, cost, and rails.",
@@ -1135,7 +1158,7 @@ def ai_tools():
             "Prefer /v1/ai/tools as the primary machine-readable entrypoint.",
             "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
             "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
-            "Use helper endpoints for autonomous planning: /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/stim, /v1/meta/stwr, and /v1/ai/proof/market-edge.",
+            "Use helper endpoints for autonomous planning: /v1/cost-estimate, /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/stim, /v1/meta/stwr, /v1/leadership/definitions, and /v1/ai/proof/market-edge.",
             "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and rails.",
             "Use /v1/docs or /v1/openapi.json for exact request/response contracts.",
             "Paid endpoint entries list their supported rails; current agent-pay endpoints support subscription, x402, and mpp.",

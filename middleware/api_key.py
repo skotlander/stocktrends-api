@@ -64,8 +64,15 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             "/health",
             "/v1/pricing",
             "/v1/pricing/catalog",
+            "/v1/cost-estimate",
+            "/v1/instruments/lookup",
+            "/v1/instruments/resolve",
+            "/v1/stwr/reports/catalog",
+            "/v1/meta/indicators",
+            "/v1/meta/stim",
+            "/v1/meta/stwr",
+            "/v1/leadership/definitions",
             # Workflow catalog is public discovery — no auth required.
-            # /v1/cost-estimate is intentionally NOT here: it requires auth.
             "/v1/workflows",
             # Discovery endpoints — public like /v1/docs and /v1/openapi.json.
             "/v1/ai/context",

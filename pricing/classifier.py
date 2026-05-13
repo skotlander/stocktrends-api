@@ -50,8 +50,15 @@ NON_METERED_PATHS = {
     "/v1/pricing",
     # Workflow catalog: public discovery surface, no metering.
     "/v1/workflows",
-    # Cost estimation: authenticated but non-metered; no usage charge for planning calls.
+    # Planning helpers: public discovery surfaces, no metering.
     "/v1/cost-estimate",
+    "/v1/instruments/lookup",
+    "/v1/instruments/resolve",
+    "/v1/stwr/reports/catalog",
+    "/v1/meta/indicators",
+    "/v1/meta/stim",
+    "/v1/meta/stwr",
+    "/v1/leadership/definitions",
     # MCP tools manifest: public discovery surface, no metering.
     "/v1/ai/tools",
     # Free proof-of-value endpoint: non-metered, no billing record.

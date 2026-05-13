@@ -206,9 +206,9 @@ _CONTROL_PLANE_PAYLOAD = {
 class TestParseConfigPayload:
     def test_endpoint_policies_parsed(self):
         # The control-plane payload covers 2 endpoints. Gap-filling merges in the
-        # remaining hardcoded defaults for uncovered endpoints (19 more = 21 total).
+        # remaining hardcoded defaults for uncovered endpoints (21 more = 23 total).
         cfg = _parse_config_payload(_CONTROL_PLANE_PAYLOAD)
-        assert len(cfg.endpoint_payment_policies) == 21
+        assert len(cfg.endpoint_payment_policies) == 23
 
     def test_allowed_rails_are_strings(self):
         cfg = _parse_config_payload(_CONTROL_PLANE_PAYLOAD)
@@ -434,6 +434,17 @@ class TestGetAcceptedPaymentMethodsForPath:
             method="GET",
         )
         assert result == "subscription,x402,mpp"
+
+    def test_leadership_paid_endpoints_return_normalized_methods(self, monkeypatch):
+        import payments.policy_provider as pp
+        monkeypatch.setattr(pp, "get_runtime_payment_policy_config", lambda **kw: _default_policy_config())
+
+        for path, rule_id in (
+            ("/v1/leadership/summary/latest", "leadership_summary_latest_paid"),
+            ("/v1/leadership/rotation/history", "leadership_rotation_history_paid"),
+        ):
+            result = get_accepted_payment_methods_for_path(path, rule_id, method="GET")
+            assert result == "subscription,x402,mpp"
 
     def test_agent_screener_top_no_crypto(self, monkeypatch):
         import payments.policy_provider as pp
@@ -693,3 +704,75 @@ class TestControlPlaneUuidRepair:
         )
         assert stim_latest is not None, "/v1/stim/latest must be gap-filled from defaults"
         assert stim_latest.pricing_rule_id == "stim_latest_paid"
+
+
+# ---------------------------------------------------------------------------
+# Leadership control-plane override behavior
+#
+# A live control-plane payload can replace an exact default policy entry when it
+# supplies the same (path_pattern, method). The parser still repairs missing or
+# UUID-like pricing_rule_id values and restores missing machine rails from the
+# default policy. Omitted leadership entries are gap-filled from defaults.
+# ---------------------------------------------------------------------------
+
+_CP_LEADERSHIP_UUID = "3ec965bb-03e8-4f9a-bd1f-2c879b33f105"
+
+_CONTROL_PLANE_PAYLOAD_WITH_LEADERSHIP_OVERRIDE = {
+    "version": "4",
+    "environment": "production",
+    "ttl_seconds": 60,
+    "endpoint_payment_policies": {
+        "cp_leadership_summary_latest": {
+            "endpoint_code": "cp_leadership_summary_latest",
+            "path_pattern": "/v1/leadership/summary/latest",
+            "method": "GET",
+            "pricing_rule_id": _CP_LEADERSHIP_UUID,
+            "machine_payments_enabled": True,
+            "active": True,
+            "allowed_rails": ["subscription", "x402"],
+        },
+    },
+}
+
+
+class TestControlPlaneLeadershipPolicyHandling:
+    def test_exact_leadership_control_plane_entry_takes_precedence_with_repairs(self):
+        cfg = _parse_config_payload(_CONTROL_PLANE_PAYLOAD_WITH_LEADERSHIP_OVERRIDE)
+        summary_policy = next(
+            p for p in cfg.endpoint_payment_policies
+            if p.path_pattern == "/v1/leadership/summary/latest"
+        )
+
+        assert summary_policy.endpoint_id == "cp_leadership_summary_latest"
+        assert summary_policy.pricing_rule_id == "leadership_summary_latest_paid"
+        assert summary_policy.allowed_rails == ("subscription", "x402", "mpp")
+
+    def test_uncovered_leadership_rotation_policy_is_gap_filled_from_defaults(self):
+        cfg = _parse_config_payload(_CONTROL_PLANE_PAYLOAD_WITH_LEADERSHIP_OVERRIDE)
+        rotation_policy = next(
+            p for p in cfg.endpoint_payment_policies
+            if p.path_pattern == "/v1/leadership/rotation/history"
+        )
+
+        assert rotation_policy.endpoint_id == "leadership_rotation_history_paid"
+        assert rotation_policy.pricing_rule_id == "leadership_rotation_history_paid"
+        assert rotation_policy.allowed_rails == ("subscription", "x402", "mpp")
+
+    def test_effective_leadership_policy_keeps_x402_and_mpp_after_repair(self):
+        import payments.policy_provider as pp
+
+        cfg = _parse_config_payload(_CONTROL_PLANE_PAYLOAD_WITH_LEADERSHIP_OVERRIDE)
+        original = pp.get_runtime_payment_policy_config
+        try:
+            pp.get_runtime_payment_policy_config = lambda: cfg  # type: ignore[assignment]
+            effective = pp.get_effective_endpoint_payment_policy(
+                "/v1/leadership/summary/latest",
+                "GET",
+            )
+        finally:
+            pp.get_runtime_payment_policy_config = original
+
+        assert effective is not None
+        assert effective.pricing_rule_id == "leadership_summary_latest_paid"
+        assert effective.allowed_rails == ("subscription", "x402", "mpp")
+        assert effective.machine_payment_rails == ("x402", "mpp")

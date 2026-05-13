@@ -299,6 +299,21 @@ def _default_policy_config() -> RuntimePaymentPolicyConfig:
                 allowed_rails=("subscription", "x402", "mpp"),
                 pricing_rule_id="breadth_sector_history_paid",
             ),
+            # --- leadership intelligence endpoints (definitions is a public helper) ---
+            EndpointPaymentPolicy(
+                endpoint_id="leadership_summary_latest_paid",
+                path_pattern="/v1/leadership/summary/latest",
+                method="GET",
+                allowed_rails=("subscription", "x402", "mpp"),
+                pricing_rule_id="leadership_summary_latest_paid",
+            ),
+            EndpointPaymentPolicy(
+                endpoint_id="leadership_rotation_history_paid",
+                path_pattern="/v1/leadership/rotation/history",
+                method="GET",
+                allowed_rails=("subscription", "x402", "mpp"),
+                pricing_rule_id="leadership_rotation_history_paid",
+            ),
             # --- selections/published endpoints ---
             EndpointPaymentPolicy(
                 endpoint_id="selections_published_latest_paid",

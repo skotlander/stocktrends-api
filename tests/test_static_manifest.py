@@ -99,7 +99,15 @@ _KNOWN_PUBLIC_TOOL_PATHS: frozenset[str] = frozenset({
     "/ai/proof/market-edge", # middleware.public_paths
     "/pricing",              # middleware.public_paths
     "/pricing/catalog",      # middleware.public_paths; public planning infrastructure
+    "/cost-estimate",        # middleware.public_paths; public planning helper
     "/workflows",            # middleware.public_paths
+    "/instruments/lookup",   # middleware.public_paths; public planning helper
+    "/instruments/resolve",  # middleware.public_paths; public planning helper
+    "/stwr/reports/catalog", # middleware.public_paths; public planning helper
+    "/meta/indicators",      # middleware.public_paths; public planning helper
+    "/meta/stim",            # middleware.public_paths; public planning helper
+    "/meta/stwr",            # middleware.public_paths; public planning helper
+    "/leadership/definitions", # middleware.public_paths; public planning helper
     "/breadth/sector/latest", # free-metered, anonymously accessible via runtime policy
 })
 
@@ -151,12 +159,12 @@ def test_llms_txt_has_agentic_service_positioning():
     assert "not investment advice" in text.lower()
 
 
-def test_instrument_lookup_auth_required_true(manifest):
-    """/instruments/lookup is not a public path — auth_required must be true."""
+def test_instrument_lookup_auth_required_false(manifest):
+    """/instruments/lookup is a public planning helper."""
     tool = _tool_by_path(manifest, "/instruments/lookup")
     assert tool is not None, "/instruments/lookup must exist in tools.json"
-    assert tool.get("auth_required") is True, \
-        f"/instruments/lookup must have auth_required: true, got {tool.get('auth_required')!r}"
+    assert tool.get("auth_required") is False, \
+        f"/instruments/lookup must have auth_required: false, got {tool.get('auth_required')!r}"
 
 
 def test_leadership_summary_latest_auth_required_true(manifest):
@@ -165,6 +173,8 @@ def test_leadership_summary_latest_auth_required_true(manifest):
     assert tool is not None, "/leadership/summary/latest must exist in tools.json"
     assert tool.get("auth_required") is True, \
         f"/leadership/summary/latest must have auth_required: true, got {tool.get('auth_required')!r}"
+    assert tool.get("pricing_rule_id") == "leadership_summary_latest_paid"
+    assert set(tool.get("supported_rails", [])) == {"subscription", "x402", "mpp"}
 
 
 # ---------------------------------------------------------------------------
@@ -213,6 +223,7 @@ def test_static_planning_helpers_present(manifest):
         ("meta_indicators", "/meta/indicators"),
         ("meta_stim", "/meta/stim"),
         ("meta_stwr", "/meta/stwr"),
+        ("leadership_definitions", "/leadership/definitions"),
     ):
         tool = _tool_by_name(manifest, name)
         assert tool is not None
@@ -225,6 +236,8 @@ def test_static_paid_entries_have_manifest_pricing(manifest):
         ("stim_latest", "stim_latest_paid", {"subscription", "x402", "mpp"}),
         ("indicators_latest", "indicators_latest_paid", {"subscription", "x402", "mpp"}),
         ("compare_portfolios", "portfolio_compare", {"subscription", "x402", "mpp"}),
+        ("leadership_summary_latest", "leadership_summary_latest_paid", {"subscription", "x402", "mpp"}),
+        ("leadership_rotation_history", "leadership_rotation_history_paid", {"subscription", "x402", "mpp"}),
     ):
         tool = _tool_by_name(manifest, name)
         assert tool is not None

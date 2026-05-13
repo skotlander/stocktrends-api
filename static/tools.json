@@ -1,5 +1,5 @@
 {
-  "version": "1.3",
+  "version": "1.4",
   "name": "Stock Trends API Tools",
   "provider": "Stock Trends Publications",
   "service_description": "Autonomous portfolio intelligence API for AI agents. Provides market regime analysis, Stock Trends signal intelligence, probabilistic forward-return modeling, stock selection, portfolio construction, portfolio comparison, and symbol decision evaluation for 4, 13, and 40 week investment horizons. Built for agentic research workflows using x402 and MPP payment rails.",
@@ -71,10 +71,10 @@
     {
       "name": "cost_estimate",
       "title": "Cost Estimate",
-      "description": "Returns deterministic STC cost estimates for a named workflow before execution. Requires a valid API key.",
+      "description": "Returns deterministic STC cost estimates for a named workflow before execution. Public, free, and non-metered.",
       "method": "GET",
       "path": "/cost-estimate",
-      "auth_required": true,
+      "auth_required": false,
       "category": "pricing",
       "parameters": [
         {
@@ -117,11 +117,12 @@
     {
       "name": "instrument_lookup",
       "title": "Instrument Lookup",
-      "description": "Looks up a stock or ETF by symbol to retrieve exchange, type, and metadata. Requires a valid API key.",
+      "description": "Planning helper. Looks up a stock or ETF by symbol to retrieve exchange, type, and metadata before paid calls.",
       "method": "GET",
       "path": "/instruments/lookup",
-      "auth_required": true,
+      "auth_required": false,
       "category": "instruments",
+      "planning_helper": true,
       "parameters": [
         {
           "name": "symbol",
@@ -138,7 +139,7 @@
       "description": "Planning helper. Resolves symbol_exchange or symbol plus exchange into one instrument before downstream paid intelligence calls.",
       "method": "GET",
       "path": "/instruments/resolve",
-      "auth_required": true,
+      "auth_required": false,
       "category": "instruments",
       "planning_helper": true,
       "parameters": [
@@ -171,7 +172,7 @@
       "description": "Planning helper. Lists valid Stock Trends Weekly Reporter report codes before paid report requests.",
       "method": "GET",
       "path": "/stwr/reports/catalog",
-      "auth_required": true,
+      "auth_required": false,
       "category": "stwr",
       "planning_helper": true
     },
@@ -181,7 +182,7 @@
       "description": "Planning helper. Field definitions for trend, trend_cnt, mt_cnt, rsi, rsi_updn, and vol_tag.",
       "method": "GET",
       "path": "/meta/indicators",
-      "auth_required": true,
+      "auth_required": false,
       "category": "meta",
       "planning_helper": true
     },
@@ -191,7 +192,7 @@
       "description": "Planning helper. ST-IM field definitions, confidence-bound fields, and base-period mean returns.",
       "method": "GET",
       "path": "/meta/stim",
-      "auth_required": true,
+      "auth_required": false,
       "category": "meta",
       "planning_helper": true
     },
@@ -201,7 +202,7 @@
       "description": "Planning helper. Stock Trends Weekly Reporter report family metadata.",
       "method": "GET",
       "path": "/meta/stwr",
-      "auth_required": true,
+      "auth_required": false,
       "category": "meta",
       "planning_helper": true
     },
@@ -608,6 +609,16 @@
       "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
+      "name": "leadership_definitions",
+      "title": "Leadership Definitions",
+      "description": "Planning helper. Defines Stock Trends leadership screens, ranking fields, and taxonomy levels before paid leadership intelligence calls.",
+      "method": "GET",
+      "path": "/leadership/definitions",
+      "auth_required": false,
+      "category": "leadership",
+      "planning_helper": true
+    },
+    {
       "name": "leadership_summary_latest",
       "title": "Leadership Summary Latest",
       "description": "Returns the latest Stock Trends leadership summary identifying overall, sector, and industry-group leaders using relative performance and trend-alignment filters. Fetch /v1/pricing/catalog for current STC cost.",
@@ -615,10 +626,24 @@
       "path": "/leadership/summary/latest",
       "auth_required": true,
       "category": "leadership",
-      "pricing_rule_id": "default_subscription",
+      "pricing_rule_id": "leadership_summary_latest_paid",
       "stc_cost": null,
       "estimated_usd_cost": null,
-      "supported_rails": ["subscription"],
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
+    },
+    {
+      "name": "leadership_rotation_history",
+      "title": "Leadership Rotation History",
+      "description": "Returns historical sector leadership rotation over time with bullish share, average RSI, trend maturity, leadership_score, and weekly rank. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/leadership/rotation/history",
+      "auth_required": true,
+      "category": "leadership",
+      "pricing_rule_id": "leadership_rotation_history_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
       "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     }
   ],

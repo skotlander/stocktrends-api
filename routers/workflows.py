@@ -444,7 +444,7 @@ def get_workflows() -> JSONResponse:
 
 # ---------------------------------------------------------------------------
 # GET /v1/cost-estimate
-# Authenticated (standard /v1/ API key enforcement), non-metered.
+# Public, non-metered.
 # Pure arithmetic — no new DB schema, no new pricing model.
 # quota_remaining is caller-supplied in v1 (interim design).
 # ---------------------------------------------------------------------------
@@ -456,7 +456,7 @@ def get_workflows() -> JSONResponse:
     description=(
         "Returns a deterministic cost estimate for a named workflow. "
         "Costs are resolved from live pricing rules (api_pricing_rules). "
-        "Requires a valid API key. Non-metered: no usage is charged for this call. "
+        "Public and non-metered: no API key, payment, or usage charge is required for this call. "
         "quota_remaining is caller-supplied in v1 — accuracy depends on the caller's "
         "knowledge of their current usage state. "
         "v2 will resolve quota_remaining server-side for authenticated callers."
