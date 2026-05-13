@@ -345,6 +345,18 @@ class TestDiscoveryPreview:
                 f"Field {field!r} missing from selections/history preview response_shape"
             )
 
+    def test_breadth_sector_latest_preview_is_paid_and_machine_payable(self):
+        """Breadth latest must expose paid preview metadata for x402 challenges."""
+        preview = get_endpoint_preview("/v1/breadth/sector/latest")
+        assert preview is not None
+        assert preview["endpoint"]["access_type"] == "paid"
+        assert preview["endpoint"]["requires_payment"] is True
+        assert preview["pricing"]["pricing_rule_id"] == "breadth_sector_latest_paid"
+        assert preview["supported_rails"] == ["subscription", "x402", "mpp"]
+        shape_str = " ".join(preview.get("response_shape", []))
+        for field in ("bullish_count", "bearish_count", "avg_rsi", "net_breadth"):
+            assert field in shape_str
+
 
 # ---------------------------------------------------------------------------
 # Integration tests: x402 challenge with preview for KNOWN path

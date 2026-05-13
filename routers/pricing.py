@@ -200,8 +200,8 @@ def get_pricing():
             "breadth": {
                 "pricing_model": "mixed",
                 "notes": [
-                    "/v1/breadth/sector/latest is free-metered.",
-                    "Other breadth endpoints may require subscription.",
+                    "Breadth endpoints use endpoint-specific STC rules.",
+                    "/v1/breadth/sector/latest and /v1/breadth/sector/history support subscription, x402, and MPP.",
                 ],
             },
             "general_protected_api": {

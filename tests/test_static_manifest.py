@@ -108,7 +108,6 @@ _KNOWN_PUBLIC_TOOL_PATHS: frozenset[str] = frozenset({
     "/meta/stim",            # middleware.public_paths; public planning helper
     "/meta/stwr",            # middleware.public_paths; public planning helper
     "/leadership/definitions", # middleware.public_paths; public planning helper
-    "/breadth/sector/latest", # free-metered, anonymously accessible via runtime policy
 })
 
 
@@ -236,6 +235,8 @@ def test_static_paid_entries_have_manifest_pricing(manifest):
         ("stim_latest", "stim_latest_paid", {"subscription", "x402", "mpp"}),
         ("indicators_latest", "indicators_latest_paid", {"subscription", "x402", "mpp"}),
         ("compare_portfolios", "portfolio_compare", {"subscription", "x402", "mpp"}),
+        ("breadth_sector_latest", "breadth_sector_latest_paid", {"subscription", "x402", "mpp"}),
+        ("breadth_sector_history", "breadth_sector_history_paid", {"subscription", "x402", "mpp"}),
         ("leadership_summary_latest", "leadership_summary_latest_paid", {"subscription", "x402", "mpp"}),
         ("leadership_rotation_history", "leadership_rotation_history_paid", {"subscription", "x402", "mpp"}),
     ):
@@ -246,6 +247,17 @@ def test_static_paid_entries_have_manifest_pricing(manifest):
         assert "estimated_usd_cost" in tool
         assert set(tool["supported_rails"]) == rails
         assert "STC is the source of truth" in tool["pricing_note"]
+
+
+def test_breadth_sector_latest_static_manifest_is_paid(manifest):
+    tool = _tool_by_name(manifest, "breadth_sector_latest")
+    assert tool is not None
+    assert tool["path"] == "/breadth/sector/latest"
+    assert tool["auth_required"] is True
+    assert tool["access_type"] == "paid"
+    assert tool["requires_payment"] is True
+    assert tool["pricing_rule_id"] == "breadth_sector_latest_paid"
+    assert tool["supported_rails"] == ["subscription", "x402", "mpp"]
 
 
 def test_static_portfolio_compare_safe_example_shape(manifest):

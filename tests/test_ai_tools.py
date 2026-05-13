@@ -557,6 +557,7 @@ def test_paid_tools_include_manifest_pricing_fields(monkeypatch):
         lambda: {
             "stim_latest_paid": Decimal("0.25"),
             "portfolio_compare": Decimal("1.50"),
+            "breadth_sector_latest_paid": Decimal("0.100000"),
         },
     )
     result = ai_tools()
@@ -565,6 +566,7 @@ def test_paid_tools_include_manifest_pricing_fields(monkeypatch):
     for endpoint, expected_rule, expected_cost in (
         ("/v1/stim/latest", "stim_latest_paid", 0.25),
         ("/v1/portfolio/compare", "portfolio_compare", 1.5),
+        ("/v1/breadth/sector/latest", "breadth_sector_latest_paid", 0.1),
     ):
         tool = tools[endpoint]
         assert tool["pricing_rule_id"] == expected_rule
@@ -971,6 +973,27 @@ def test_leadership_paid_tools_are_x402_mpp_enabled():
         assert tool["pricing"]["supported_rails"] == ["subscription", "x402", "mpp"]
 
 
+def test_breadth_sector_latest_tool_is_paid_x402_mpp_enabled(monkeypatch):
+    monkeypatch.setattr(
+        ai_router,
+        "_fetch_pricing_cost_map",
+        lambda: {"breadth_sector_latest_paid": Decimal("0.100000")},
+    )
+
+    result = ai_tools()
+    tool = next(t for t in result["tools"] if t["endpoint"] == "/v1/breadth/sector/latest")
+
+    assert tool["auth_required"] is True
+    assert tool["metered"] is True
+    assert tool["access_type"] == "paid"
+    assert tool["requires_payment"] is True
+    assert tool["pricing_rule_id"] == "breadth_sector_latest_paid"
+    assert tool["supported_rails"] == ["subscription", "x402", "mpp"]
+    assert tool["pricing"]["supported_rails"] == ["subscription", "x402", "mpp"]
+    assert tool["stc_cost"] == 0.1
+    assert tool["pricing"]["stc_cost"] == 0.1
+
+
 def test_paid_leadership_not_in_public_allowlists():
     import pathlib
     import main as main_module
@@ -990,3 +1013,18 @@ def test_paid_leadership_not_in_public_allowlists():
         assert path not in main_module.FREE_METERED_V1_PATHS
         assert path.removeprefix("/v1") not in main_module.FREE_METERED_V1_PATHS
         assert f'"{path}"' not in source
+
+
+def test_breadth_sector_latest_not_in_public_or_free_allowlists():
+    import pathlib
+    import main as main_module
+
+    source = pathlib.Path("middleware/api_key.py").read_text(encoding="utf-8")
+    path = "/v1/breadth/sector/latest"
+
+    assert path not in _MANIFEST_PUBLIC_PATHS
+    assert path not in NON_METERED_PATHS
+    assert path not in main_module.FREE_METERED_V1_PATHS
+    assert path.removeprefix("/v1") not in main_module.FREE_METERED_V1_PATHS
+    assert f'"{path}"' not in source
+    assert is_free_metered_path(path) is False

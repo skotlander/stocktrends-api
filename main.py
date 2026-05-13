@@ -41,7 +41,6 @@ APP_DESCRIPTION = SERVICE_POSITIONING
 
 FREE_METERED_V1_PATHS = {
     "/ai/context",
-    "/breadth/sector/latest",
 }
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "head"}
@@ -237,7 +236,7 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                 {"BearerAuth": []},
             ]
 
-            if path.startswith("/stim") or path.startswith("/indicators") or path.startswith("/prices") or path.startswith("/selections") or path.startswith("/stwr") or path.startswith("/agents") or path.startswith("/agent/screener") or path.startswith("/market") or path.startswith("/decision") or path.startswith("/portfolio") or path.startswith("/breadth/sector/history") or path in ("/leadership/summary/latest", "/leadership/rotation/history", "/pricing", "/pricing/catalog", "/workflows", "/cost-estimate"):
+            if path.startswith("/stim") or path.startswith("/indicators") or path.startswith("/prices") or path.startswith("/selections") or path.startswith("/stwr") or path.startswith("/agents") or path.startswith("/agent/screener") or path.startswith("/market") or path.startswith("/decision") or path.startswith("/portfolio") or path.startswith("/breadth/sector/") or path in ("/leadership/summary/latest", "/leadership/rotation/history", "/pricing", "/pricing/catalog", "/workflows", "/cost-estimate"):
                 _ensure_parameter_refs(operation, agent_refs + payment_refs)
 
     v1_app.openapi_schema = openapi_schema

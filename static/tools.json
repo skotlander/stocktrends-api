@@ -588,11 +588,18 @@
     {
       "name": "breadth_sector_latest",
       "title": "Sector Breadth Latest",
-      "description": "Returns the latest sector breadth snapshot derived from Stock Trends signal distribution across sectors. Free-metered and anonymously accessible.",
+      "description": "Returns the latest sector breadth snapshot derived from Stock Trends signal distribution across sectors. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/breadth/sector/latest",
-      "auth_required": false,
-      "category": "breadth"
+      "auth_required": true,
+      "category": "breadth",
+      "access_type": "paid",
+      "requires_payment": true,
+      "pricing_rule_id": "breadth_sector_latest_paid",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
       "name": "breadth_sector_history",

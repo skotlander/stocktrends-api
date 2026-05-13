@@ -108,6 +108,7 @@ def public_helper_client(monkeypatch):
         "/v1/meta/stim",
         "/v1/meta/stwr",
         "/v1/leadership/definitions",
+        "/v1/ai/context",
     ],
 )
 def test_public_planning_helpers_return_200_without_api_key(public_helper_client, path):
@@ -172,11 +173,12 @@ def agent_pay_client(monkeypatch):
 @pytest.mark.parametrize(
     ("path", "pricing_rule_id"),
     [
+        ("/v1/breadth/sector/latest", "breadth_sector_latest_paid"),
         ("/v1/leadership/summary/latest", "leadership_summary_latest_paid"),
         ("/v1/leadership/rotation/history", "leadership_rotation_history_paid"),
     ],
 )
-def test_paid_leadership_endpoints_return_402_without_api_key_or_payment(
+def test_paid_agent_pay_endpoints_return_402_without_api_key_or_payment(
     agent_pay_client,
     path,
     pricing_rule_id,

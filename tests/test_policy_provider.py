@@ -18,6 +18,7 @@ from payments.policy_provider import (
     _parse_config_payload,
     _build_effective_endpoint_policy,
     get_accepted_payment_methods_for_path,
+    is_free_metered_path,
     EndpointPaymentPolicy,
 )
 
@@ -206,9 +207,9 @@ _CONTROL_PLANE_PAYLOAD = {
 class TestParseConfigPayload:
     def test_endpoint_policies_parsed(self):
         # The control-plane payload covers 2 endpoints. Gap-filling merges in the
-        # remaining hardcoded defaults for uncovered endpoints (21 more = 23 total).
+        # remaining hardcoded defaults for uncovered endpoints (22 more = 24 total).
         cfg = _parse_config_payload(_CONTROL_PLANE_PAYLOAD)
-        assert len(cfg.endpoint_payment_policies) == 23
+        assert len(cfg.endpoint_payment_policies) == 24
 
     def test_allowed_rails_are_strings(self):
         cfg = _parse_config_payload(_CONTROL_PLANE_PAYLOAD)
@@ -235,6 +236,39 @@ class TestParseConfigPayload:
     def test_source_is_control_plane(self):
         cfg = _parse_config_payload(_CONTROL_PLANE_PAYLOAD)
         assert cfg.source == "control_plane"
+
+
+class TestBreadthSectorLatestDefaultPolicy:
+    def test_latest_is_paid_policy_not_free_metered(self):
+        cfg = _default_policy_config()
+        policy = next(
+            p for p in cfg.endpoint_payment_policies
+            if p.path_pattern == "/v1/breadth/sector/latest"
+        )
+
+        assert policy.pricing_rule_id == "breadth_sector_latest_paid"
+        assert policy.allowed_rails == ("subscription", "x402", "mpp")
+        assert "/v1/breadth/sector/latest" not in cfg.free_metered_paths
+
+    def test_history_remains_paid_policy(self):
+        cfg = _default_policy_config()
+        policy = next(
+            p for p in cfg.endpoint_payment_policies
+            if p.path_pattern == "/v1/breadth/sector/history"
+        )
+
+        assert policy.pricing_rule_id == "breadth_sector_history_paid"
+        assert policy.allowed_rails == ("subscription", "x402", "mpp")
+
+    def test_runtime_free_metered_paths_only_keep_ai_context(self, monkeypatch):
+        cfg = _default_policy_config()
+        monkeypatch.setattr(
+            "payments.policy_provider.get_runtime_payment_policy_config",
+            lambda force_refresh=False: cfg,
+        )
+
+        assert is_free_metered_path("/v1/ai/context") is True
+        assert is_free_metered_path("/v1/breadth/sector/latest") is False
 
 
 # ---------------------------------------------------------------------------
@@ -470,6 +504,8 @@ class TestGetAcceptedPaymentMethodsForPath:
             ("/v1/portfolio/construct", "portfolio_construct", "POST"),
             ("/v1/portfolio/evaluate", "portfolio_evaluate", "POST"),
             ("/v1/portfolio/compare", "portfolio_compare", "POST"),
+            ("/v1/breadth/sector/latest", "breadth_sector_latest_paid", "GET"),
+            ("/v1/breadth/sector/history", "breadth_sector_history_paid", "GET"),
         ]
         for path, rule_id, http_method in paid_paths:
             result = get_accepted_payment_methods_for_path(path, rule_id, method=http_method)

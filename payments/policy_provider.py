@@ -291,7 +291,14 @@ def _default_policy_config() -> RuntimePaymentPolicyConfig:
                 allowed_rails=("subscription", "x402", "mpp"),
                 pricing_rule_id="stwr_reports_history_paid",
             ),
-            # --- breadth history endpoint (sector/latest is free-metered) ---
+            # --- breadth endpoints ---
+            EndpointPaymentPolicy(
+                endpoint_id="breadth_sector_latest_paid",
+                path_pattern="/v1/breadth/sector/latest",
+                method="GET",
+                allowed_rails=("subscription", "x402", "mpp"),
+                pricing_rule_id="breadth_sector_latest_paid",
+            ),
             EndpointPaymentPolicy(
                 endpoint_id="breadth_sector_history_paid",
                 path_pattern="/v1/breadth/sector/history",
@@ -332,7 +339,6 @@ def _default_policy_config() -> RuntimePaymentPolicyConfig:
         ),
         free_metered_paths=(
             "/v1/ai/context",
-            "/v1/breadth/sector/latest",
         ),
         # Prefix-based agent-pay scope is intentionally limited to /v1/stim.
         # Newer premium routes (/v1/agent/screener/*, /v1/market/*, etc.) are
