@@ -72,6 +72,74 @@ def _group_cols(level: GroupLevel) -> tuple[str, str]:
     raise ValueError("Invalid group_level")
 
 
+def _use_sector_summary(
+    *,
+    level: GroupLevel,
+    cs_only: bool,
+    include_unknown: bool,
+    min_price: float | None,
+    min_volume: int | None,
+) -> bool:
+    """True when st_sector_summary can satisfy the request without raw st_data aggregation."""
+    return (
+        level == "sector"
+        and cs_only is True
+        and include_unknown is False
+        and min_price is None
+        and min_volume is None
+    )
+
+
+def _breadth_summary_sql(
+    *,
+    start: str | None,
+    end: str | None,
+    exchange: str | None,
+) -> tuple[str, dict[str, Any]]:
+    """Build SQL against st_sector_summary for default sector breadth history requests."""
+    params: dict[str, Any] = {}
+    where = "WHERE ss.type = 'CS'"
+
+    if exchange:
+        where += " AND ss.exchange = :exchange"
+        params["exchange"] = exchange
+
+    if start:
+        where += " AND ss.weekdate >= :start"
+        params["start"] = start
+
+    if end:
+        where += " AND ss.weekdate <= :end"
+        params["end"] = end
+
+    sql = f"""
+        SELECT
+            ss.weekdate,
+            ss.sector_code,
+            ss.sector_name,
+            ss.total,
+            ss.bullish_count,
+            ss.bearish_count,
+            ss.neutral_count,
+            ss.avg_trend_cnt,
+            ss.avg_trend_cnt_bullish,
+            ss.avg_trend_cnt_bearish,
+            ss.max_trend_cnt,
+            ss.avg_mt_cnt,
+            ss.avg_mt_cnt_bullish,
+            ss.avg_mt_cnt_bearish,
+            ss.max_mt_cnt,
+            ss.avg_rsi,
+            ss.rsi_ge_110_count,
+            ss.rsi_ge_120_count,
+            ss.young_bullish_count,
+            ss.mature_bullish_count
+        FROM st_sector_summary ss
+        {where}
+    """
+    return sql, params
+
+
 def _where_clause(
     *,
     params: dict[str, Any],
@@ -318,20 +386,34 @@ def breadth_sector_history(
     engine = get_engine()
     ex = _norm_exchange(exchange) if exchange else None
 
-    sql_base, params = _breadth_sql(
+    if _use_sector_summary(
         level=group_level,
-        weekdate=None,
-        start=start,
-        end=end,
-        exchange=ex,
         cs_only=cs_only,
+        include_unknown=include_unknown,
         min_price=min_price,
         min_volume=min_volume,
-        vol_scale=vol_scale,
-        include_unknown=include_unknown,
-    )
+    ):
+        sql_base, params = _breadth_summary_sql(
+            start=start,
+            end=end,
+            exchange=ex,
+        )
+        order = " ORDER BY weekdate ASC, bullish_count DESC, avg_rsi DESC"
+    else:
+        sql_base, params = _breadth_sql(
+            level=group_level,
+            weekdate=None,
+            start=start,
+            end=end,
+            exchange=ex,
+            cs_only=cs_only,
+            min_price=min_price,
+            min_volume=min_volume,
+            vol_scale=vol_scale,
+            include_unknown=include_unknown,
+        )
+        order = " ORDER BY d.weekdate ASC, bullish_count DESC, avg_rsi DESC"
 
-    order = " ORDER BY d.weekdate ASC, bullish_count DESC, avg_rsi DESC"
     sql = text(f"{sql_base}{order} LIMIT :limit")
     params["limit"] = int(limit)
 

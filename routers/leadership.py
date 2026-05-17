@@ -47,6 +47,92 @@ def _where_date_clause(params: dict[str, Any], start: str | None, end: str | Non
     return w
 
 
+def _rotation_summary_sql(
+    *,
+    type_: str,
+    exchange: str | None,
+    start: str | None,
+    end: str | None,
+    min_constituents: int,
+    top_k: int | None,
+) -> tuple[str, dict[str, Any]]:
+    """
+    Build the complete rotation/history SQL against st_sector_summary.
+
+    Preserves the MySQL 5.7 user-variable ranking pattern; applies it to
+    the pre-aggregated summary table instead of raw st_data.
+    """
+    params: dict[str, Any] = {
+        "type": type_,
+        "min_constituents": int(min_constituents),
+    }
+
+    where = (
+        "WHERE ss.type = :type"
+        " AND ss.sector_name IS NOT NULL"
+        " AND ss.total >= :min_constituents"
+    )
+
+    if exchange:
+        where += " AND ss.exchange = :exchange"
+        params["exchange"] = exchange
+
+    if start:
+        where += " AND ss.weekdate >= :start"
+        params["start"] = start
+
+    if end:
+        where += " AND ss.weekdate <= :end"
+        params["end"] = end
+
+    sql = f"""
+        SELECT *
+        FROM (
+            SELECT
+                a.weekdate,
+                a.sector_code,
+                a.sector_name,
+                a.n,
+                a.bull_n,
+                a.bull_pct,
+                a.avg_rsi,
+                a.avg_mt_cnt,
+                a.avg_trend_cnt,
+                a.bull_avg_rsi,
+                a.leadership_score,
+                @r := IF(@wk = a.weekdate, @r + 1, 1) AS rank_in_week,
+                @wk := a.weekdate AS _wk_set
+            FROM (
+                SELECT
+                    ss.weekdate,
+                    ss.sector_code,
+                    ss.sector_name,
+                    ss.total AS n,
+                    ss.bullish_count AS bull_n,
+                    ss.bull_pct,
+                    ss.avg_rsi,
+                    ss.avg_mt_cnt,
+                    ss.avg_trend_cnt,
+                    ss.bull_avg_rsi,
+                    ss.leadership_score
+                FROM st_sector_summary ss
+                {where}
+                ORDER BY ss.weekdate ASC, ss.leadership_score DESC, ss.sector_name ASC
+            ) a
+            CROSS JOIN (SELECT @wk := NULL, @r := 0) vars
+            ORDER BY a.weekdate ASC, a.leadership_score DESC, a.sector_name ASC
+        ) ranked
+    """
+
+    if top_k is not None:
+        params["top_k"] = int(top_k)
+        sql += " WHERE ranked.rank_in_week <= :top_k "
+
+    sql += " ORDER BY ranked.weekdate ASC, ranked.rank_in_week ASC, ranked.sector_name ASC "
+
+    return sql, params
+
+
 @router.get("/definitions")
 def leadership_definitions():
     return {
@@ -261,74 +347,14 @@ def leadership_rotation_history(
     engine = get_engine()
     ex = _norm_exchange(exchange) if exchange else None
 
-    params: dict[str, Any] = {
-        "type": type,
-        "min_constituents": int(min_constituents),
-    }
-
-    exch_clause = ""
-    if ex:
-        exch_clause = " AND d.exchange = :exchange "
-        params["exchange"] = ex
-
-    date_clause = _where_date_clause(params, start, end)
-
-    # Notes:
-    # - No CTE, no window funcs.
-    # - Ranking is done via variables AFTER ordering by weekdate, leadership_score desc.
-    # - Filtering top_k happens in the outermost query on computed rank_in_week.
-    sql = f"""
-        SELECT *
-        FROM (
-            SELECT
-                a.weekdate,
-                a.sector_code,
-                a.sector_name,
-                a.n,
-                a.bull_n,
-                a.bull_pct,
-                a.avg_rsi,
-                a.avg_mt_cnt,
-                a.avg_trend_cnt,
-                a.bull_avg_rsi,
-                a.leadership_score,
-                @r := IF(@wk = a.weekdate, @r + 1, 1) AS rank_in_week,
-                @wk := a.weekdate AS _wk_set
-            FROM (
-                SELECT
-                    d.weekdate AS weekdate,
-                    s.sector_code AS sector_code,
-                    s.sector_name AS sector_name,
-                    COUNT(*) AS n,
-                    SUM(CASE WHEN d.trend IN ('^+','^-','v^') THEN 1 ELSE 0 END) AS bull_n,
-                    (SUM(CASE WHEN d.trend IN ('^+','^-','v^') THEN 1 ELSE 0 END) / COUNT(*)) AS bull_pct,
-                    AVG(d.rsi) AS avg_rsi,
-                    AVG(d.mt_cnt) AS avg_mt_cnt,
-                    AVG(d.trend_cnt) AS avg_trend_cnt,
-                    AVG(CASE WHEN d.trend IN ('^+','^-','v^') THEN d.rsi ELSE NULL END) AS bull_avg_rsi,
-                    ((AVG(d.rsi) * (SUM(CASE WHEN d.trend IN ('^+','^-','v^') THEN 1 ELSE 0 END) / COUNT(*)))
-                        + (AVG(d.mt_cnt) * 0.25)) AS leadership_score
-                FROM st_data d
-                LEFT JOIN st_listsectorsandindustries s
-                  ON s.industry_code = d.industry_id
-                WHERE d.type = :type
-                  {exch_clause}
-                  {date_clause}
-                  AND s.sector_name IS NOT NULL
-                GROUP BY d.weekdate, s.sector_code, s.sector_name
-                HAVING COUNT(*) >= :min_constituents
-                ORDER BY d.weekdate ASC, leadership_score DESC, s.sector_name ASC
-            ) a
-            CROSS JOIN (SELECT @wk := NULL, @r := 0) vars
-            ORDER BY a.weekdate ASC, a.leadership_score DESC, a.sector_name ASC
-        ) ranked
-    """
-
-    if top_k is not None:
-        params["top_k"] = int(top_k)
-        sql += " WHERE ranked.rank_in_week <= :top_k "
-
-    sql += " ORDER BY ranked.weekdate ASC, ranked.rank_in_week ASC, ranked.sector_name ASC "
+    sql, params = _rotation_summary_sql(
+        type_=type,
+        exchange=ex,
+        start=start,
+        end=end,
+        min_constituents=min_constituents,
+        top_k=top_k,
+    )
 
     try:
         with engine.connect() as conn:
