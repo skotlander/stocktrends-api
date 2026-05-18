@@ -1928,16 +1928,9 @@ def build_bazaar_extension(path: str, method: str | None = None) -> dict[str, An
         "examples": [safe_example_request],
     }
 
-    schema_input_properties: dict[str, Any] = {
-        "type": {"type": "string", "const": "http"},
-        "method": {"type": "string", "enum": [http_method]},
-        input_schema_property_name: input_schema,
-    }
-    schema_input_required = ["type", "method", input_schema_property_name]
-    if location == "body":
-        schema_input_properties["bodyType"] = {"type": "string", "enum": ["json"]}
-        schema_input_required.insert(2, "bodyType")
-
+    # schema.properties.input must be the direct callable-parameter schema so that
+    # Bazaar's indexer finds named parameters at the top level of input.properties.
+    # The protocol envelope (type/method/query/body) lives in info.input only.
     return {
         "bazaar": {
             "info": info,
@@ -1947,12 +1940,7 @@ def build_bazaar_extension(path: str, method: str | None = None) -> dict[str, An
                 "title": str((entry or {}).get("title") or path),
                 "description": _bazaar_endpoint_description(entry, path),
                 "properties": {
-                    "input": {
-                        "type": "object",
-                        "properties": schema_input_properties,
-                        "required": schema_input_required,
-                        "additionalProperties": False,
-                    },
+                    "input": input_schema,
                     "output": output_schema,
                 },
                 "required": ["input", "output"],

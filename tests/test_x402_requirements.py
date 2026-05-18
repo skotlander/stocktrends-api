@@ -167,15 +167,22 @@ class TestExtensionsBazaarGet:
     def test_schema_input_required(self, reqs):
         assert "input" in reqs["extensions"]["bazaar"]["schema"]["required"]
 
-    def test_schema_required_fields_get(self, reqs):
-        required = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]["required"]
-        assert "type" in required
-        assert "method" in required
-        assert "bodyType" not in required
+    def test_schema_input_is_direct_parameter_schema(self, reqs):
+        """schema.properties.input must be the direct callable-parameter schema, not a protocol
+        envelope.  Bazaar's indexer reads input.properties to discover named parameters."""
+        input_schema = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]
+        assert input_schema["type"] == "object"
+        props = input_schema.get("properties", {})
+        for envelope_key in ("type", "method", "bodyType", "query", "body"):
+            assert envelope_key not in props, (
+                f"schema.properties.input.properties must not contain protocol envelope key "
+                f"{envelope_key!r} — Bazaar cannot discover parameters through the envelope"
+            )
 
-    def test_schema_method_enum_matches(self, reqs):
-        enum = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]["properties"]["method"]["enum"]
-        assert "GET" in enum
+    def test_schema_input_has_query_location_annotation(self, reqs):
+        """GET schema.properties.input must carry the x-stocktrends-input-location annotation."""
+        input_schema = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]
+        assert input_schema.get("x-stocktrends-input-location") == "query"
 
     def test_head_uses_query_style(self, monkeypatch):
         monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
@@ -205,10 +212,21 @@ class TestExtensionsBazaarPost:
     def test_info_input_has_body(self, post_reqs):
         assert "body" in post_reqs["extensions"]["bazaar"]["info"]["input"]
 
-    def test_schema_required_includes_bodyType(self, post_reqs):
-        required = post_reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]["required"]
-        assert "bodyType" in required
-        assert "body" in required
+    def test_schema_post_input_is_direct_parameter_schema(self, post_reqs):
+        """POST schema.properties.input must expose body parameters directly, not a wrapper."""
+        input_schema = post_reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]
+        assert input_schema["type"] == "object"
+        props = input_schema.get("properties", {})
+        for envelope_key in ("type", "method", "bodyType", "query", "body"):
+            assert envelope_key not in props, (
+                f"schema.properties.input.properties must not contain protocol envelope key "
+                f"{envelope_key!r}"
+            )
+
+    def test_schema_post_input_has_body_location_annotation(self, post_reqs):
+        """POST schema.properties.input must carry the body input-location annotation."""
+        input_schema = post_reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]
+        assert input_schema.get("x-stocktrends-input-location") == "body"
 
     def test_put_uses_body_style(self, monkeypatch):
         monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
@@ -386,7 +404,8 @@ class TestBazaarRichDiscoveryMetadata:
         assert "symbol_exchange" in input_schema["properties"]
         assert input_schema["properties"]["symbol_exchange"]["pattern"] == "^[A-Z0-9.]+-[A-Z]$"
         assert "symbol_exchange" in input_schema["required"]
-        assert bazaar["schema"]["properties"]["input"]["properties"]["query"] == input_schema
+        # schema.properties.input IS the direct parameter schema (same object as info.input.query)
+        assert bazaar["schema"]["properties"]["input"] == input_schema
 
     def test_get_market_regime_latest_declares_empty_query_schema(self, monkeypatch):
         reqs = self._requirements(monkeypatch, "/v1/market/regime/latest", "GET")
@@ -409,7 +428,8 @@ class TestBazaarRichDiscoveryMetadata:
         assert body_schema["x-stocktrends-input-location"] == "body"
         assert {"universe", "count", "bias"}.issubset(body_schema["properties"])
         assert body_schema["properties"]["bias"]["enum"] == ["auto", "bullish", "bearish"]
-        assert reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]["properties"]["body"] == body_schema
+        # schema.properties.input IS the direct parameter schema (same object as info.input.body)
+        assert reqs["extensions"]["bazaar"]["schema"]["properties"]["input"] == body_schema
 
     def test_post_portfolio_compare_declares_json_body_schema(self, monkeypatch):
         reqs = self._requirements(monkeypatch, "/v1/portfolio/compare", "POST")
@@ -698,3 +718,151 @@ class TestCompactChallengeMode:
         )
 
         assert unknown == full
+
+
+# ---------------------------------------------------------------------------
+# Bazaar input-schema compliance — acceptance criteria
+#
+# Validates that schema.properties.input exposes callable parameters directly
+# so that Bazaar's indexer reports "Input schema present: yes".
+# ---------------------------------------------------------------------------
+
+class TestBazaarInputSchemaCompliance:
+    """
+    These tests verify the specific requirement:
+      'For a route to be discoverable, the Bazaar extension input must pass
+       strict JSON Schema validation against schema.properties.input.'
+
+    The fix: schema.properties.input is the direct callable-parameter schema,
+    not the protocol envelope {type, method, query/body}.  Named parameters
+    appear at schema.properties.input.properties so Bazaar can index them.
+    info.input still carries the full envelope context for backward compat.
+    """
+
+    def _requirements(self, monkeypatch, path: str, method: str):
+        monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
+        return build_x402_requirements(path=path, amount_usd=_AMOUNT, method=method)
+
+    # --- GET query endpoints ---
+
+    def test_indicators_latest_input_schema_has_symbol_exchange(self, monkeypatch):
+        """GET /v1/indicators/latest: schema.properties.input must contain symbol_exchange."""
+        reqs = self._requirements(monkeypatch, "/v1/indicators/latest", "GET")
+        input_schema = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]
+
+        assert input_schema["type"] == "object"
+        assert "symbol_exchange" in input_schema["properties"]
+        assert "symbol_exchange" in input_schema["required"]
+        assert input_schema["properties"]["symbol_exchange"]["pattern"] == "^[A-Z0-9.]+-[A-Z]$"
+        assert input_schema["x-stocktrends-input-location"] == "query"
+
+    def test_indicators_history_input_schema_has_symbol_exchange(self, monkeypatch):
+        """GET /v1/indicators/history: schema.properties.input must contain symbol_exchange."""
+        reqs = self._requirements(monkeypatch, "/v1/indicators/history", "GET")
+        input_schema = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]
+
+        assert "symbol_exchange" in input_schema["properties"]
+        assert "symbol_exchange" in input_schema["required"]
+        assert input_schema["x-stocktrends-input-location"] == "query"
+
+    # --- POST body endpoints ---
+
+    def test_portfolio_construct_input_schema_has_body_params(self, monkeypatch):
+        """POST /v1/portfolio/construct: schema.properties.input must have body parameters."""
+        reqs = self._requirements(monkeypatch, "/v1/portfolio/construct", "POST")
+        input_schema = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]
+
+        assert input_schema["type"] == "object"
+        assert {"universe", "count", "bias"}.issubset(input_schema["properties"])
+        assert input_schema["x-stocktrends-input-location"] == "body"
+
+    def test_portfolio_compare_input_schema_has_left_right(self, monkeypatch):
+        """POST /v1/portfolio/compare: schema.properties.input must have left and right params."""
+        reqs = self._requirements(monkeypatch, "/v1/portfolio/compare", "POST")
+        input_schema = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]
+
+        assert {"left", "right"} == set(input_schema["required"])
+        assert "left" in input_schema["properties"]
+        assert "right" in input_schema["properties"]
+        assert input_schema["x-stocktrends-input-location"] == "body"
+
+    # --- No protocol envelope in schema.properties.input ---
+
+    def test_get_schema_input_has_no_protocol_envelope(self, monkeypatch):
+        """GET schema.properties.input must not contain type/method/query envelope keys."""
+        reqs = self._requirements(monkeypatch, "/v1/indicators/latest", "GET")
+        props = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"].get("properties", {})
+        for envelope_key in ("type", "method", "bodyType", "query", "body"):
+            assert envelope_key not in props, (
+                f"schema.properties.input.properties must not contain envelope key {envelope_key!r}"
+            )
+
+    def test_post_schema_input_has_no_protocol_envelope(self, monkeypatch):
+        """POST schema.properties.input must not contain type/method/body envelope keys."""
+        reqs = self._requirements(monkeypatch, "/v1/portfolio/construct", "POST")
+        props = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"].get("properties", {})
+        for envelope_key in ("type", "method", "bodyType", "query", "body"):
+            assert envelope_key not in props, (
+                f"schema.properties.input.properties must not contain envelope key {envelope_key!r}"
+            )
+
+    # --- info.input backward compat (unchanged envelope structure) ---
+
+    def test_info_input_still_has_envelope_context_get(self, monkeypatch):
+        """info.input must still have type/method/query envelope for backward compat."""
+        reqs = self._requirements(monkeypatch, "/v1/indicators/latest", "GET")
+        info_input = reqs["extensions"]["bazaar"]["info"]["input"]
+
+        assert info_input["type"] == "http"
+        assert info_input["method"] == "GET"
+        assert "query" in info_input
+        assert "schema" in info_input
+        assert "parameters" in info_input
+        assert "bodyType" not in info_input
+
+    def test_info_input_still_has_envelope_context_post(self, monkeypatch):
+        """info.input must still have type/method/body envelope for backward compat."""
+        reqs = self._requirements(monkeypatch, "/v1/portfolio/construct", "POST")
+        info_input = reqs["extensions"]["bazaar"]["info"]["input"]
+
+        assert info_input["type"] == "http"
+        assert info_input["method"] == "POST"
+        assert info_input["bodyType"] == "json"
+        assert "body" in info_input
+        assert "schema" in info_input
+
+    # --- schema.properties.input == info.input.query/body (same object) ---
+
+    def test_get_schema_input_equals_info_input_query(self, monkeypatch):
+        """schema.properties.input and info.input.query must be the same parameter schema."""
+        reqs = self._requirements(monkeypatch, "/v1/indicators/latest", "GET")
+        bazaar = reqs["extensions"]["bazaar"]
+        assert bazaar["schema"]["properties"]["input"] == bazaar["info"]["input"]["query"]
+
+    def test_post_schema_input_equals_info_input_body(self, monkeypatch):
+        """schema.properties.input and info.input.body must be the same parameter schema."""
+        reqs = self._requirements(monkeypatch, "/v1/portfolio/construct", "POST")
+        bazaar = reqs["extensions"]["bazaar"]
+        assert bazaar["schema"]["properties"]["input"] == bazaar["info"]["input"]["body"]
+
+    # --- machine-usable: required list reflects actual parameters ---
+
+    def test_get_required_list_has_actual_params_not_envelope(self, monkeypatch):
+        """GET schema.properties.input.required must list actual parameter names."""
+        reqs = self._requirements(monkeypatch, "/v1/indicators/latest", "GET")
+        required = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]["required"]
+        assert "symbol_exchange" in required
+        assert "type" not in required
+        assert "method" not in required
+        assert "query" not in required
+
+    def test_post_required_list_has_actual_params_not_envelope(self, monkeypatch):
+        """POST schema.properties.input.required must list actual parameter names."""
+        reqs = self._requirements(monkeypatch, "/v1/portfolio/compare", "POST")
+        required = reqs["extensions"]["bazaar"]["schema"]["properties"]["input"]["required"]
+        assert "left" in required
+        assert "right" in required
+        assert "type" not in required
+        assert "method" not in required
+        assert "bodyType" not in required
+        assert "body" not in required
