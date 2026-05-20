@@ -438,12 +438,15 @@ def test_x402_challenge_preview_is_schema_only(client_x402_challenge_known):
     assert float(preview["pricing"]["effective_price_usd"]) > 0
 
 
-def test_stim_latest_402_body_preview_keeps_input_schema_and_safe_example(monkeypatch):
+def test_stim_latest_compact_402_body_preview_remains_rich(monkeypatch):
     _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
     with TestClient(main.app) as client:
         response = client.get(
             "/v1/stim/latest",
-            headers={"X-StockTrends-Payment-Method": "x402"},
+            headers={
+                "X-StockTrends-Payment-Method": "x402",
+                "X-StockTrends-Challenge-Mode": "compact",
+            },
         )
 
     assert response.status_code == 402
@@ -453,6 +456,9 @@ def test_stim_latest_402_body_preview_keeps_input_schema_and_safe_example(monkey
     assert "symbol_exchange" in preview["required_inputs"]
     assert preview["required_inputs"]["symbol_exchange"]["pattern"] == "^[A-Z0-9.]+-[A-Z]$"
     assert preview["safe_example_request"]["query"]["symbol_exchange"] == "IBM-N"
+    assert "response_shape" in preview
+    assert "example_object" in preview
+    assert "output_summary" in preview
     assert preview["interpretation_dependency"]["endpoint"] == "/v1/meta/stim"
     assert preview["required_interpretation_steps"]
 

@@ -1952,10 +1952,10 @@ def _compact_bazaar_info_schema(
         "method": {"type": "string", "enum": [http_method]},
         input_schema_property: input_schema,
     }
-    input_required = ["type", "method", input_schema_property]
+    input_required = ["type", "method"]
     if location == "body":
         input_properties["bodyType"] = {"type": "string", "enum": ["json"]}
-        input_required.append("bodyType")
+        input_required.extend(["bodyType", "body"])
 
     return {
         "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1965,7 +1965,7 @@ def _compact_bazaar_info_schema(
                 "type": "object",
                 "properties": input_properties,
                 "required": input_required,
-                "additionalProperties": True,
+                "additionalProperties": False,
             },
             "output": output_schema,
             "title": {"type": "string"},
@@ -1977,7 +1977,7 @@ def _compact_bazaar_info_schema(
             "schemaUrl": {"type": "string"},
             "pricing_catalog": {"type": "string"},
         },
-        "required": ["input", "output"],
+        "required": ["input"],
         "additionalProperties": True,
     }
 

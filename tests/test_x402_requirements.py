@@ -26,6 +26,7 @@ from __future__ import annotations
 import base64
 import json
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
@@ -62,6 +63,36 @@ def _decode_header(header_b64: str) -> dict:
 
 def _decoded_header_bytes(header_b64: str) -> int:
     return len(base64.b64decode(header_b64))
+
+
+def _assert_schema_subset_valid(instance: Any, schema: dict[str, Any], path: str = "$") -> None:
+    """Validate the compact Bazaar JSON Schema subset used in x402 challenges."""
+    if "const" in schema:
+        assert instance == schema["const"], f"{path}: expected const {schema['const']!r}"
+    if "enum" in schema:
+        assert instance in schema["enum"], f"{path}: expected one of {schema['enum']!r}"
+
+    schema_type = schema.get("type")
+    if schema_type == "object":
+        assert isinstance(instance, dict), f"{path}: expected object"
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        for key in required:
+            assert key in instance, f"{path}: missing required property {key!r}"
+        if schema.get("additionalProperties") is False:
+            extra = set(instance) - set(properties)
+            assert not extra, f"{path}: unexpected additional properties {sorted(extra)!r}"
+        for key, subschema in properties.items():
+            if key in instance and isinstance(subschema, dict):
+                _assert_schema_subset_valid(instance[key], subschema, f"{path}.{key}")
+    elif schema_type == "string":
+        assert isinstance(instance, str), f"{path}: expected string"
+    elif schema_type == "integer":
+        assert isinstance(instance, int) and not isinstance(instance, bool), f"{path}: expected integer"
+    elif schema_type == "number":
+        assert isinstance(instance, (int, float)) and not isinstance(instance, bool), f"{path}: expected number"
+    elif schema_type == "boolean":
+        assert isinstance(instance, bool), f"{path}: expected boolean"
 
 
 @pytest.fixture()
@@ -832,6 +863,75 @@ class TestCompactChallengeMode:
         serialized = json.dumps(bazaar)
         assert "response_shape" not in serialized
         assert "interpretation_dependencies" not in serialized
+
+    def test_compact_get_shape_matches_official_http_envelope(self, monkeypatch):
+        monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
+        reqs = build_x402_requirements(
+            path="/v1/stim/latest",
+            amount_usd=Decimal("0.002500"),
+            method="GET",
+            challenge_mode="compact",
+        )
+        bazaar = reqs["extensions"]["bazaar"]
+        info = bazaar["info"]
+        schema = bazaar["schema"]
+        input_info = info["input"]
+        input_schema = schema["properties"]["input"]
+
+        assert input_info == {
+            "type": "http",
+            "method": "GET",
+            "queryParams": {"symbol_exchange": "IBM-N"},
+        }
+        assert input_schema["type"] == "object"
+        assert input_schema["additionalProperties"] is False
+        assert input_schema["required"] == ["type", "method"]
+        assert set(input_schema["properties"]) == {"type", "method", "queryParams"}
+        query_schema = input_schema["properties"]["queryParams"]
+        assert query_schema["properties"]["symbol_exchange"]["pattern"] == "^[A-Z0-9.]+-[A-Z]$"
+        assert "symbol_exchange" in query_schema["required"]
+        assert schema["required"] == ["input"]
+        assert "output" in info
+        assert "output" in schema["properties"]
+        assert info["title"] == "STIM Latest"
+        assert info["category"] == "stim"
+        assert info["family"] == "stim"
+        assert info["role"] == "probabilistic_forward_inference"
+        assert info["tools_manifest"] == "https://api.stocktrends.com/v1/ai/tools"
+        assert info["metadataUrl"] == "https://api.stocktrends.com/v1/ai/context"
+        assert info["schemaUrl"] == "https://api.stocktrends.com/v1/ai/tools"
+        assert info["pricing_catalog"] == "https://api.stocktrends.com/v1/pricing/catalog"
+        _assert_schema_subset_valid(info, schema)
+
+    def test_compact_post_shape_matches_official_http_envelope(self, monkeypatch):
+        monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
+        reqs = build_x402_requirements(
+            path="/v1/portfolio/construct",
+            amount_usd=_AMOUNT,
+            method="POST",
+            challenge_mode="compact",
+        )
+        bazaar = reqs["extensions"]["bazaar"]
+        info = bazaar["info"]
+        schema = bazaar["schema"]
+        input_info = info["input"]
+        input_schema = schema["properties"]["input"]
+
+        assert input_info["type"] == "http"
+        assert input_info["method"] == "POST"
+        assert input_info["bodyType"] == "json"
+        assert input_info["body"] == {"universe": "top", "count": 5, "bias": "auto"}
+        assert input_schema["type"] == "object"
+        assert input_schema["additionalProperties"] is False
+        assert input_schema["required"] == ["type", "method", "bodyType", "body"]
+        assert set(input_schema["properties"]) == {"type", "method", "bodyType", "body"}
+        body_schema = input_schema["properties"]["body"]
+        assert {"universe", "count", "bias"}.issubset(body_schema["properties"])
+        assert body_schema["properties"]["bias"]["enum"] == ["auto", "bullish", "bearish"]
+        assert schema["required"] == ["input"]
+        assert "output" in info
+        assert "output" in schema["properties"]
+        _assert_schema_subset_valid(info, schema)
 
     def test_unknown_challenge_mode_falls_back_to_full(self, monkeypatch):
         monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
