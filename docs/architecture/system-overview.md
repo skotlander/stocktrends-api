@@ -63,7 +63,7 @@ Handles value transfer via:
 * **x402**
 
   * per-request micropayment
-* **MPP (future)**
+* **MPP**
 
   * session-based streaming payments
 * **STOK (future)**

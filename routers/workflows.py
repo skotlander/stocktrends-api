@@ -172,7 +172,8 @@ WORKFLOW_REGISTRY: list[dict] = [
         "analytical_role": "probabilistic_forecast_workflow",
         "research_goal": (
             "Interpret ST-IM forward return distributions for a resolved symbol relative to "
-            "base-period means, using /v1/meta/stim as the required interpretation reference."
+            "base-period means, using /v1/meta/inference as the provider-agnostic contract "
+            "and /v1/meta/stim as the ST-IM provider profile."
         ),
         "decision_guidance": (
             "Use when an agent needs to interpret ST-IM expected return distributions for "
@@ -188,17 +189,21 @@ WORKFLOW_REGISTRY: list[dict] = [
             "/v1/instruments/lookup or /v1/instruments/resolve and reuse the returned symbol_exchange."
         ),
         "interpretation_guidance": (
-            "/v1/meta/stim must be consulted before interpreting ST-IM results. Raw "
+            "/v1/meta/inference and /v1/meta/stim must be consulted before interpreting ST-IM results. Raw "
             "x4wk/x13wk/x40wk means are not sufficient alone; compare them to "
             "base_period_mean_returns_pct and use x4wksd/x13wksd/x40wksd to estimate "
-            "the probability of exceeding base means. STIM Select-style logic should "
+            "the probability of exceeding base means. Preserve provider identity, "
+            "forecast horizon, distribution, confidence, evidence, uncertainty, "
+            "explanation, signal source, and auditability. STIM Select-style logic should "
             "emphasize 13-week probability of exceeding the base mean >= 55% and lower "
             "confidence bounds relative to base-period means where applicable."
         ),
         "required_interpretation_steps": [
+            "Call GET /v1/meta/inference before interpreting provider-specific inference outputs.",
             "Call GET /v1/meta/stim before interpreting ST-IM results.",
             "Compare x4wk, x13wk, and x40wk to base_period_mean_returns_pct.",
             "Use x4wksd, x13wksd, and x40wksd to estimate probability of exceeding base means.",
+            "Interpret ST-IM probabilities as conditional historical tendencies, not guarantees or buy/sell commands.",
             "Disclose stale or fallback data when is_stale=true or missing_reason is present.",
         ],
         "next_step_guidance": [
@@ -206,6 +211,13 @@ WORKFLOW_REGISTRY: list[dict] = [
             "Use /v1/portfolio/evaluate when reviewing the symbol inside an existing allocation.",
         ],
         "steps": [
+            {
+                "step_id": "meta_inference",
+                "endpoint": "GET /v1/meta/inference",
+                "pricing_rule_id": None,
+                "description": "Retrieve provider-agnostic inference and cognition contract before provider-specific interpretation.",
+                "optional": False,
+            },
             {
                 "step_id": "meta_stim",
                 "endpoint": "GET /v1/meta/stim",

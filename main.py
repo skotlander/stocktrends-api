@@ -7,6 +7,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from discovery.inference_semantics import openapi_inference_extension
 from discovery.service_meta import SERVICE_POSITIONING
 from middleware.request_id import RequestIdMiddleware
 from middleware.api_key import ApiKeyMiddleware
@@ -259,6 +260,10 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
             if path.startswith("/stim") or path.startswith("/indicators") or path.startswith("/prices") or path.startswith("/selections") or path.startswith("/stwr") or path.startswith("/agents") or path.startswith("/agent/screener") or path.startswith("/market") or path.startswith("/decision") or path.startswith("/portfolio") or path.startswith("/breadth/sector/") or path in ("/leadership/summary/latest", "/leadership/rotation/history", "/pricing", "/pricing/catalog", "/workflows", "/cost-estimate"):
                 _ensure_parameter_refs(operation, agent_refs + payment_refs)
 
+            inference_extension = openapi_inference_extension(path)
+            if inference_extension:
+                operation.update(inference_extension)
+
     v1_app.openapi_schema = openapi_schema
     return openapi_schema
 
@@ -280,6 +285,7 @@ def root():
             _absolute_url("/v1/instruments/resolve"),
             _absolute_url("/v1/stwr/reports/catalog"),
             _absolute_url("/v1/meta/indicators"),
+            _absolute_url("/v1/meta/inference"),
             _absolute_url("/v1/meta/stim"),
             _absolute_url("/v1/meta/stwr"),
             _absolute_url("/v1/leadership/definitions"),

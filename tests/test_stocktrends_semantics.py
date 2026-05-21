@@ -78,6 +78,28 @@ def test_stim_select_definition_in_semantic_contract():
     assert "2.19" in text, "13-week base-period mean (2.19) must appear in the contract"
 
 
+def test_cognition_architecture_document_exists_and_defines_provider_doctrine():
+    doc = REPO_ROOT / "docs" / "STOCK_TRENDS_COGNITION_ARCHITECTURE.md"
+    text = doc.read_text(encoding="utf-8")
+
+    assert "ST-IM Is The Baseline, Not The Ceiling" in text
+    assert "Future Causal AI Is A First-Class Future Provider" in text
+    assert "Provider-Agnostic Inference Concepts Come First" in text
+    assert "uncertainty" in text
+    assert "evidence" in text
+    assert "auditability" in text
+
+
+def test_signals_spec_exists_for_provider_agnostic_signal_evidence():
+    spec = REPO_ROOT / "docs" / "SIGNALS_SPEC.md"
+    text = spec.read_text(encoding="utf-8")
+
+    assert "provider-agnostic" in text
+    assert "Stock Trends classifications" in text
+    assert "future Causal AI providers" in text
+    assert "not the traditional Wilder RSI oscillator" in text
+
+
 def test_no_stc_per_call_in_route_files():
     """No route description= strings may contain hardcoded 'STC per call'."""
     violations = []

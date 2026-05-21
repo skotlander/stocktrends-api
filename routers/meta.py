@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Request
 
+from discovery.inference_semantics import inference_contract, stim_provider_profile
 from routers.signals import VALID_EXCHANGES
 
 router = APIRouter(prefix="/meta", tags=["meta"])
@@ -103,24 +104,55 @@ def meta_indicators(request: Request):
             ],
             "machine_guides": [
                 "/v1/openapi.json",
+                "/v1/meta/inference",
                 "/v1/meta/indicators",
             ],
         },
+        "cognition_context": {
+            "signal_source_role": (
+                "Stock Trends classifications convert raw weekly market behavior into "
+                "structured, repeatable signal states that can be consumed by multiple "
+                "inference providers."
+            ),
+            "inference_contract": "/v1/meta/inference",
+            "current_baseline_provider": "/v1/meta/stim",
+        },
+    }
+
+
+@router.get("/inference")
+def meta_inference(request: Request):
+    """
+    Provider-agnostic Stock Trends inference and cognition contract.
+
+    This is the reusable contract for API discovery, OpenAPI extensions,
+    x402/MPP metadata, and future MCP reasoning tools. Provider-specific
+    profiles, including ST-IM, hang off this contract.
+    """
+    return {
+        "request_id": getattr(request.state, "request_id", None),
+        **inference_contract(),
     }
 
 
 @router.get("/stim")
 def meta_stim(request: Request):
     """
-    ST-IM distribution metadata and base period mean returns.
+    ST-IM provider profile and distribution metadata.
     """
+    profile = stim_provider_profile()
     return {
         "request_id": getattr(request.state, "request_id", None),
-        "base_period_mean_returns_pct": {
-            "x4wk": 0.00,
-            "x13wk": 2.19,
-            "x40wk": 6.45,
+        "inference_contract": "/v1/meta/inference",
+        "inference_provider": {
+            "provider_id": profile["provider_id"],
+            "provider_name": profile["provider_name"],
+            "provider_role": profile["provider_role"],
+            "not_final_intelligence_layer": profile["not_final_intelligence_layer"],
+            "architecture_source": profile["architecture_source"],
         },
+        "base_period_mean_returns_pct": profile["base_period_mean_returns_pct"],
+        "forecast_horizons": profile["forecast_horizons"],
         "returnmeans_table": "st_returnmeans",
         "columns": {
             "x4wk1/x13wk1/x40wk1": "Lower confidence interval bound for mean return (%)",
@@ -128,6 +160,19 @@ def meta_stim(request: Request):
             "x4wk/x13wk/x40wk": "Midpoint / mean estimate (%)",
             "x4wksd/x13wksd/x40wksd": "Std dev of assumed normal distribution (%)",
         },
+        "classification_role": profile["classification_role"],
+        "randomness_assumptions": profile["randomness_assumptions"],
+        "distribution_framing": profile["distribution_framing"],
+        "probability_interpretation": profile["probability_interpretation"],
+        "stim_select": profile["stim_select"],
+        "strengths": profile["strengths"],
+        "portfolio_applications": profile["portfolio_applications"],
+        "limitations": profile["limitations"],
+        "future_provider_compatibility": (
+            "ST-IM is the current baseline inference provider. Future Causal AI "
+            "providers should integrate through /v1/meta/inference rather than "
+            "forcing all cognition surfaces into ST-IM-specific fields."
+        ),
         "missing_data_note": "If a symbol has no row for a weekdate in st_returnmeans, ST-IM could not estimate reliably due to insufficient samples.",
     }
 

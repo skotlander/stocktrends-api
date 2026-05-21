@@ -105,6 +105,7 @@ _KNOWN_PUBLIC_TOOL_PATHS: frozenset[str] = frozenset({
     "/instruments/resolve",  # middleware.public_paths; public planning helper
     "/stwr/reports/catalog", # middleware.public_paths; public planning helper
     "/meta/indicators",      # middleware.public_paths; public planning helper
+    "/meta/inference",       # middleware.public_paths; public planning helper
     "/meta/stim",            # middleware.public_paths; public planning helper
     "/meta/stwr",            # middleware.public_paths; public planning helper
     "/leadership/definitions", # middleware.public_paths; public planning helper
@@ -316,6 +317,7 @@ def test_static_planning_helpers_present(manifest):
         ("instrument_resolve", "/instruments/resolve"),
         ("stwr_reports_catalog", "/stwr/reports/catalog"),
         ("meta_indicators", "/meta/indicators"),
+        ("meta_inference", "/meta/inference"),
         ("meta_stim", "/meta/stim"),
         ("meta_stwr", "/meta/stwr"),
         ("leadership_definitions", "/leadership/definitions"),

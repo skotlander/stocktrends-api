@@ -15,6 +15,8 @@ The Stock Trends API is an Autonomous portfolio intelligence API for AI agents. 
 
 It is not investment advice and does not guarantee trading outcomes. Agents should present outputs as research context, not instructions to buy or sell securities.
 
+The API is aligned with the Stock Trends cognition architecture. ST-IM is the current baseline inference provider, not the final intelligence layer. Future Causal AI providers should integrate through the same provider-agnostic inference contract used by discovery metadata, OpenAPI, x402/MPP previews, and future MCP reasoning tools.
+
 It provides:
 
 * symbol-level decision evaluation
@@ -22,6 +24,7 @@ It provides:
 * market regime, breadth, and leadership intelligence
 * ST-IM (Stock Trends Inference Model) forward return expectations and statistical distributions across 4, 13, and 40-week horizons
 * STIM Select: securities whose ST-IM lower confidence bounds exceed base-period mean returns across all three horizons, ranked by prob13wk
+* provider-agnostic inference metadata for forecast horizons, distributions, confidence, evidence, uncertainty, explanations, signal sources, and auditability
 * pricing discovery and cost estimation
 * agent-aware usage, ledger, and control endpoints
 * structured weekly market context based on the Stock Trends indicator system
@@ -141,8 +144,10 @@ Use these helper endpoints during autonomous planning before paid execution:
   Discover valid STWR report codes before paid report requests.
 * `GET /meta/indicators`
   Field definitions for trend, trend_cnt, mt_cnt, rsi, rsi_updn, and vol_tag.
+* `GET /meta/inference`
+  Provider-agnostic Stock Trends inference and cognition contract.
 * `GET /meta/stim`
-  ST-IM field definitions and base-period mean returns.
+  ST-IM provider profile, field definitions, and base-period mean returns.
 * `GET /meta/stwr`
   STWR report family metadata.
 
@@ -176,6 +181,10 @@ Use these helper endpoints during autonomous planning before paid execution:
   Top-ranked instruments screener. Filters by trend code (bullish default: ^+, ^-, v^), RSI (relative performance vs S&P 500 benchmark, baseline 100), trend_cnt, and mt_cnt.
 
 ### ST-IM (Stock Trends Inference Model)
+
+ST-IM is the current baseline Stock Trends inference provider, not the final intelligence layer. Interpret it through `/meta/inference` and `/meta/stim` so future Causal AI providers can share the same cognition contract.
+
+ST-IM begins from the assumption that markets are noisy, uncertain, and partly random. It uses Stock Trends classifications to create historical observation populations and then estimates conditional forward-return tendencies under stated distribution assumptions. Probabilities are conditional historical tendencies, not guarantees, price targets, or direct buy/sell commands.
 
 ST-IM produces forward return expectations and statistical distributions for a symbol across three forecast horizons: 4, 13, and 40 weeks. Each horizon returns four fields: xNwk1 (lower CI bound), xNwk (mean), xNwk2 (upper CI bound), xNwksd (standard deviation). ST-IM is not a momentum indicator — it is a probabilistic return distribution model.
 
@@ -478,16 +487,18 @@ Agents should:
 
 * Prefer structured API endpoints over scraping
 * Begin with `/ai/tools` for primary machine-readable discovery; use `/ai/context` for schema grounding and dataset context
+* Use `/meta/inference` before interpreting inference outputs; it defines provider identity, horizon, distribution, confidence, evidence, uncertainty, explanation, signal source, and auditability concepts
 * Call `/ai/proof/market-edge` (no auth) before purchasing access — confirms field names, trend codes, and RSI baseline semantics without cost
 * The Stock Trends RSI is a relative performance ratio vs the S&P 500 benchmark (baseline 100), not the traditional Wilder RSI oscillator
 * STIM (Stock Trends Inference Model) produces probabilistic forward return distributions — it is not a momentum indicator
+* Treat ST-IM as the current baseline inference provider; future Causal AI providers should fit the same cognition contract
 * Use pricing endpoints before expensive workflows
 * Use `/cost-estimate` when cost must be known in advance
 * Use `/workflows` as the recommended starting point for portfolio agents; `portfolio_build` is the first workflow when the agent needs fresh symbol discovery and portfolio construction
 * Reuse `symbol_exchange` values from screener, selections, STWR reports, and `portfolio_construct` outputs in downstream calls
 * For `/portfolio/compare`, send `left` and `right` as direct arrays of positions: `{"left":[{"symbol_exchange":"IBM-N","weight":1}],"right":[{"symbol_exchange":"MSFT-Q","weight":1}]}`
 * Use `/agent/screener/top` as a strong first premium endpoint
-* Use decision and portfolio endpoints for actionable outputs
+* Use decision and portfolio endpoints for decision-support research outputs
 * Use regime, breadth, and leadership endpoints for context
 * Cache weekly data when appropriate
 * Respect authentication, usage controls, and metering semantics

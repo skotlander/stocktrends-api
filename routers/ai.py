@@ -12,6 +12,13 @@ from discovery.endpoint_metadata import (
     iter_endpoint_metadata,
     schema_to_parameters,
 )
+from discovery.inference_semantics import (
+    COGNITION_ARCHITECTURE_DOC,
+    INFERENCE_CONTRACT_ENDPOINT,
+    STIM_PROVIDER_PROFILE_ENDPOINT,
+    inference_contract,
+    stim_provider_profile,
+)
 from discovery.service_meta import DATASET_DESCRIPTION, SERVICE_POSITIONING
 from pricing.classifier import classify_request as _classify_request, NON_METERED_PATHS
 from payments.policy_provider import (
@@ -37,6 +44,7 @@ _MANIFEST_PUBLIC_PATHS: frozenset = frozenset({
     "/v1/instruments/resolve",
     "/v1/stwr/reports/catalog",
     "/v1/meta/indicators",
+    "/v1/meta/inference",
     "/v1/meta/stim",
     "/v1/meta/stwr",
     "/v1/leadership/definitions",
@@ -355,11 +363,28 @@ _TOOL_TEMPLATES = [
         "output_summary": "Indicator field definitions and trend-code meanings.",
     },
     {
+        "name": "meta_inference",
+        "title": "Inference Cognition Contract",
+        "description": (
+            "Planning helper defining the provider-agnostic Stock Trends inference contract. "
+            "Use before interpreting ST-IM or future causal AI outputs so agents preserve "
+            "provider identity, forecast horizon, distribution, confidence, evidence, "
+            "uncertainty, explanation, signal sources, and auditability."
+        ),
+        "endpoint": "/v1/meta/inference",
+        "method": "GET",
+        "category": "planning_helper",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+        "safe_example_request": {"method": "GET", "path": "/v1/meta/inference", "query": {}},
+        "output_summary": "Provider-agnostic inference and cognition contract metadata.",
+    },
+    {
         "name": "meta_stim",
         "title": "ST-IM Metadata",
         "description": (
-            "Planning helper explaining ST-IM fields, base-period mean returns, confidence bounds, "
-            "and 4, 13, and 40 week horizons."
+            "Planning helper explaining the ST-IM provider profile, fields, base-period mean "
+            "returns, confidence bounds, and 4, 13, and 40 week horizons. ST-IM is the "
+            "current baseline inference provider, not the final intelligence layer."
         ),
         "endpoint": "/v1/meta/stim",
         "method": "GET",
@@ -919,6 +944,8 @@ def get_last_update():
 @router.get("/context")
 def ai_context():
     last_update = get_last_update()
+    contract = inference_contract()
+    stim_profile = stim_provider_profile()
 
     return {
         "dataset": "Stock Trends Market Indicators",
@@ -955,9 +982,27 @@ def ai_context():
             ],
             "forecast_horizons_weeks": [4, 13, 40],
         },
+        "cognition_architecture": {
+            "source": COGNITION_ARCHITECTURE_DOC,
+            "inference_contract_endpoint": INFERENCE_CONTRACT_ENDPOINT,
+            "current_baseline_provider_profile": STIM_PROVIDER_PROFILE_ENDPOINT,
+            "current_baseline_provider": "stim",
+            "doctrine": [
+                "ST-IM is the current baseline inference provider, not the final intelligence layer.",
+                "Future Causal AI is a first-class future inference provider.",
+                "Discovery, metadata, OpenAPI, x402/MPP surfaces, and future MCP tools should use provider-agnostic inference concepts where practical.",
+                "Reasoning interfaces must preserve uncertainty, evidence, explanations, confidence, signal sources, and auditability.",
+            ],
+            "provider_agnostic_concepts": list(contract["provider_agnostic_concepts"].keys()),
+            "available_providers": contract["available_providers"],
+            "current_baseline_provider_role": stim_profile["provider_role"],
+            "future_provider_compatibility": "Future Causal AI providers should integrate through the same inference contract.",
+        },
         "discovery_entrypoints": {
             "primary_machine_readable": "/v1/ai/tools",
             "secondary_explanatory": "/v1/ai/context",
+            "provider_agnostic_inference_contract": "/v1/meta/inference",
+            "stim_provider_profile": "/v1/meta/stim",
             "docs": "/v1/docs",
             "openapi": "/v1/openapi.json",
         },
@@ -1040,55 +1085,61 @@ def ai_context():
                 },
                 {
                     "step": 3,
-                    "role": "interpretation_metadata",
-                    "endpoint": "/v1/meta/stim",
-                    "also_use": ["/v1/meta/indicators", "/v1/leadership/definitions"],
-                    "purpose": "Load ST-IM base-period means, indicator definitions, RSI baseline semantics, and leadership definitions.",
+                    "role": "inference_contract",
+                    "endpoint": "/v1/meta/inference",
+                    "purpose": "Load the provider-agnostic inference and cognition contract before interpreting provider-specific outputs.",
                 },
                 {
                     "step": 4,
+                    "role": "interpretation_metadata",
+                    "endpoint": "/v1/meta/stim",
+                    "also_use": ["/v1/meta/indicators", "/v1/leadership/definitions"],
+                    "purpose": "Load ST-IM provider profile, base-period means, indicator definitions, RSI baseline semantics, and leadership definitions.",
+                },
+                {
+                    "step": 5,
                     "role": "market_regime_classifier",
                     "endpoint": "/v1/market/regime/latest",
                     "purpose": "Classify current regime and set portfolio analysis context.",
                 },
                 {
-                    "step": 5,
+                    "step": 6,
                     "role": "market_breadth_context",
                     "endpoint": "/v1/breadth/sector/latest",
                     "purpose": "Confirm regime reading with sector-level signal participation.",
                 },
                 {
-                    "step": 6,
+                    "step": 7,
                     "role": "leadership_intelligence",
                     "endpoint": "/v1/leadership/summary/latest",
                     "purpose": "Identify sectors and stocks with concentrated RSI outperformance.",
                 },
                 {
-                    "step": 7,
+                    "step": 8,
                     "role": "market_intelligence_filter",
                     "endpoint": "/v1/agent/screener/top",
                     "purpose": "Discover ranked signal candidates before deeper analysis.",
                 },
                 {
-                    "step": 8,
+                    "step": 9,
                     "role": "probabilistic_forward_inference",
                     "endpoint": "/v1/stim/latest",
-                    "purpose": "Enrich candidates with forward return distributions. Requires /v1/meta/stim for interpretation.",
+                    "purpose": "Enrich candidates with forward return distributions. Requires /v1/meta/inference and /v1/meta/stim for interpretation.",
                 },
                 {
-                    "step": 9,
+                    "step": 10,
                     "role": "symbol_decision_engine",
                     "endpoint": "/v1/decision/evaluate-symbol",
                     "purpose": "Evaluate candidate with deterministic decision-support context in the current regime.",
                 },
                 {
-                    "step": 10,
+                    "step": 11,
                     "role": "portfolio_construction_engine",
                     "endpoint": "/v1/portfolio/construct",
                     "purpose": "Run equal-weight portfolio construction analysis from scored candidates.",
                 },
                 {
-                    "step": 11,
+                    "step": 12,
                     "role": "portfolio_evaluation_engine",
                     "endpoint": "/v1/portfolio/compare",
                     "purpose": "Compare portfolio alternatives; assess signal score and regime alignment differences.",
@@ -1096,8 +1147,24 @@ def ai_context():
             ],
         },
         "probabilistic_semantics": {
+            "provider_agnostic_contract": {
+                "endpoint": INFERENCE_CONTRACT_ENDPOINT,
+                "architecture_source": COGNITION_ARCHITECTURE_DOC,
+                "available_provider_profiles": {
+                    "stim": STIM_PROVIDER_PROFILE_ENDPOINT,
+                },
+                "future_provider_compatibility": (
+                    "Future causal AI providers should use the same inference vocabulary "
+                    "for provider identity, horizon, distribution, confidence, evidence, "
+                    "uncertainty, explanation, signal source, and auditability."
+                ),
+            },
             "stim_model": {
                 "full_name": "Stock Trends Inference Model",
+                "inference_provider_id": "stim",
+                "provider_role": "current_baseline_inference_provider",
+                "provider_profile_endpoint": STIM_PROVIDER_PROFILE_ENDPOINT,
+                "not_final_intelligence_layer": True,
                 "output_type": "probabilistic forward return distribution",
                 "not_momentum": True,
                 "not": ["momentum_indicator", "simple_price_change_model", "generic_technical_indicator"],
@@ -1116,9 +1183,25 @@ def ai_context():
                 "comparison_required": True,
                 "comparison_rule": "Compare each ST-IM mean and lower confidence bound against the matching base-period mean return.",
                 "primary_probability_field": "prob13wk",
+                "randomness_assumption": "Markets are noisy, uncertain, and partly random; ST-IM estimates conditional historical tendencies.",
+                "distribution_assumption": "normal approximation with central-limit-theorem intuition across large historical observation populations",
+                "classification_role": (
+                    "Stock Trends classifications convert weekly market behavior into "
+                    "structured factor states used to form comparable historical populations."
+                ),
+                "limitations": [
+                    "regime_shifts",
+                    "non_stationarity",
+                    "sample_size_weakness",
+                    "tail_events",
+                    "liquidity_shocks",
+                    "news_shocks",
+                    "uncertainty_in_individual_stock_outcomes",
+                ],
                 "interpretation_requirement": (
-                    "Always fetch /v1/meta/stim before interpreting ST-IM outputs. "
-                    "A positive raw mean is not bullish unless it exceeds the relevant base-period mean."
+                    "Always fetch /v1/meta/inference and /v1/meta/stim before interpreting ST-IM outputs. "
+                    "A positive raw mean is not bullish unless it exceeds the relevant base-period mean. "
+                    "Probabilities are conditional historical tendencies, not guarantees or direct buy/sell commands."
                 ),
             },
             "stim_select": {
@@ -1152,7 +1235,7 @@ def ai_context():
                 "endpoints": ["/v1/selections/latest", "/v1/selections/history"],
                 "use_when": "filtered and ranked STIM candidate universe",
                 "semantics": "base st_select records ranked by prob13wk; no published threshold filter applied",
-                "interpret_with": ["/v1/meta/stim", "/v1/stim/latest"],
+                "interpret_with": ["/v1/meta/inference", "/v1/meta/stim", "/v1/stim/latest"],
             },
             "selections_published": {
                 "endpoints": ["/v1/selections/published/latest", "/v1/selections/published/history"],
@@ -1160,13 +1243,13 @@ def ai_context():
                 "semantics": "current STIM Select methodology using three-horizon lower-bound thresholds plus prob13wk publication criteria",
                 "thresholds_source": "/v1/meta/stim",
                 "authoritative_threshold_context": "/v1/meta/stim",
-                "interpret_with": ["/v1/meta/stim"],
+                "interpret_with": ["/v1/meta/inference", "/v1/meta/stim"],
             },
             "stim": {
                 "endpoints": ["/v1/stim/latest", "/v1/stim/history"],
                 "use_when": "symbol-specific probabilistic forward-return analysis",
                 "semantics": "ST-IM distributions across 4, 13, and 40-week horizons",
-                "interpret_with": ["/v1/meta/stim", "/v1/indicators/latest"],
+                "interpret_with": ["/v1/meta/inference", "/v1/meta/stim", "/v1/indicators/latest"],
             },
             "indicators": {
                 "endpoints": ["/v1/indicators/latest", "/v1/indicators/history"],
@@ -1208,7 +1291,7 @@ def ai_context():
         "workflow_guidance": {
             "stim_forecast_review": {
                 "mission": "Review one symbol's ST-IM forward-return distributions across 4, 13, and 40 weeks.",
-                "start_with": ["/v1/meta/stim", "/v1/instruments/resolve"],
+                "start_with": ["/v1/meta/inference", "/v1/meta/stim", "/v1/instruments/resolve"],
                 "core_path": ["/v1/stim/latest", "/v1/indicators/latest", "/v1/stim/history"],
                 "success_condition": "Compare ST-IM means, confidence bounds, and probabilities against base-period means.",
             },
@@ -1245,6 +1328,7 @@ def ai_context():
                 "core_path": [
                     "/v1/ai/context",
                     "/v1/workflows",
+                    "/v1/meta/inference",
                     "/v1/meta/stim",
                     "/v1/market/regime/latest",
                     "/v1/breadth/sector/latest",
@@ -1274,7 +1358,9 @@ def ai_context():
         "interpretation_dependencies": {
             "stim": {
                 "required_endpoint": "/v1/meta/stim",
+                "provider_agnostic_contract_endpoint": "/v1/meta/inference",
                 "required_before": [
+                    "/v1/meta/inference",
                     "/v1/stim/latest",
                     "/v1/stim/history",
                     "/v1/selections/latest",
@@ -1358,6 +1444,7 @@ def ai_context():
             ],
             "interpretation_setup": [
                 "/v1/meta/indicators",
+                "/v1/meta/inference",
                 "/v1/meta/stim",
                 "/v1/leadership/definitions",
             ],
@@ -1404,6 +1491,7 @@ def ai_context():
                 "/v1/instruments/resolve",
                 "/v1/stwr/reports/catalog",
                 "/v1/meta/indicators",
+                "/v1/meta/inference",
                 "/v1/meta/stim",
                 "/v1/meta/stwr",
                 "/v1/leadership/definitions",
@@ -1503,7 +1591,7 @@ def ai_context():
             "Before calling premium endpoints, call /v1/ai/proof/market-edge (no auth required) to inspect signal structure and confirm field schemas before purchasing access.",
             "Use /v1/docs and /v1/openapi.json for exact request and response contracts.",
             "Use /v1/workflows to select a market-research strategy and endpoint sequence.",
-            "Use planning helpers (/v1/cost-estimate, /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/stim, /v1/meta/stwr, /v1/leadership/definitions) to resolve symbols, estimate costs, and understand metadata before paid calls.",
+            "Use planning helpers (/v1/cost-estimate, /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/inference, /v1/meta/stim, /v1/meta/stwr, /v1/leadership/definitions) to resolve symbols, estimate costs, and understand metadata before paid calls.",
             "Use /v1/pricing/catalog to discover live pricing rules before calling premium endpoints.",
             "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and supported rails.",
             "For x402, inspect the HTTP 402 stocktrends_preview before payment to confirm purpose, inputs, response shape, related endpoints, pricing_rule_id, cost, and rails.",
@@ -1592,6 +1680,8 @@ def ai_tools():
         "discovery_entrypoints": {
             "primary_machine_readable": "/v1/ai/tools",
             "secondary_explanatory": "/v1/ai/context",
+            "provider_agnostic_inference_contract": "/v1/meta/inference",
+            "stim_provider_profile": "/v1/meta/stim",
             "docs": "/v1/docs",
             "openapi": "/v1/openapi.json",
         },
@@ -1624,7 +1714,8 @@ def ai_tools():
             "Prefer /v1/ai/tools as the primary machine-readable entrypoint.",
             "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
             "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
-            "Use helper endpoints for autonomous planning: /v1/cost-estimate, /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/stim, /v1/meta/stwr, /v1/leadership/definitions, and /v1/ai/proof/market-edge.",
+            "Use /v1/meta/inference for the provider-agnostic inference contract; use /v1/meta/stim for the current ST-IM baseline provider profile.",
+            "Use helper endpoints for autonomous planning: /v1/cost-estimate, /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/inference, /v1/meta/stim, /v1/meta/stwr, /v1/leadership/definitions, and /v1/ai/proof/market-edge.",
             "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and rails.",
             "Use /v1/docs or /v1/openapi.json for exact request/response contracts.",
             "Paid endpoint entries list their supported rails; current agent-pay endpoints support subscription, x402, and mpp.",

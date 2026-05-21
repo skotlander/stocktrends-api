@@ -277,6 +277,24 @@ Deployment:
 
 ---
 
+## Cognition Architecture
+
+Before modifying inference semantics, AI discovery metadata, endpoint previews,
+OpenAPI descriptions, x402/MPP metadata, MCP-facing descriptions, or
+agent-facing reasoning guidance, read:
+
+`docs/STOCK_TRENDS_COGNITION_ARCHITECTURE.md`
+
+Rules:
+
+* ST-IM is the current baseline inference provider, not the final intelligence layer
+* future Causal AI is a first-class future provider
+* use provider-agnostic inference concepts where practical
+* preserve uncertainty, evidence, explanations, confidence, signal sources, and auditability
+* do not hard-code semantic contracts or reasoning interfaces to ST-IM-only concepts when broader inference abstractions fit
+
+---
+
 ## API Behavior Rules
 
 When modifying endpoints:

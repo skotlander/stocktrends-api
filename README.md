@@ -167,6 +167,18 @@ GET /v1/selections/latest
 GET /v1/breadth/sector/latest
 ```
 
+### Cognition Metadata
+
+```text
+GET /v1/meta/inference
+GET /v1/meta/stim
+GET /v1/meta/indicators
+```
+
+`/v1/meta/inference` is the provider-agnostic inference contract. ST-IM is the
+current baseline inference provider, not the final intelligence layer; future
+Causal AI providers should fit the same cognition contract.
+
 ---
 
 ##  Cost Estimation

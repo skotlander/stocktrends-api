@@ -125,6 +125,23 @@ def test_cost_estimate_workflow_id_openapi_parameter_is_valid(client):
     ]
 
 
+def test_openapi_exposes_inference_cognition_extensions(client):
+    response = client.get("/v1/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+
+    meta_inference = schema["paths"]["/meta/inference"]["get"]
+    assert meta_inference["x-stocktrends-cognition-contract"] == "provider_agnostic_inference_contract"
+    assert meta_inference["x-stocktrends-inference-provider-agnostic"] is True
+
+    stim_latest = schema["paths"]["/stim/latest"]["get"]
+    assert stim_latest["x-stocktrends-inference-provider"] == "stim"
+    assert stim_latest["x-stocktrends-inference-provider-role"] == "current_baseline_inference_provider"
+    assert stim_latest["x-stocktrends-not-final-intelligence-layer"] is True
+    assert stim_latest["x-stocktrends-inference-contract"] == "/v1/meta/inference"
+
+
 def test_v1_docs_loads(client):
     response = client.get("/v1/docs")
 

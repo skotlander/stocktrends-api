@@ -26,6 +26,32 @@ All outputs are designed for **decision-making**, not raw data retrieval.
 
 ---
 
+## Cognition Architecture Alignment
+
+This semantic contract operates within the broader Stock Trends cognition architecture:
+
+`docs/STOCK_TRENDS_COGNITION_ARCHITECTURE.md`
+
+ST-IM is the current baseline inference provider, not the final intelligence layer.
+Future Causal AI providers must be able to integrate into the same reasoning runtime
+without requiring discovery metadata, OpenAPI descriptions, x402/MPP previews, or MCP
+tooling to be redesigned around ST-IM-only assumptions.
+
+Where practical, agent-facing surfaces should use provider-agnostic inference concepts:
+
+- inference provider
+- forecast horizon
+- probability distribution
+- confidence measure
+- evidence
+- uncertainty
+- explanation
+- signal source
+- reasoning interpretation
+- auditability
+
+---
+
 ## Indicator Definitions
 
 ### trend
@@ -205,6 +231,32 @@ They are intended for:
 - ranking opportunities
 - portfolio construction
 - probabilistic decision-making
+
+ST-IM begins from the assumption that markets are noisy, uncertain, and partly
+random. It does not claim deterministic prediction, price certainty, or
+guaranteed outperformance.
+
+The Stock Trends classification system converts raw weekly market behavior into
+structured, repeatable factor states. These states create meaningful historical
+populations of observations from which forward-return distributions can be
+estimated and compared.
+
+ST-IM uses probability, confidence intervals, normal-distribution assumptions,
+and central-limit-theorem intuition to reason about expected forward-return
+tendencies across historical populations. The objective is not to eliminate
+randomness, but to measure uncertainty and improve decision-making under
+uncertainty.
+
+ST-IM probabilities must be interpreted as conditional historical tendencies,
+not guarantees, not price targets, and not direct buy/sell commands.
+
+ST-IM is especially valuable in portfolio workflows, repeated decision-making,
+ranking, screening, allocation review, regime-aware interpretation, and
+market-structure analysis.
+
+Limitations must remain explicit: regime shifts, non-stationarity, sample-size
+weakness, tail events, liquidity shocks, news shocks, and uncertainty in
+individual-stock outcomes.
 
 ---
 

@@ -57,6 +57,16 @@ Before modifying any Stock Trends-related endpoint descriptions, AI discovery me
 
 `docs/STOCK_TRENDS_SEMANTIC_CONTRACT.md`
 
+Also read:
+
+`docs/STOCK_TRENDS_COGNITION_ARCHITECTURE.md`
+
+ST-IM is the current baseline inference provider, not the final intelligence layer.
+Preserve future Causal AI compatibility by using provider-agnostic inference
+concepts where practical: inference provider, forecast horizon, probability
+distribution, confidence measure, evidence, uncertainty, explanation, signal
+source, reasoning interpretation, and auditability.
+
 Do not infer meanings for Stock Trends acronyms, indicators, fields, or statistical outputs.
 
 Use the definitions in that file as the authoritative source.

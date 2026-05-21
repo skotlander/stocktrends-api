@@ -6,7 +6,7 @@ The `/v1/stim*` endpoints operate under a **hybrid access model**:
 
 * subscription-based access
 * agent-pay (per-request)
-* future session-based payments (MPP)
+* session-based payments (MPP)
 
 All access is governed by:
 
@@ -75,7 +75,7 @@ Logging:
 
 ---
 
-### 4. MPP Session Access (Future)
+### 4. MPP Session Access
 
 Request:
 

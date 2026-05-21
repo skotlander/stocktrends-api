@@ -1,4 +1,4 @@
-# Stock Trends API — Documentation Index
+# Stock Trends API - Documentation Index
 
 ## Purpose
 
@@ -18,53 +18,64 @@ The Stock Trends API is not just an API.
 
 It is:
 
-→ a **pricing engine (STC)**
-→ a **multi-rail payment system**
-→ an **agent-native monetization platform**
+-> a **pricing engine (STC)**
+-> a **multi-rail payment system**
+-> an **agent-native monetization platform**
 
 ---
 
 ## Documentation Structure
 
-### 📊 `/strategy/`
+### Root Contracts
+
+* `STOCK_TRENDS_SEMANTIC_CONTRACT.md`
+  -> authoritative Stock Trends terminology and inference semantics
+
+* `STOCK_TRENDS_COGNITION_ARCHITECTURE.md`
+  -> provider-agnostic inference and cognition architecture
+
+* `SIGNALS_SPEC.md`
+  -> Stock Trends signal fields and provider-agnostic signal evidence rules
+
+### `/strategy/`
 
 Defines **what the system is and where it is going**
 
 * `api-strategy.md`
-  → overall system vision and design principles
+  -> overall system vision and design principles
 
 * `pricing-strategy.md`
-  → STC (Stock Trends Credits) pricing model
+  -> STC (Stock Trends Credits) pricing model
 
 * `payment-rails.md`
-  → multi-rail architecture (subscription, x402, MPP)
+  -> multi-rail architecture (subscription, x402, MPP)
 
 * `stok-token-strategy.md`
-  → future token integration (STOK)
+  -> future token integration (STOK)
 
 ---
 
-### 🏗 `/architecture/`
+### `/architecture/`
 
 Defines **how the system works**
 
 * `system-overview.md`
-  → layered architecture and components
+  -> layered architecture and components
 
 * `request-lifecycle.md`
-  → step-by-step request flow
+  -> step-by-step request flow
 
 ---
 
-### ⚙️ `/operations/`
+### `/operations/`
 
 Defines **how the system is run and audited**
 
 * `stim_policy.md`
-  → access control and enforcement rules
+  -> access control and enforcement rules
 
 * `billing_runbook.md`
-  → billing, reconciliation, and diagnostics
+  -> billing, reconciliation, and diagnostics
 
 ---
 
@@ -99,11 +110,11 @@ Defines **how the system is run and audited**
 ### For Developers
 
 * Start with:
-  → `/strategy/api-strategy.md`
+  -> `/strategy/api-strategy.md`
 * Then:
-  → `/architecture/system-overview.md`
+  -> `/architecture/system-overview.md`
 * Use:
-  → `/operations/` for real-world workflows
+  -> `/operations/` for real-world workflows
 
 ---
 
@@ -138,7 +149,7 @@ Defines **how the system is run and audited**
 
 All pricing resolves to:
 
-→ **Stock Trends Credits (STC)**
+-> **Stock Trends Credits (STC)**
 
 ---
 
@@ -194,4 +205,3 @@ Keep it:
 * aligned with implementation
 
 ---
-

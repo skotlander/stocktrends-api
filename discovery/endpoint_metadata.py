@@ -12,6 +12,12 @@ import copy
 import json
 from typing import Any
 
+from discovery.inference_semantics import (
+    COGNITION_ARCHITECTURE_DOC,
+    INFERENCE_CONTRACT_ENDPOINT,
+    STIM_PROVIDER_PROFILE_ENDPOINT,
+    stim_interpretation_guidance,
+)
 
 SUPPORTED_RAILS = ["subscription", "x402", "mpp"]
 
@@ -103,40 +109,21 @@ END_INPUT = {
 }
 
 STIM_INTERPRETATION_DEPENDENCY = {
-    "endpoint": "/v1/meta/stim",
+    "endpoint": STIM_PROVIDER_PROFILE_ENDPOINT,
     "method": "GET",
     "required_before_interpretation": True,
-    "reason": "Base-period mean returns are required to interpret ST-IM means and probabilities correctly.",
+    "reason": (
+        "The ST-IM provider profile supplies base-period mean returns and provider-specific "
+        "interpretation rules. /v1/meta/inference supplies the provider-agnostic cognition contract."
+    ),
+    "inference_contract_endpoint": INFERENCE_CONTRACT_ENDPOINT,
+    "cognition_architecture": COGNITION_ARCHITECTURE_DOC,
 }
 
-STIM_INTERPRETATION_GUIDANCE = {
-    "base_period_mean_returns_pct": {
-        "x4wk": "4-week baseline from /v1/meta/stim",
-        "x13wk": "13-week baseline from /v1/meta/stim",
-        "x40wk": "40-week baseline from /v1/meta/stim",
-    },
-    "mean_return_fields": ["x4wk", "x13wk", "x40wk"],
-    "standard_deviation_fields": ["x4wksd", "x13wksd", "x40wksd"],
-    "calculation": {
-        "delta_vs_base": "stim_mean - base_mean",
-        "z": "(base_mean - stim_mean) / standard_deviation",
-        "probability_outperform": "1 - normal_cdf(z)",
-    },
-    "interpretation_rules": [
-        "Call /v1/meta/stim before interpreting ST-IM results.",
-        "Raw x4wk/x13wk/x40wk means are estimated mean returns, not standalone bullish signals.",
-        "Do not interpret a positive raw mean as bullish unless it exceeds the relevant base mean or has adequate probability of exceeding it.",
-        "Use x4wksd/x13wksd/x40wksd to estimate probability of exceeding base-period means.",
-        "If is_stale=true or missing_reason is present, treat the ST-IM result as historical fallback and disclose that limitation.",
-    ],
-    "stim_select_style_logic": {
-        "prob13wk_minimum": 0.55,
-        "prob13wk_minimum_description": "13-week probability of exceeding the base-period mean should be at least 55%.",
-        "lower_confidence_bounds": "Emphasize lower confidence bounds relative to base-period means where applicable.",
-    },
-}
+STIM_INTERPRETATION_GUIDANCE = stim_interpretation_guidance()
 
 STIM_REQUIRED_INTERPRETATION_STEPS = [
+    "Fetch GET /v1/meta/inference.",
     "Fetch GET /v1/meta/stim.",
     "Read base_period_mean_returns_pct.x4wk, x13wk, and x40wk.",
     "For each horizon, compare xNwk to the matching base mean.",
@@ -144,8 +131,34 @@ STIM_REQUIRED_INTERPRETATION_STEPS = [
     "Compute z = (base_mean - stim_mean) / standard_deviation.",
     "Compute probability_outperform = 1 - normal_cdf(z).",
     "Review lower confidence bounds against base-period means where available.",
+    "Preserve provider identity, evidence, uncertainty, confidence, and explanation in downstream reasoning.",
     "Disclose stale or fallback data when is_stale=true or missing_reason is present.",
 ]
+
+INFERENCE_CONTRACT_METADATA = {
+    "endpoint": INFERENCE_CONTRACT_ENDPOINT,
+    "provider_agnostic": True,
+    "core_concepts": [
+        "inference_provider",
+        "forecast_horizon",
+        "probability_distribution",
+        "confidence_measure",
+        "evidence",
+        "uncertainty",
+        "explanation",
+        "signal_source",
+        "reasoning_interpretation",
+    ],
+}
+
+STIM_INFERENCE_PROVIDER_METADATA = {
+    "provider_id": "stim",
+    "provider_name": "Stock Trends Inference Model",
+    "provider_role": "current_baseline_inference_provider",
+    "provider_profile_endpoint": STIM_PROVIDER_PROFILE_ENDPOINT,
+    "not_final_intelligence_layer": True,
+    "future_causal_ai_compatible": True,
+}
 
 REGIME_INTERPRETATION_GUIDANCE = {
     "regime_score_scale": {
@@ -248,6 +261,9 @@ def _metadata(
     interpretation_dependency: dict[str, Any] | None = None,
     interpretation_guidance: dict[str, Any] | None = None,
     required_interpretation_steps: list[str] | None = None,
+    inference_contract: dict[str, Any] | None = None,
+    inference_provider: dict[str, Any] | None = None,
+    cognition_architecture: str | None = None,
 ) -> dict[str, Any]:
     metadata = {
         "path": path,
@@ -288,6 +304,12 @@ def _metadata(
         metadata["interpretation_guidance"] = copy.deepcopy(interpretation_guidance)
     if required_interpretation_steps is not None:
         metadata["required_interpretation_steps"] = copy.deepcopy(required_interpretation_steps)
+    if inference_contract is not None:
+        metadata["inference_contract"] = copy.deepcopy(inference_contract)
+    if inference_provider is not None:
+        metadata["inference_provider"] = copy.deepcopy(inference_provider)
+    if cognition_architecture is not None:
+        metadata["cognition_architecture"] = cognition_architecture
     return metadata
 
 
@@ -529,11 +551,14 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "If is_stale=true or missing_reason is present, disclose that the ST-IM result is a historical fallback.",
         ],
         analytical_role=ROLE_PROBABILISTIC_FORWARD_INFERENCE,
-        related_endpoints=["/v1/meta/stim", "/v1/indicators/latest", "/v1/stim/history", "/v1/selections/published/latest"],
-        next_recommended_calls=["/v1/meta/stim", "/v1/decision/evaluate-symbol", "/v1/portfolio/construct"],
+        related_endpoints=["/v1/meta/inference", "/v1/meta/stim", "/v1/indicators/latest", "/v1/stim/history", "/v1/selections/published/latest"],
+        next_recommended_calls=["/v1/meta/inference", "/v1/meta/stim", "/v1/decision/evaluate-symbol", "/v1/portfolio/construct"],
         interpretation_dependency=STIM_INTERPRETATION_DEPENDENCY,
         interpretation_guidance=STIM_INTERPRETATION_GUIDANCE,
         required_interpretation_steps=STIM_REQUIRED_INTERPRETATION_STEPS,
+        inference_contract=INFERENCE_CONTRACT_METADATA,
+        inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
+        cognition_architecture=COGNITION_ARCHITECTURE_DOC,
     ),
     "/v1/stim/history": _metadata(
         path="/v1/stim/history",
@@ -564,11 +589,14 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "If is_stale=true or missing_reason is present, disclose that the ST-IM result is a historical fallback.",
         ],
         analytical_role=ROLE_PROBABILISTIC_FORWARD_INFERENCE,
-        related_endpoints=["/v1/meta/stim", "/v1/stim/latest", "/v1/indicators/history"],
-        next_recommended_calls=["/v1/meta/stim", "/v1/indicators/history", "/v1/decision/evaluate-symbol"],
+        related_endpoints=["/v1/meta/inference", "/v1/meta/stim", "/v1/stim/latest", "/v1/indicators/history"],
+        next_recommended_calls=["/v1/meta/inference", "/v1/meta/stim", "/v1/indicators/history", "/v1/decision/evaluate-symbol"],
         interpretation_dependency=STIM_INTERPRETATION_DEPENDENCY,
         interpretation_guidance=STIM_INTERPRETATION_GUIDANCE,
         required_interpretation_steps=STIM_REQUIRED_INTERPRETATION_STEPS,
+        inference_contract=INFERENCE_CONTRACT_METADATA,
+        inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
+        cognition_architecture=COGNITION_ARCHITECTURE_DOC,
     ),
     "/v1/prices/latest": _metadata(
         path="/v1/prices/latest",
@@ -649,6 +677,9 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         ],
         related_endpoints=["/v1/selections/published/latest", "/v1/selections/history"],
         next_recommended_calls=["/v1/selections/published/latest", "/v1/indicators/latest"],
+        inference_contract=INFERENCE_CONTRACT_METADATA,
+        inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
+        cognition_architecture=COGNITION_ARCHITECTURE_DOC,
     ),
     "/v1/selections/history": _metadata(
         path="/v1/selections/history",
@@ -682,6 +713,9 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["Use published selection endpoints for the documented three-horizon STIM Select definition."],
         related_endpoints=["/v1/selections/latest", "/v1/selections/published/history"],
         next_recommended_calls=["/v1/selections/published/history"],
+        inference_contract=INFERENCE_CONTRACT_METADATA,
+        inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
+        cognition_architecture=COGNITION_ARCHITECTURE_DOC,
     ),
     "/v1/selections/published/latest": _metadata(
         path="/v1/selections/published/latest",
@@ -724,6 +758,9 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         related_endpoints=["/v1/selections/latest", "/v1/selections/published/history", "/v1/stim/latest"],
         next_recommended_calls=["/v1/indicators/latest", "/v1/stim/latest"],
         interpretation_guidance=STIM_SELECT_INTERPRETATION_GUIDANCE,
+        inference_contract=INFERENCE_CONTRACT_METADATA,
+        inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
+        cognition_architecture=COGNITION_ARCHITECTURE_DOC,
     ),
     "/v1/selections/published/history": _metadata(
         path="/v1/selections/published/history",
@@ -761,6 +798,9 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         related_endpoints=["/v1/selections/published/latest", "/v1/selections/history"],
         next_recommended_calls=["/v1/stim/history", "/v1/indicators/history"],
         interpretation_guidance=STIM_SELECT_INTERPRETATION_GUIDANCE,
+        inference_contract=INFERENCE_CONTRACT_METADATA,
+        inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
+        cognition_architecture=COGNITION_ARCHITECTURE_DOC,
     ),
     "/v1/market/regime/latest": _metadata(
         path="/v1/market/regime/latest",
@@ -1536,7 +1576,15 @@ def build_endpoint_preview(
             "cost_source": "/v1/pricing/catalog",
         },
     }
-    for field in ("analytical_role", "interpretation_dependency", "interpretation_guidance", "required_interpretation_steps"):
+    for field in (
+        "analytical_role",
+        "interpretation_dependency",
+        "interpretation_guidance",
+        "required_interpretation_steps",
+        "inference_contract",
+        "inference_provider",
+        "cognition_architecture",
+    ):
         if field in entry:
             preview[field] = copy.deepcopy(entry[field])
     return preview
@@ -1761,7 +1809,15 @@ def build_tool_template(path: str) -> dict[str, Any] | None:
         "related_endpoints": copy.deepcopy(entry.get("related_endpoints", [])),
         "next_recommended_calls": copy.deepcopy(entry.get("next_recommended_calls", [])),
     }
-    for field in ("analytical_role", "interpretation_dependency", "interpretation_guidance", "required_interpretation_steps"):
+    for field in (
+        "analytical_role",
+        "interpretation_dependency",
+        "interpretation_guidance",
+        "required_interpretation_steps",
+        "inference_contract",
+        "inference_provider",
+        "cognition_architecture",
+    ):
         if field in entry:
             template[field] = copy.deepcopy(entry[field])
     if input_location == "query":
@@ -2044,6 +2100,9 @@ def build_bazaar_extension(path: str, method: str | None = None) -> dict[str, An
             "guidance": copy.deepcopy((entry or {}).get("interpretation_guidance")),
             "required_steps": copy.deepcopy((entry or {}).get("required_interpretation_steps")),
         },
+        "inference_contract": copy.deepcopy((entry or {}).get("inference_contract")),
+        "inference_provider": copy.deepcopy((entry or {}).get("inference_provider")),
+        "cognition_architecture": (entry or {}).get("cognition_architecture"),
         "related_endpoints": copy.deepcopy((entry or {}).get("related_endpoints", [])),
         "next_recommended_calls": copy.deepcopy((entry or {}).get("next_recommended_calls", [])),
         "safe_for_autonomous_execution_with_budget_controls": True,
@@ -2139,6 +2198,9 @@ def build_compact_bazaar_extension(path: str, method: str | None = None) -> dict
 
     if entry is not None and entry.get("analytical_role"):
         info["role"] = entry["analytical_role"]
+    if entry is not None and entry.get("inference_provider"):
+        info["provider"] = copy.deepcopy(entry["inference_provider"])
+        info["inference_contract"] = INFERENCE_CONTRACT_ENDPOINT
 
     return {
         "bazaar": {

@@ -105,6 +105,7 @@ def public_helper_client(monkeypatch):
         "/v1/instruments/resolve?symbol_exchange=IBM-N",
         "/v1/stwr/reports/catalog",
         "/v1/meta/indicators",
+        "/v1/meta/inference",
         "/v1/meta/stim",
         "/v1/meta/stwr",
         "/v1/leadership/definitions",

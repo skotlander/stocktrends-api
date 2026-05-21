@@ -213,6 +213,7 @@ def test_ai_context_has_probabilistic_semantics(ai_context_response):
 def test_ai_context_has_mt4_semantic_sections(ai_context_response):
     expected = {
         "service_identity",
+        "cognition_architecture",
         "analytical_framework",
         "analytical_chain",
         "probabilistic_semantics",
@@ -225,6 +226,17 @@ def test_ai_context_has_mt4_semantic_sections(ai_context_response):
     }
     missing = expected - set(ai_context_response)
     assert not missing, f"/v1/ai/context missing MT-4 semantic sections: {sorted(missing)}"
+
+
+def test_ai_context_cognition_architecture_is_provider_agnostic(ai_context_response):
+    cognition = ai_context_response["cognition_architecture"]
+    assert cognition["inference_contract_endpoint"] == "/v1/meta/inference"
+    assert cognition["current_baseline_provider_profile"] == "/v1/meta/stim"
+    assert any("ST-IM is the current baseline" in item for item in cognition["doctrine"])
+    assert "inference_provider" in cognition["provider_agnostic_concepts"]
+    assert "uncertainty" in cognition["provider_agnostic_concepts"]
+    assert "evidence" in cognition["provider_agnostic_concepts"]
+    assert cognition["current_baseline_provider_role"] == "current_baseline_inference_provider"
 
 
 def test_ai_context_service_identity_prevents_flattening(ai_context_response):
@@ -248,6 +260,9 @@ def test_ai_context_service_identity_prevents_flattening(ai_context_response):
 def test_ai_context_stim_semantics_require_base_period_comparison(ai_context_response):
     stim = ai_context_response["probabilistic_semantics"]["stim_model"]
     assert stim["full_name"] == "Stock Trends Inference Model"
+    assert stim["inference_provider_id"] == "stim"
+    assert stim["provider_role"] == "current_baseline_inference_provider"
+    assert stim["not_final_intelligence_layer"] is True
     assert stim["output_type"] == "probabilistic forward return distribution"
     assert stim["not_momentum"] is True
     assert "momentum_indicator" in stim["not"]
@@ -259,6 +274,8 @@ def test_ai_context_stim_semantics_require_base_period_comparison(ai_context_res
         "x13wk": 2.19,
         "x40wk": 6.45,
     }
+    assert "conditional historical tendencies" in stim["interpretation_requirement"]
+    assert "regime_shifts" in stim["limitations"]
 
 
 def test_ai_context_stim_dependencies_include_base_and_published_selections(ai_context_response):

@@ -69,6 +69,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             "/v1/instruments/resolve",
             "/v1/stwr/reports/catalog",
             "/v1/meta/indicators",
+            "/v1/meta/inference",
             "/v1/meta/stim",
             "/v1/meta/stwr",
             "/v1/leadership/definitions",

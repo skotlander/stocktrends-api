@@ -24,7 +24,7 @@ GET /v1/stim/latest?symbol_exchange=IBM-N
 Headers may include:
 
 * API key
-* payment headers (x402 / future MPP)
+* payment headers (x402 / MPP)
 
 ---
 
@@ -72,7 +72,7 @@ Based on request context:
 * payment headers present
 * per-request payment validation
 
-#### C. MPP Path (future)
+#### C. MPP Path
 
 * active session
 * STC consumed within session

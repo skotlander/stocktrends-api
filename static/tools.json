@@ -2,7 +2,7 @@
   "version": "1.5",
   "name": "Stock Trends API Tools",
   "provider": "Stock Trends Publications",
-  "service_description": "Autonomous portfolio intelligence API for AI agents. Agent-native probabilistic market intelligence infrastructure: ST-IM (Stock Trends Inference Model) forward-return distributions, market regime analysis, sector breadth confirmation, leadership rotation analytics, STIM Select probabilistic stock lists, portfolio construction and evaluation, and symbol decision scoring across 4, 13, and 40-week investment horizons. Built for agentic research workflows using x402 and MPP payment rails. Outputs are processed, ranked, and interpretation-ready — not raw price data.",
+  "service_description": "Autonomous portfolio intelligence API for AI agents. Agent-native probabilistic market intelligence infrastructure: ST-IM (Stock Trends Inference Model) forward-return distributions, provider-agnostic inference metadata, market regime analysis, sector breadth confirmation, leadership rotation analytics, STIM Select probabilistic stock lists, portfolio construction and evaluation, and symbol decision scoring across 4, 13, and 40-week investment horizons. Built for agentic research workflows using x402 and MPP payment rails. Outputs are processed, ranked, and interpretation-ready — not raw price data.",
   "base_url": "https://api.stocktrends.com/v1",
   "openapi": "https://api.stocktrends.com/v1/openapi.json",
   "docs": "https://api.stocktrends.com/v1/docs",
@@ -214,9 +214,19 @@
       "planning_helper": true
     },
     {
+      "name": "meta_inference",
+      "title": "Inference Cognition Contract",
+      "description": "Planning helper. Provider-agnostic Stock Trends inference contract for provider identity, forecast horizon, distribution, confidence, evidence, uncertainty, explanation, signal sources, and auditability.",
+      "method": "GET",
+      "path": "/meta/inference",
+      "auth_required": false,
+      "category": "meta",
+      "planning_helper": true
+    },
+    {
       "name": "meta_stim",
       "title": "ST-IM Metadata",
-      "description": "Planning helper. ST-IM field definitions, confidence-bound fields, and base-period mean returns.",
+      "description": "Planning helper. ST-IM provider profile, confidence-bound fields, and base-period mean returns. ST-IM is the current baseline inference provider, not the final intelligence layer.",
       "method": "GET",
       "path": "/meta/stim",
       "auth_required": false,
@@ -468,9 +478,18 @@
         "endpoint": "/v1/meta/stim",
         "method": "GET",
         "required_before_interpretation": true,
-        "reason": "Base-period mean returns are required to interpret ST-IM means and probabilities correctly."
+        "reason": "The ST-IM provider profile supplies base-period mean returns and provider-specific interpretation rules. /v1/meta/inference supplies the provider-agnostic cognition contract.",
+        "inference_contract_endpoint": "/v1/meta/inference",
+        "cognition_architecture": "docs/STOCK_TRENDS_COGNITION_ARCHITECTURE.md"
       },
       "interpretation_guidance": {
+        "inference_contract_endpoint": "/v1/meta/inference",
+        "inference_provider": {
+          "provider_id": "stim",
+          "provider_role": "current_baseline_inference_provider",
+          "not_final_intelligence_layer": true,
+          "profile_endpoint": "/v1/meta/stim"
+        },
         "base_period_mean_returns_pct": {
           "x4wk": "4-week baseline from /v1/meta/stim",
           "x13wk": "13-week baseline from /v1/meta/stim",
@@ -484,12 +503,26 @@
           "probability_outperform": "1 - normal_cdf(z)"
         },
         "interpretation_rules": [
-          "Call /v1/meta/stim before interpreting ST-IM results.",
+          "Call /v1/meta/inference and /v1/meta/stim before interpreting ST-IM results.",
           "Raw x4wk/x13wk/x40wk means are estimated mean returns, not standalone bullish signals.",
           "Do not interpret a positive raw mean as bullish unless it exceeds the relevant base mean or has adequate probability of exceeding it.",
-          "Use x4wksd/x13wksd/x40wksd to estimate probability of exceeding base-period means.",
+          "Use x4wksd/x13wksd/x40wksd to estimate probability of exceeding base-period means under the stated distribution assumption.",
+          "Interpret ST-IM probabilities as conditional historical tendencies, not guarantees, price targets, or buy/sell commands.",
           "If is_stale=true or missing_reason is present, treat the ST-IM result as historical fallback and disclose that limitation."
         ],
+        "randomness_assumptions": [
+          "Markets are noisy, uncertain, and partly random.",
+          "ST-IM does not eliminate randomness; it estimates conditional historical tendencies.",
+          "Individual outcomes can diverge materially from the estimated distribution."
+        ],
+        "distribution_framing": {
+          "assumption": "normal_approximation",
+          "central_limit_theorem_intuition": "Large historical populations of similarly classified observations can support distribution-level reasoning even though individual securities remain uncertain.",
+          "probability_formula": "probability_outperform = 1 - normal_cdf((base_mean - stim_mean) / standard_deviation)"
+        },
+        "classification_role": "The Stock Trends classification system converts raw weekly market behavior into structured, repeatable factor states. These states create historical populations from which forward-return distributions can be estimated and compared.",
+        "limitations": ["regime_shifts", "non_stationarity", "sample_size_weakness", "tail_events", "liquidity_shocks", "news_shocks", "uncertainty_in_individual_stock_outcomes"],
+        "portfolio_applications": ["ranking", "screening", "allocation_review", "regime-aware interpretation", "market-structure analysis", "repeated decision-making under uncertainty"],
         "stim_select_style_logic": {
           "prob13wk_minimum": 0.55,
           "prob13wk_minimum_description": "13-week probability of exceeding the base-period mean should be at least 55%.",
@@ -497,9 +530,15 @@
         }
       },
       "required_interpretation_steps": [
+        "Fetch GET /v1/meta/inference.",
         "Fetch GET /v1/meta/stim.",
-        "Compare x4wk, x13wk, and x40wk to base_period_mean_returns_pct.",
-        "Use x4wksd, x13wksd, and x40wksd to estimate probability of exceeding base means.",
+        "Read base_period_mean_returns_pct.x4wk, x13wk, and x40wk.",
+        "For each horizon, compare xNwk to the matching base mean.",
+        "Compute delta_vs_base = stim_mean - base_mean.",
+        "Compute z = (base_mean - stim_mean) / standard_deviation.",
+        "Compute probability_outperform = 1 - normal_cdf(z).",
+        "Review lower confidence bounds against base-period means where available.",
+        "Preserve provider identity, evidence, uncertainty, confidence, and explanation in downstream reasoning.",
         "Disclose stale or fallback data when is_stale=true or missing_reason is present."
       ],
       "parameters": [
@@ -540,9 +579,18 @@
         "endpoint": "/v1/meta/stim",
         "method": "GET",
         "required_before_interpretation": true,
-        "reason": "Base-period mean returns are required to interpret ST-IM means and probabilities correctly."
+        "reason": "The ST-IM provider profile supplies base-period mean returns and provider-specific interpretation rules. /v1/meta/inference supplies the provider-agnostic cognition contract.",
+        "inference_contract_endpoint": "/v1/meta/inference",
+        "cognition_architecture": "docs/STOCK_TRENDS_COGNITION_ARCHITECTURE.md"
       },
       "interpretation_guidance": {
+        "inference_contract_endpoint": "/v1/meta/inference",
+        "inference_provider": {
+          "provider_id": "stim",
+          "provider_role": "current_baseline_inference_provider",
+          "not_final_intelligence_layer": true,
+          "profile_endpoint": "/v1/meta/stim"
+        },
         "base_period_mean_returns_pct": {
           "x4wk": "4-week baseline from /v1/meta/stim",
           "x13wk": "13-week baseline from /v1/meta/stim",
@@ -556,12 +604,26 @@
           "probability_outperform": "1 - normal_cdf(z)"
         },
         "interpretation_rules": [
-          "Call /v1/meta/stim before interpreting ST-IM results.",
+          "Call /v1/meta/inference and /v1/meta/stim before interpreting ST-IM results.",
           "Raw x4wk/x13wk/x40wk means are estimated mean returns, not standalone bullish signals.",
           "Do not interpret a positive raw mean as bullish unless it exceeds the relevant base mean or has adequate probability of exceeding it.",
-          "Use x4wksd/x13wksd/x40wksd to estimate probability of exceeding base-period means.",
+          "Use x4wksd/x13wksd/x40wksd to estimate probability of exceeding base-period means under the stated distribution assumption.",
+          "Interpret ST-IM probabilities as conditional historical tendencies, not guarantees, price targets, or buy/sell commands.",
           "If is_stale=true or missing_reason is present, treat the ST-IM result as historical fallback and disclose that limitation."
         ],
+        "randomness_assumptions": [
+          "Markets are noisy, uncertain, and partly random.",
+          "ST-IM does not eliminate randomness; it estimates conditional historical tendencies.",
+          "Individual outcomes can diverge materially from the estimated distribution."
+        ],
+        "distribution_framing": {
+          "assumption": "normal_approximation",
+          "central_limit_theorem_intuition": "Large historical populations of similarly classified observations can support distribution-level reasoning even though individual securities remain uncertain.",
+          "probability_formula": "probability_outperform = 1 - normal_cdf((base_mean - stim_mean) / standard_deviation)"
+        },
+        "classification_role": "The Stock Trends classification system converts raw weekly market behavior into structured, repeatable factor states. These states create historical populations from which forward-return distributions can be estimated and compared.",
+        "limitations": ["regime_shifts", "non_stationarity", "sample_size_weakness", "tail_events", "liquidity_shocks", "news_shocks", "uncertainty_in_individual_stock_outcomes"],
+        "portfolio_applications": ["ranking", "screening", "allocation_review", "regime-aware interpretation", "market-structure analysis", "repeated decision-making under uncertainty"],
         "stim_select_style_logic": {
           "prob13wk_minimum": 0.55,
           "prob13wk_minimum_description": "13-week probability of exceeding the base-period mean should be at least 55%.",
@@ -569,9 +631,15 @@
         }
       },
       "required_interpretation_steps": [
+        "Fetch GET /v1/meta/inference.",
         "Fetch GET /v1/meta/stim.",
-        "Compare x4wk, x13wk, and x40wk to base_period_mean_returns_pct.",
-        "Use x4wksd, x13wksd, and x40wksd to estimate probability of exceeding base means.",
+        "Read base_period_mean_returns_pct.x4wk, x13wk, and x40wk.",
+        "For each horizon, compare xNwk to the matching base mean.",
+        "Compute delta_vs_base = stim_mean - base_mean.",
+        "Compute z = (base_mean - stim_mean) / standard_deviation.",
+        "Compute probability_outperform = 1 - normal_cdf(z).",
+        "Review lower confidence bounds against base-period means where available.",
+        "Preserve provider identity, evidence, uncertainty, confidence, and explanation in downstream reasoning.",
         "Disclose stale or fallback data when is_stale=true or missing_reason is present."
       ],
       "parameters": [

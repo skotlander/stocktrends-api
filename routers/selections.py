@@ -58,10 +58,11 @@ def _mast_join(include_mast: bool) -> str:
 
 @router.get(
     "/latest",
-    summary="Latest STIM Select stock list",
+    summary="Latest base ST-IM selection universe",
     description=(
-        "Returns the latest STIM Select (Stock Trends Inference Model Select) stock list "
-        "from the selection database for the most recent weekdate. "
+        "Returns the latest base st_select universe for the most recent weekdate. "
+        "This is not the strict published STIM Select filter unless the caller applies "
+        "thresholds or uses /v1/selections/published/latest. "
         "Securities are ranked by prob13wk descending — the probability of exceeding the "
         "13-week base-period mean random return (2.19%), assuming a normal distribution. "
         "Use min_prob13wk to apply a custom probability threshold (default: no filter). "
@@ -200,9 +201,11 @@ def selections_latest(
 
 @router.get(
     "/history",
-    summary="Historical STIM Select records",
+    summary="Historical base ST-IM selection universe records",
     description=(
-        "Returns historical STIM Select (Stock Trends Inference Model Select) records. "
+        "Returns historical base st_select universe records. These are not the strict "
+        "published STIM Select records unless published thresholds are applied via "
+        "/v1/selections/published/history. "
         "Filter by symbol_exchange, symbol, exchange, or date range. "
         "Each entry includes prob13wk — probability of exceeding the 13-week base-period "
         "mean random return (2.19%), assuming normal distribution. "

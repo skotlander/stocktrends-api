@@ -166,13 +166,15 @@ def test_stim_forecast_review_workflow_has_meta_before_paid_stim(monkeypatch):
     )
     paths = [step["path"] for step in workflow["steps"]]
 
+    assert paths.index("/v1/meta/inference") < paths.index("/v1/meta/stim")
     assert paths.index("/v1/meta/stim") < paths.index("/v1/stim/latest")
     assert workflow["interpretation_guidance"]
+    assert "/v1/meta/inference" in workflow["interpretation_guidance"]
     assert "base_period_mean_returns_pct" in workflow["interpretation_guidance"]
     assert workflow["required_interpretation_steps"]
 
     meta_step = workflow["steps"][0]
-    assert meta_step["path"] == "/v1/meta/stim"
+    assert meta_step["path"] == "/v1/meta/inference"
     assert meta_step["pricing_rule_id"] is None
     assert meta_step["stc_cost"] == 0.0
 

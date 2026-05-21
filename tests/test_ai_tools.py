@@ -140,6 +140,8 @@ def test_ai_context_discovery_entrypoints_prioritize_ai_tools():
     assert result["discovery_entrypoints"] == {
         "primary_machine_readable": "/v1/ai/tools",
         "secondary_explanatory": "/v1/ai/context",
+        "provider_agnostic_inference_contract": "/v1/meta/inference",
+        "stim_provider_profile": "/v1/meta/stim",
         "docs": "/v1/docs",
         "openapi": "/v1/openapi.json",
     }
@@ -587,12 +589,14 @@ def test_stim_forecast_review_workflow_exposes_interpretation_sequence():
     workflow = next(w for w in result["workflows"] if w["workflow_id"] == "stim_forecast_review")
 
     assert workflow["interpretation_guidance"]
+    assert "/v1/meta/inference" in workflow["interpretation_guidance"]
     assert "/v1/meta/stim" in workflow["interpretation_guidance"]
     assert "base_period_mean_returns_pct" in workflow["interpretation_guidance"]
     assert workflow["required_interpretation_steps"]
 
     registry_workflow = next(w for w in WORKFLOW_REGISTRY if w["workflow_id"] == "stim_forecast_review")
     endpoints = [step["endpoint"] for step in registry_workflow["steps"]]
+    assert endpoints.index("GET /v1/meta/inference") < endpoints.index("GET /v1/meta/stim")
     assert endpoints.index("GET /v1/meta/stim") < endpoints.index("GET /v1/stim/latest")
 
 
@@ -607,11 +611,16 @@ def test_stim_tools_expose_machine_readable_interpretation_guidance():
         steps = tool["required_interpretation_steps"]
 
         assert dependency["endpoint"] == "/v1/meta/stim"
+        assert dependency["inference_contract_endpoint"] == "/v1/meta/inference"
         assert dependency["required_before_interpretation"] is True
+        assert guidance["inference_contract_endpoint"] == "/v1/meta/inference"
+        assert guidance["inference_provider"]["provider_id"] == "stim"
+        assert guidance["inference_provider"]["not_final_intelligence_layer"] is True
         assert "base_period_mean_returns_pct" in guidance
         assert guidance["calculation"]["delta_vs_base"] == "stim_mean - base_mean"
         assert guidance["calculation"]["probability_outperform"] == "1 - normal_cdf(z)"
         assert guidance["stim_select_style_logic"]["prob13wk_minimum"] == 0.55
+        assert any("/v1/meta/inference" in step for step in steps)
         assert any("/v1/meta/stim" in step for step in steps)
         assert "is_stale" in " ".join(guidance["interpretation_rules"])
 
@@ -965,6 +974,7 @@ def test_planning_helpers_are_promoted_in_tools_and_context():
         "/v1/instruments/resolve",
         "/v1/stwr/reports/catalog",
         "/v1/meta/indicators",
+        "/v1/meta/inference",
         "/v1/meta/stim",
         "/v1/meta/stwr",
         "/v1/leadership/definitions",
@@ -1006,6 +1016,7 @@ def test_public_planning_helper_tools_are_free_and_public():
         "/v1/instruments/resolve",
         "/v1/stwr/reports/catalog",
         "/v1/meta/indicators",
+        "/v1/meta/inference",
         "/v1/meta/stim",
         "/v1/meta/stwr",
         "/v1/leadership/definitions",

@@ -79,12 +79,16 @@ def _fetch_latest_weekdate_st_data(engine, symbol: str, exchange: str):
     "/latest",
     summary="Latest ST-IM return distributions for a symbol",
     description=(
-        "Returns the latest Stock Trends Inference Model (ST-IM) outputs for a given symbol: "
-        "forward return expectations and statistical distributions across 4-week, 13-week, and "
-        "40-week horizons. Fields: xNwk1 = lower percentile bound, xNwk2 = upper percentile bound, "
-        "xNwk = expected return (mean), xNwksd = standard deviation. "
+        "Returns the latest Stock Trends Inference Model (ST-IM) outputs for a given symbol. "
+        "ST-IM is the current baseline inference provider, not the final intelligence layer. "
+        "Outputs are forward return expectations and statistical distributions across 4-week, "
+        "13-week, and 40-week horizons. Fields: xNwk1 = lower percentile/confidence bound, "
+        "xNwk2 = upper percentile/confidence bound, xNwk = expected return (mean), "
+        "xNwksd = standard deviation. Interpret probabilities as conditional historical "
+        "tendencies under uncertainty, not guarantees, price targets, or direct buy/sell commands. "
         "Includes staleness detection (is_stale, missing_reason) for weeks where insufficient "
         "sample data prevented ST-IM estimation. "
+        "Fetch /v1/meta/inference and /v1/meta/stim before interpretation. "
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
@@ -169,9 +173,11 @@ def stim_latest(
     summary="Historical ST-IM return distribution series for a symbol",
     description=(
         "Returns a historical series of Stock Trends Inference Model (ST-IM) forward return "
-        "distribution records for a given symbol/exchange. Each record contains expected returns "
-        "and standard deviations for 4-week, 13-week, and 40-week horizons "
-        "(xNwk, xNwksd, xNwk1, xNwk2). Rows returned ascending by weekdate. "
+        "distribution records for a given symbol/exchange. ST-IM is the current baseline "
+        "inference provider and should be interpreted through the provider-agnostic "
+        "/v1/meta/inference contract plus the /v1/meta/stim provider profile. Each record "
+        "contains expected returns and standard deviations for 4-week, 13-week, and 40-week "
+        "horizons (xNwk, xNwksd, xNwk1, xNwk2). Rows returned ascending by weekdate. "
         "Set include_gaps=true to identify weeks where ST-IM estimates are absent "
         "(insufficient sample vs available st_data). "
         "Fetch /v1/pricing/catalog for current STC cost."
