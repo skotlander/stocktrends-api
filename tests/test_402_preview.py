@@ -463,6 +463,28 @@ def test_stim_latest_compact_402_body_preview_remains_rich(monkeypatch):
     assert preview["required_interpretation_steps"]
 
 
+def test_bazaar_service_identity_does_not_shrink_stocktrends_preview(monkeypatch):
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/v1/stim/latest",
+            headers={
+                "X-StockTrends-Payment-Method": "x402",
+                "X-StockTrends-Challenge-Mode": "compact",
+            },
+        )
+
+    assert response.status_code == 402
+    preview = response.json()["stocktrends_preview"]
+
+    assert "required_inputs" in preview
+    assert "optional_inputs" in preview
+    assert "response_shape" in preview
+    assert "example_object" in preview
+    assert "interpretation_guidance" in preview
+    assert "required_interpretation_steps" in preview
+
+
 def test_x402_challenge_existing_fields_preserved(client_x402_challenge_known):
     """All original challenge fields must still be present."""
     body = client_x402_challenge_known.get(

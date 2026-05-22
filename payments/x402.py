@@ -16,6 +16,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives.serialization import load_pem_private_key
 
 from discovery.endpoint_metadata import (
+    SERVICE_ICON_URL,
+    SERVICE_NAME,
+    SERVICE_TAGS,
     build_bazaar_extension,
     build_compact_bazaar_extension,
     get_resource_description,
@@ -304,6 +307,9 @@ def build_x402_requirements(
             "url": resource_url,
             "description": resource_description,
             "mimeType": mime_type,
+            "serviceName": SERVICE_NAME,
+            "tags": list(SERVICE_TAGS),
+            "iconUrl": SERVICE_ICON_URL,
         },
         "accepts": [
             {

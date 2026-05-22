@@ -55,6 +55,15 @@ _RICH_HEADER_PATHS = [
 ]
 _UNDICI_SAFE_HEADER_THRESHOLD_BYTES = 8192
 _COMPACT_DECODED_THRESHOLD_BYTES = 4096
+_EXPECTED_SERVICE_NAME = "Stock Trends Market Intelligence"
+_EXPECTED_SERVICE_TAGS = [
+    "finance",
+    "market-intelligence",
+    "equities",
+    "quantitative-finance",
+    "agentic",
+]
+_EXPECTED_ICON_URL = "https://developer.stocktrends.com/images/stmi-icon.png"
 
 
 def _decode_header(header_b64: str) -> dict:
@@ -63,6 +72,12 @@ def _decode_header(header_b64: str) -> dict:
 
 def _decoded_header_bytes(header_b64: str) -> int:
     return len(base64.b64decode(header_b64))
+
+
+def _assert_resource_service_identity(resource: dict[str, Any]) -> None:
+    assert resource["serviceName"] == _EXPECTED_SERVICE_NAME
+    assert resource["tags"] == _EXPECTED_SERVICE_TAGS
+    assert resource["iconUrl"] == _EXPECTED_ICON_URL
 
 
 def _assert_schema_subset_valid(instance: Any, schema: dict[str, Any], path: str = "$") -> None:
@@ -312,6 +327,35 @@ class TestPaymentRequiredHeader:
         decoded = self._decode(hdr)
         assert decoded["resource"]["url"] == _FULL_URL
 
+    def test_compact_challenge_resource_has_bazaar_service_identity(self, monkeypatch):
+        monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
+        _, hdr = build_x402_challenge(path=_PATH, amount_usd=_AMOUNT, method="GET")
+        decoded = self._decode(hdr)
+        assert _decoded_header_bytes(hdr) < _COMPACT_DECODED_THRESHOLD_BYTES
+        _assert_resource_service_identity(decoded["resource"])
+
+        bazaar = decoded["extensions"]["bazaar"]
+        assert "input" in bazaar["schema"]["properties"]
+        assert "output" in bazaar["schema"]["properties"]
+        for field in ("serviceName", "tags", "iconUrl"):
+            assert field not in bazaar["info"]
+
+    def test_full_challenge_resource_has_bazaar_service_identity(self, monkeypatch):
+        monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
+        _, hdr = build_x402_challenge(
+            path=_PATH,
+            amount_usd=_AMOUNT,
+            method="GET",
+            challenge_mode="full",
+        )
+        decoded = self._decode(hdr)
+        _assert_resource_service_identity(decoded["resource"])
+
+        bazaar = decoded["extensions"]["bazaar"]
+        assert bazaar["info"]["service_name"] == _EXPECTED_SERVICE_NAME
+        assert "input" in bazaar["schema"]["properties"]
+        assert "output" in bazaar["schema"]["properties"]
+
     def test_header_has_amount_not_maxAmountRequired(self, monkeypatch):
         monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
         _, hdr = build_x402_challenge(path=_PATH, amount_usd=_AMOUNT, method="GET")
@@ -520,7 +564,7 @@ class TestBazaarRichDiscoveryMetadata:
         reqs = self._requirements(monkeypatch, "/v1/market/regime/latest", "GET")
         info = reqs["extensions"]["bazaar"]["info"]
 
-        assert info["service_name"] == "Stock Trends API"
+        assert info["service_name"] == _EXPECTED_SERVICE_NAME
         assert info["service_category"] == "agent_native_probabilistic_market_intelligence"
         assert info["analytical_role"] == "market_regime_classifier"
         assert info["research_goal"]
