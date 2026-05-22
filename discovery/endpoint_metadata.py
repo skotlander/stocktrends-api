@@ -21,8 +21,16 @@ from discovery.inference_semantics import (
 
 SUPPORTED_RAILS = ["subscription", "x402", "mpp"]
 
-SERVICE_NAME = "Stock Trends API"
+SERVICE_NAME = "Stock Trends Market Intelligence"
 SERVICE_CATEGORY = "agent_native_probabilistic_market_intelligence"
+SERVICE_TAGS = [
+    "finance",
+    "market-intelligence",
+    "equities",
+    "quantitative-finance",
+    "agentic",
+]
+SERVICE_ICON_URL = "https://developer.stocktrends.com/images/stmi-icon.png"
 DEVELOPER_PORTAL_URL = "https://developer.stocktrends.com/"
 AI_CONTEXT_URL = "https://api.stocktrends.com/v1/ai/context"
 TOOLS_MANIFEST_URL = "https://api.stocktrends.com/v1/ai/tools"
