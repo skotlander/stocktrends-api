@@ -24,7 +24,6 @@ from discovery.provenance import (
     INDICATORS_PROVENANCE_TEXT,
     STIM_PROVENANCE_TEXT,
     data_provenance,
-    provenance_reference,
 )
 from discovery.service_meta import DATASET_DESCRIPTION, SERVICE_POSITIONING
 from pricing.classifier import classify_request as _classify_request, NON_METERED_PATHS
@@ -580,7 +579,7 @@ _TOOL_TEMPLATES = [
             "Retrieves the latest ST-IM (Stock Trends Inference Model) outputs: forward return "
             "expectations and statistical distributions for a symbol. "
             "Covers forward return distributions across 4, 13, and 40-week horizons. "
-            f"{STIM_PROVENANCE_TEXT}"
+            "Use /v1/meta/stim for ST-IM provenance, base-period context, and interpretation limits."
         ),
         "endpoint": "/v1/stim/latest",
         "method": "GET",
@@ -605,7 +604,7 @@ _TOOL_TEMPLATES = [
             "Returns forward return distribution fields across 4, 13, and 40-week horizons: "
             "xNwk1 (lower CI bound), xNwk (mean), xNwk2 (upper CI bound), xNwksd (std deviation). "
             "Ordering depends on query scope; broad queries return most recent records first. "
-            f"{STIM_PROVENANCE_TEXT}"
+            "Use /v1/meta/stim for ST-IM provenance, base-period context, and interpretation limits."
         ),
         "endpoint": "/v1/stim/history",
         "method": "GET",
@@ -925,7 +924,6 @@ def _build_workflow_summary(workflow: dict) -> dict:
         "best_for": workflow.get("best_for"),
         "analytical_role": workflow.get("analytical_role"),
         "research_goal": workflow.get("research_goal"),
-        "provenance_reference": provenance_reference(),
         "agent_goal_examples": workflow.get("agent_goal_examples", []),
         "symbol_selection_guidance": workflow.get("symbol_selection_guidance"),
         "interpretation_guidance": workflow.get("interpretation_guidance"),
@@ -1184,7 +1182,6 @@ def ai_context():
                 "provider_profile_endpoint": STIM_PROVIDER_PROFILE_ENDPOINT,
                 "not_final_intelligence_layer": True,
                 "provenance_summary": STIM_PROVENANCE_TEXT,
-                "provenance_reference": provenance_reference(),
                 "output_type": "probabilistic forward return distribution",
                 "not_momentum": True,
                 "not": ["momentum_indicator", "simple_price_change_model", "generic_technical_indicator"],
@@ -1274,7 +1271,8 @@ def ai_context():
             "indicators": {
                 "endpoints": ["/v1/indicators/latest", "/v1/indicators/history"],
                 "use_when": "Stock Trends signal context for a symbol",
-                "semantics": INDICATORS_PROVENANCE_TEXT,
+                "semantics": "trend classification, persistence, maturity, RSI baseline 100, volume tags",
+                "research_provenance": INDICATORS_PROVENANCE_TEXT,
                 "interpret_with": ["/v1/meta/indicators"],
             },
             "regime": {

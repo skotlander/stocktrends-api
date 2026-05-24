@@ -20,7 +20,6 @@ from discovery.inference_semantics import (
 )
 from discovery.provenance import (
     INDICATORS_PROVENANCE_TEXT,
-    STIM_PROVENANCE_TEXT,
     endpoint_needs_provenance,
     provenance_reference,
 )
@@ -539,7 +538,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         resource_description=(
             "Latest Stock Trends Inference Model (ST-IM) outputs for a symbol: forward return "
             "expectations and statistical distributions across 4-week, 13-week, and 40-week horizons. "
-            f"{STIM_PROVENANCE_TEXT}"
+            "Use /v1/meta/stim for ST-IM provenance, base-period context, and interpretation limits."
         ),
         bazaar_output_description=(
             "Returns latest ST-IM distribution fields for a symbol, including x4wk, x13wk, x40wk "
@@ -586,7 +585,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         pricing_rule_id="stim_history_paid",
         resource_description=(
             "Historical ST-IM forward return distribution series for a symbol. "
-            f"{STIM_PROVENANCE_TEXT}"
+            "Use /v1/meta/stim for ST-IM provenance, base-period context, and interpretation limits."
         ),
         bazaar_output_description=(
             "Returns historical ST-IM records with expected returns, bounds, and standard deviations "

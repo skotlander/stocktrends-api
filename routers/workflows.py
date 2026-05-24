@@ -10,7 +10,7 @@ from sqlalchemy import text
 
 from db import get_metering_engine
 from discovery.endpoint_metadata import get_endpoint_metadata
-from discovery.provenance import data_provenance, provenance_reference
+from discovery.provenance import data_provenance
 
 logger = logging.getLogger("stocktrends_api.workflows")
 
@@ -556,7 +556,6 @@ def get_workflows() -> JSONResponse:
                 "STC is the pricing source of truth. The estimated USD value uses the current "
                 "operational policy of 1 STC approximately 1 USD and is for planning only."
             ),
-            "provenance_reference": provenance_reference(),
             "decision_guidance": w.get("decision_guidance"),
             "best_for": w.get("best_for"),
             "agent_goal_examples": w.get("agent_goal_examples", []),
@@ -589,7 +588,6 @@ def get_workflows() -> JSONResponse:
                 ],
                 "payment_rails": ["subscription", "x402", "mpp"],
                 "pricing_note": "STC is the pricing source of truth across all rails.",
-                "provenance_reference": provenance_reference(),
             },
             "data_provenance": data_provenance(),
             "workflows": workflows,

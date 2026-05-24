@@ -5,11 +5,18 @@ import re
 from pathlib import Path
 from types import SimpleNamespace
 
-from discovery.provenance import data_provenance
+from discovery.provenance import INDICATORS_PROVENANCE_TEXT, data_provenance
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INTERNAL_TABLE_NAMES = ("st_data", "st_select", "st_returnmeans", "api_pricing_rules")
+INTERNAL_TABLE_NAMES = (
+    "st_data",
+    "st_mast",
+    "st_select",
+    "st_returnmeans",
+    "st_listsectorsandindustries",
+    "api_pricing_rules",
+)
 PROHIBITED_AFFIRMATIVE_CLAIMS = (
     "guaranteed alpha",
     "guaranteed return",
@@ -48,6 +55,14 @@ def _assert_no_prohibited_affirmative_claims(value: object) -> None:
     assert not violations, f"Prohibited affirmative claims found: {violations}"
 
 
+def _assert_review_vocabulary(value: object) -> None:
+    serialized = _serialized(value)
+    assert "momentum direction" not in serialized
+    assert "trend duration" not in serialized
+    assert "relative performance direction" in serialized
+    assert "trend persistence" in serialized
+
+
 def test_central_data_provenance_shape():
     provenance = data_provenance()
 
@@ -55,9 +70,11 @@ def test_central_data_provenance_shape():
     assert provenance["approximate_observation_count"] == "16M+"
     assert provenance["update_frequency"] == "weekly"
     assert "trend classification" in provenance["native_signal_domains"]
+    assert "relative performance direction" in provenance["native_signal_domains"]
     assert "regime analysis" in provenance["research_value"]
     assert any("does not guarantee future performance" in item for item in provenance["important_limits"])
     assert any("not investment advice" in item for item in provenance["important_limits"])
+    _assert_review_vocabulary({"provenance": provenance, "indicators": INDICATORS_PROVENANCE_TEXT})
 
 
 def test_ai_context_and_tools_expose_full_provenance(monkeypatch):
@@ -79,6 +96,13 @@ def test_ai_context_and_tools_expose_full_provenance(monkeypatch):
     assert all("data_provenance" not in tool for tool in tools["tools"])
     assert all("data_provenance" not in workflow for workflow in tools["workflows"])
     assert any("provenance_reference" in tool for tool in tools["tools"])
+
+    indicators_family = context["endpoint_family_relationships"]["indicators"]
+    assert indicators_family["semantics"] == (
+        "trend classification, persistence, maturity, RSI baseline 100, volume tags"
+    )
+    assert "1980" in indicators_family["research_provenance"]
+    assert "trend persistence" in indicators_family["research_provenance"]
 
 
 def test_meta_indicator_and_stim_profiles_include_provenance_and_limits():
@@ -104,11 +128,11 @@ def test_meta_indicator_and_stim_profiles_include_provenance_and_limits():
     _assert_no_prohibited_affirmative_claims(stim)
 
 
-def test_endpoint_metadata_and_previews_use_compact_provenance_reference():
+def test_endpoint_metadata_and_previews_use_compact_provenance_reference_without_stim_repetition():
     from discovery.endpoint_metadata import build_tool_template
     from discovery.preview import get_endpoint_preview
 
-    for path in ("/v1/indicators/latest", "/v1/stim/latest", "/v1/market/regime/latest"):
+    for path in ("/v1/indicators/latest", "/v1/market/regime/latest"):
         template = build_tool_template(path)
         preview = get_endpoint_preview(path)
         assert template is not None
@@ -117,6 +141,14 @@ def test_endpoint_metadata_and_previews_use_compact_provenance_reference():
         assert preview["provenance_reference"]["approximate_observation_count"] == "16M+"
         assert "data_provenance" not in template
         assert "data_provenance" not in preview
+
+    stim_template = build_tool_template("/v1/stim/latest")
+    stim_preview = get_endpoint_preview("/v1/stim/latest")
+    assert stim_template is not None
+    assert stim_preview is not None
+    assert "provenance_reference" not in stim_template
+    assert "provenance_reference" not in stim_preview
+    assert stim_template["inference_provider"]["provider_profile_endpoint"] == "/v1/meta/stim"
 
 
 def test_workflows_surface_exposes_single_full_provenance_block(monkeypatch):
@@ -172,9 +204,9 @@ def test_workflows_surface_exposes_single_full_provenance_block(monkeypatch):
 
     assert body["data_provenance"]["historical_coverage_start_year"] == 1980
     assert body["data_provenance"]["approximate_observation_count"] == "16M+"
-    assert body["agent_guidance"]["provenance_reference"]["approximate_observation_count"] == "16M+"
+    assert "provenance_reference" not in body["agent_guidance"]
     assert all("data_provenance" not in workflow for workflow in body["workflows"])
-    assert all("provenance_reference" in workflow for workflow in body["workflows"])
+    assert all("provenance_reference" not in workflow for workflow in body["workflows"])
     _assert_no_internal_tables(body)
 
 
@@ -187,11 +219,15 @@ def test_openapi_has_top_level_provenance_and_no_internal_table_names():
     assert schema["x-stocktrends-data-provenance"]["historical_coverage_start_year"] == 1980
     assert schema["x-stocktrends-data-provenance"]["approximate_observation_count"] == "16M+"
 
-    for path in ("/meta/indicators", "/meta/stim", "/stim/latest", "/indicators/latest", "/workflows"):
+    for path in ("/meta/indicators", "/meta/stim", "/indicators/latest", "/workflows"):
         operation = schema["paths"][path]["get"]
         reference = operation["x-stocktrends-data-provenance-reference"]
         assert reference["historical_coverage_start_year"] == 1980
         assert reference["approximate_observation_count"] == "16M+"
+
+    stim_operation = schema["paths"]["/stim/latest"]["get"]
+    assert "x-stocktrends-data-provenance-reference" not in stim_operation
+    assert stim_operation["x-stocktrends-provider-profile"] == "/v1/meta/stim"
 
     _assert_no_internal_tables(schema)
     _assert_no_prohibited_affirmative_claims(schema)
@@ -206,9 +242,22 @@ def test_static_tools_json_and_llms_txt_include_provenance_without_table_leaks()
     assert "Historical Provenance" in llms
     assert "1980" in llms
     assert "16M+" in llms
+    _assert_review_vocabulary(tools)
+    assert "relative performance direction" in llms
+    assert "momentum direction" not in llms
+    assert "trend duration" not in llms
 
     _assert_no_internal_tables(tools)
     for table_name in INTERNAL_TABLE_NAMES:
         assert not re.search(rf"(?<![A-Za-z0-9_]){re.escape(table_name)}(?![A-Za-z0-9_])", llms)
     _assert_no_prohibited_affirmative_claims(tools)
     _assert_no_prohibited_affirmative_claims({"llms": llms})
+
+
+def test_leadership_public_definitions_do_not_expose_internal_tables():
+    from routers.leadership import leadership_definitions
+
+    definitions = leadership_definitions()
+
+    assert definitions["taxonomy_source"] == "Stock Trends sector and industry taxonomy"
+    _assert_no_internal_tables(definitions)

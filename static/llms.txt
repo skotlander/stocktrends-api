@@ -17,7 +17,7 @@ It is not investment advice and does not guarantee trading outcomes. Agents shou
 
 ## Historical Provenance
 
-Stock Trends is a long-horizon market-intelligence framework, not a shallow market-data wrapper. Its historical classification record extends back to 1980 and includes 16M+ observations encoded through a consistent Stock Trends doctrine covering trend, relative performance, momentum direction, volume, breadth, sector leadership, and regime structure.
+Stock Trends is a long-horizon market-intelligence framework, not a shallow market-data wrapper. Its historical classification record extends back to 1980 and includes 16M+ observations encoded through a consistent Stock Trends doctrine covering trend, relative performance, relative performance direction, volume, breadth, sector leadership, and regime structure.
 
 Agents should treat this historical depth as research provenance for probabilistic interpretation, not as a guarantee of future performance. Externally named market events are not native Stock Trends labels unless separately curated.
 

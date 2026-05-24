@@ -3,7 +3,7 @@
   "name": "Stock Trends API Tools",
   "provider": "Stock Trends Publications",
   "service_description": "Autonomous portfolio intelligence API for AI agents. Agent-native probabilistic market intelligence infrastructure: multi-decade Stock Trends classification history from 1980 with 16M+ observations, ST-IM (Stock Trends Inference Model) forward-return distributions, provider-agnostic inference metadata, market regime analysis, sector breadth confirmation, leadership rotation analytics, STIM Select probabilistic stock lists, portfolio construction and evaluation, and symbol decision scoring across 4, 13, and 40-week investment horizons. Built for agentic research workflows using x402 and MPP payment rails. Outputs are processed, ranked, and interpretation-ready — not raw price data.",
-  "provenance_summary": "Stock Trends is a long-horizon market-intelligence framework, not a shallow market-data wrapper. Its historical classification record extends back to 1980 and includes 16M+ observations encoded through a consistent Stock Trends doctrine covering trend, relative performance, momentum direction, volume, breadth, sector leadership, and regime structure. Agents should treat this historical depth as research provenance for probabilistic interpretation, not as a guarantee of future performance.",
+  "provenance_summary": "Stock Trends is a long-horizon market-intelligence framework, not a shallow market-data wrapper. Its historical classification record extends back to 1980 and includes 16M+ observations encoded through a consistent Stock Trends doctrine covering trend, relative performance, relative performance direction, volume, breadth, sector leadership, and regime structure. Agents should treat this historical depth as research provenance for probabilistic interpretation, not as a guarantee of future performance.",
   "data_provenance": {
     "historical_coverage_start_year": 1980,
     "approximate_observation_count": "16M+",
@@ -13,7 +13,7 @@
     "native_signal_domains": [
       "trend classification",
       "relative performance",
-      "momentum direction",
+      "relative performance direction",
       "volume activity",
       "market breadth",
       "sector leadership",

@@ -14,15 +14,27 @@ from typing import Any
 HISTORICAL_COVERAGE_START_YEAR = 1980
 APPROXIMATE_OBSERVATION_COUNT = "16M+"
 UPDATE_FREQUENCY = "weekly"
+HISTORICAL_INTERPRETATION_LIMIT = (
+    "Historical depth supports research and probabilistic interpretation but "
+    "does not guarantee future performance."
+)
+NO_ADVICE_LIMIT = (
+    "Stock Trends outputs are not investment advice, price targets, or direct "
+    "buy/sell commands."
+)
+EXTERNAL_EVENT_LABEL_LIMIT = (
+    "Externally named market events are not native Stock Trends labels unless "
+    "separately curated."
+)
 
 AI_CONTEXT_PROVENANCE_TEXT = (
     "Stock Trends is a long-horizon market-intelligence framework, not a shallow "
     "market-data wrapper. Its historical classification record extends back to 1980 "
     "and includes 16M+ observations encoded through a consistent Stock Trends doctrine "
-    "covering trend, relative performance, momentum direction, volume, breadth, sector "
-    "leadership, and regime structure. Agents should treat this historical depth as "
-    "research provenance for probabilistic interpretation, not as a guarantee of "
-    "future performance."
+    "covering trend, relative performance, relative performance direction, volume, "
+    "breadth, sector leadership, and regime structure. Agents should treat this "
+    "historical depth as research provenance for probabilistic interpretation, not as "
+    "a guarantee of future performance."
 )
 
 STIM_PROVENANCE_TEXT = (
@@ -36,9 +48,9 @@ STIM_PROVENANCE_TEXT = (
 INDICATORS_PROVENANCE_TEXT = (
     "Stock Trends indicators are part of a multi-decade classification framework "
     "with records extending back to 1980. Their value comes from consistent semantics "
-    "across market history: trend state, trend duration, relative performance, momentum "
-    "direction, and volume activity are encoded in a stable doctrine designed for "
-    "longitudinal research."
+    "across market history: trend state, trend persistence, relative performance, "
+    "relative performance direction, and volume activity are encoded in a stable "
+    "doctrine designed for longitudinal research."
 )
 
 DATA_PROVENANCE: dict[str, Any] = {
@@ -53,7 +65,7 @@ DATA_PROVENANCE: dict[str, Any] = {
     "native_signal_domains": [
         "trend classification",
         "relative performance",
-        "momentum direction",
+        "relative performance direction",
         "volume activity",
         "market breadth",
         "sector leadership",
@@ -68,18 +80,9 @@ DATA_PROVENANCE: dict[str, Any] = {
         "agentic market-intelligence workflows",
     ],
     "important_limits": [
-        (
-            "Historical depth supports research and probabilistic interpretation but "
-            "does not guarantee future performance."
-        ),
-        (
-            "Stock Trends outputs are not investment advice, price targets, or direct "
-            "buy/sell commands."
-        ),
-        (
-            "Externally named market events are not native Stock Trends labels unless "
-            "separately curated."
-        ),
+        HISTORICAL_INTERPRETATION_LIMIT,
+        NO_ADVICE_LIMIT,
+        EXTERNAL_EVENT_LABEL_LIMIT,
     ],
 }
 
@@ -92,7 +95,6 @@ PROVENANCE_METADATA_ENDPOINTS = [
 PROVENANCE_RELEVANT_ENDPOINT_PREFIXES = (
     "/v1/agent/screener",
     "/v1/indicators",
-    "/v1/stim",
     "/v1/selections",
     "/v1/market",
     "/v1/breadth",
@@ -115,7 +117,7 @@ def provenance_reference() -> dict[str, Any]:
         "classification_framework": DATA_PROVENANCE["classification_framework"],
         "semantic_continuity": DATA_PROVENANCE["semantic_continuity"],
         "full_metadata_endpoints": list(PROVENANCE_METADATA_ENDPOINTS),
-        "interpretation_limit": DATA_PROVENANCE["important_limits"][0],
+        "interpretation_limit": HISTORICAL_INTERPRETATION_LIMIT,
     }
 
 
