@@ -2,7 +2,37 @@
   "version": "1.5",
   "name": "Stock Trends API Tools",
   "provider": "Stock Trends Publications",
-  "service_description": "Autonomous portfolio intelligence API for AI agents. Agent-native probabilistic market intelligence infrastructure: ST-IM (Stock Trends Inference Model) forward-return distributions, provider-agnostic inference metadata, market regime analysis, sector breadth confirmation, leadership rotation analytics, STIM Select probabilistic stock lists, portfolio construction and evaluation, and symbol decision scoring across 4, 13, and 40-week investment horizons. Built for agentic research workflows using x402 and MPP payment rails. Outputs are processed, ranked, and interpretation-ready — not raw price data.",
+  "service_description": "Autonomous portfolio intelligence API for AI agents. Agent-native probabilistic market intelligence infrastructure: multi-decade Stock Trends classification history from 1980 with 16M+ observations, ST-IM (Stock Trends Inference Model) forward-return distributions, provider-agnostic inference metadata, market regime analysis, sector breadth confirmation, leadership rotation analytics, STIM Select probabilistic stock lists, portfolio construction and evaluation, and symbol decision scoring across 4, 13, and 40-week investment horizons. Built for agentic research workflows using x402 and MPP payment rails. Outputs are processed, ranked, and interpretation-ready — not raw price data.",
+  "provenance_summary": "Stock Trends is a long-horizon market-intelligence framework, not a shallow market-data wrapper. Its historical classification record extends back to 1980 and includes 16M+ observations encoded through a consistent Stock Trends doctrine covering trend, relative performance, momentum direction, volume, breadth, sector leadership, and regime structure. Agents should treat this historical depth as research provenance for probabilistic interpretation, not as a guarantee of future performance.",
+  "data_provenance": {
+    "historical_coverage_start_year": 1980,
+    "approximate_observation_count": "16M+",
+    "update_frequency": "weekly",
+    "classification_framework": "Stock Trends trend classification methodology",
+    "semantic_continuity": "Stock Trends indicators use a consistent classification doctrine across decades of observations.",
+    "native_signal_domains": [
+      "trend classification",
+      "relative performance",
+      "momentum direction",
+      "volume activity",
+      "market breadth",
+      "sector leadership",
+      "regime structure"
+    ],
+    "research_value": [
+      "long-horizon signal validation",
+      "regime analysis",
+      "sector rotation research",
+      "portfolio construction research",
+      "causal and probabilistic market analysis",
+      "agentic market-intelligence workflows"
+    ],
+    "important_limits": [
+      "Historical depth supports research and probabilistic interpretation but does not guarantee future performance.",
+      "Stock Trends outputs are not investment advice, price targets, or direct buy/sell commands.",
+      "Externally named market events are not native Stock Trends labels unless separately curated."
+    ]
+  },
   "base_url": "https://api.stocktrends.com/v1",
   "openapi": "https://api.stocktrends.com/v1/openapi.json",
   "docs": "https://api.stocktrends.com/v1/docs",
@@ -676,7 +706,7 @@
       "name": "selections_latest",
       "analytical_role": "probabilistic_selection_universe",
       "title": "Selections Latest",
-      "description": "Returns the latest st_select stock list ranked by prob13wk descending (probability of exceeding the 13-week base-period mean return of 2.19%, assuming normal distribution). No threshold filter applied. Use /selections/published/latest for the three-horizon published STIM Select definition. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns the latest base ST-IM selection universe ranked by prob13wk descending (probability of exceeding the 13-week base-period mean return of 2.19%, assuming normal distribution). No published threshold filter applied. Use /selections/published/latest for the three-horizon published STIM Select definition. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/selections/latest",
       "auth_required": true,
@@ -691,7 +721,7 @@
       "name": "selections_history",
       "analytical_role": "probabilistic_selection_universe",
       "title": "Selections History",
-      "description": "Returns historical st_select records. Filter by symbol_exchange, symbol, exchange, or date range. Each entry includes prob13wk. No threshold filter applied unless min_prob13wk is set. Use /selections/published/history for the three-horizon published definition. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns historical base ST-IM selection records. Filter by symbol_exchange, symbol, exchange, or date range. Each entry includes prob13wk. No published threshold filter applied unless min_prob13wk is set. Use /selections/published/history for the three-horizon published definition. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/selections/history",
       "auth_required": true,

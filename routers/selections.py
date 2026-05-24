@@ -60,14 +60,14 @@ def _mast_join(include_mast: bool) -> str:
     "/latest",
     summary="Latest base ST-IM selection universe",
     description=(
-        "Returns the latest base st_select universe for the most recent weekdate. "
+        "Returns the latest base ST-IM selection universe for the most recent weekdate. "
         "This is not the strict published STIM Select filter unless the caller applies "
         "thresholds or uses /v1/selections/published/latest. "
         "Securities are ranked by prob13wk descending — the probability of exceeding the "
         "13-week base-period mean random return (2.19%), assuming a normal distribution. "
         "Use min_prob13wk to apply a custom probability threshold (default: no filter). "
         "Use include_data=true to add Stock Trends signal fields (trend, rsi, vol_tag, etc.) "
-        "per symbol via a join to st_data. "
+        "per symbol. "
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
@@ -76,12 +76,12 @@ def selections_latest(
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
     min_prob13wk: float | None = Query(default=None, description="Optional minimum prob13wk threshold"),
     limit: int = Query(default=2000, ge=1, le=20000, description="Safety limit"),
-    include_data: bool = Query(default=False, description="Join st_data for context fields"),
-    include_mast: bool = Query(default=False, description="Join st_mast for sector/industry and metadata fields"),
-    cs_only: bool = Query(default=True, description="When include_data=true, filter st_data to CS"),
+    include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
+    include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
+    cs_only: bool = Query(default=True, description="When include_data=true, filter to common stocks"),
 ):
     """
-    Latest ST-IM selection list from st_select for the most recent weekdate in the table.
+    Latest ST-IM selection list for the most recent weekdate.
     """
     ex = _norm_exchange(exchange) if exchange else None
     engine = get_engine()
@@ -203,7 +203,7 @@ def selections_latest(
     "/history",
     summary="Historical base ST-IM selection universe records",
     description=(
-        "Returns historical base st_select universe records. These are not the strict "
+        "Returns historical base ST-IM selection universe records. These are not the strict "
         "published STIM Select records unless published thresholds are applied via "
         "/v1/selections/published/history. "
         "Filter by symbol_exchange, symbol, exchange, or date range. "
@@ -222,9 +222,9 @@ def selections_history(
     end: str | None = Query(default=None, description="End date YYYY-MM-DD (inclusive)"),
     min_prob13wk: float | None = Query(default=None, description="Optional minimum prob13wk threshold"),
     limit: int = Query(default=520, ge=1, le=5200, description="Safety limit"),
-    include_data: bool = Query(default=False, description="Join st_data for context fields"),
-    include_mast: bool = Query(default=False, description="Join st_mast for sector/industry and metadata fields"),
-    cs_only: bool = Query(default=True, description="When include_data=true, filter st_data to CS"),
+    include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
+    include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
+    cs_only: bool = Query(default=True, description="When include_data=true, filter to common stocks"),
 ):
     """
     Selection history.

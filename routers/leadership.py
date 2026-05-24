@@ -171,7 +171,7 @@ def leadership_summary_latest(
       - top leaders per sector (ranked by RSI, mt_cnt)
       - top leaders per industry group (ranked by RSI, mt_cnt)
 
-    Taxonomy is from st_listsectorsandindustries via st_data.industry_id = industry_code.
+    Taxonomy uses Stock Trends sector and industry classifications.
     """
     engine = get_engine()
 

@@ -11,9 +11,15 @@ The developer portal (https://developer.stocktrends.com) is for onboarding, plan
 
 ## Overview
 
-The Stock Trends API is an Autonomous portfolio intelligence API for AI agents. Agent-native probabilistic market intelligence infrastructure: ST-IM (Stock Trends Inference Model) forward-return distributions, market regime analysis, sector breadth confirmation, leadership rotation analytics, STIM Select probabilistic stock lists, portfolio construction and evaluation, and symbol decision scoring across 4, 13, and 40-week investment horizons. Built for agentic research workflows using x402 and MPP payment rails. Outputs are processed, ranked, and interpretation-ready — not raw price data.
+The Stock Trends API is an Autonomous portfolio intelligence API for AI agents. Agent-native probabilistic market intelligence infrastructure: multi-decade Stock Trends classification history from 1980 with 16M+ observations, ST-IM (Stock Trends Inference Model) forward-return distributions, market regime analysis, sector breadth confirmation, leadership rotation analytics, STIM Select probabilistic stock lists, portfolio construction and evaluation, and symbol decision scoring across 4, 13, and 40-week investment horizons. Built for agentic research workflows using x402 and MPP payment rails. Outputs are processed, ranked, and interpretation-ready — not raw price data.
 
 It is not investment advice and does not guarantee trading outcomes. Agents should present outputs as research context, not instructions to buy or sell securities.
+
+## Historical Provenance
+
+Stock Trends is a long-horizon market-intelligence framework, not a shallow market-data wrapper. Its historical classification record extends back to 1980 and includes 16M+ observations encoded through a consistent Stock Trends doctrine covering trend, relative performance, momentum direction, volume, breadth, sector leadership, and regime structure.
+
+Agents should treat this historical depth as research provenance for probabilistic interpretation, not as a guarantee of future performance. Externally named market events are not native Stock Trends labels unless separately curated.
 
 The API is aligned with the Stock Trends cognition architecture. ST-IM is the current baseline inference provider, not the final intelligence layer. Future Causal AI providers should integrate through the same provider-agnostic inference contract used by discovery metadata, OpenAPI, x402/MPP previews, and future MCP reasoning tools.
 
@@ -204,13 +210,13 @@ STIM Select identifies securities whose ST-IM lower confidence bounds (xNwk1 fie
 
 Securities are ranked by prob13wk descending — the probability of exceeding the 13-week base-period mean return (2.19%), assuming a normal distribution. The published definition applies a default prob13wk threshold of 55%.
 
-**Base selection endpoints** (return all `st_select` records ranked by `prob13wk DESC`; no threshold filter applied):
+**Base selection endpoints** (return the base ST-IM selection universe ranked by `prob13wk DESC`; no published threshold filter applied):
 
 * `GET /selections/latest`
-  Latest st_select stock list ranked by prob13wk
+  Latest base ST-IM selection universe ranked by prob13wk
 
 * `GET /selections/history`
-  Historical st_select records; filter by symbol, exchange, or date range
+  Historical base ST-IM selection records; filter by symbol, exchange, or date range
 
 **Published STIM Select endpoints** (enforce all three ST-IM lower-bound thresholds plus `prob13wk >= 55%`):
 

@@ -129,13 +129,13 @@ def selections_published_latest(
     min_x13wk1: float = Query(default=BASE_13WK, description="Minimum lower confidence bound for 13-week return"),
     min_x40wk1: float = Query(default=BASE_40WK, description="Minimum lower confidence bound for 40-week return"),
     limit: int = Query(default=2000, ge=1, le=20000, description="Safety limit"),
-    include_data: bool = Query(default=False, description="Join st_data for context fields"),
-    include_mast: bool = Query(default=False, description="Join st_mast for sector/industry and metadata fields"),
-    cs_only: bool = Query(default=True, description="When include_data=true, filter st_data to CS"),
+    include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
+    include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
+    cs_only: bool = Query(default=True, description="When include_data=true, filter to common stocks"),
 ):
     """
     Latest published Select list:
-    st_select joined to st_returnmeans and filtered to the published definition.
+    Base ST-IM selection universe filtered to the published definition.
     """
     ex = _norm_exchange(exchange) if exchange else None
     engine = get_engine()
@@ -314,13 +314,13 @@ def selections_published_history(
     min_x13wk1: float = Query(default=BASE_13WK, description="Minimum lower confidence bound for 13-week return"),
     min_x40wk1: float = Query(default=BASE_40WK, description="Minimum lower confidence bound for 40-week return"),
     limit: int = Query(default=5200, ge=1, le=50000, description="Safety limit"),
-    include_data: bool = Query(default=False, description="Join st_data for context fields"),
-    include_mast: bool = Query(default=False, description="Join st_mast for sector/industry and metadata fields"),
-    cs_only: bool = Query(default=True, description="When include_data=true, filter st_data to CS"),
+    include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
+    include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
+    cs_only: bool = Query(default=True, description="When include_data=true, filter to common stocks"),
 ):
     """
     Published Select history:
-    st_select joined to st_returnmeans and filtered to the published definition.
+    Base ST-IM selection universe filtered to the published definition.
     """
     engine = get_engine()
 

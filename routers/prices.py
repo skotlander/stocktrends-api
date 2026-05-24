@@ -75,7 +75,7 @@ def prices_latest(
     cs_only: bool = Query(default=True, description="Filter to Common Stocks only (type='CS')"),
 ):
     """
-    Latest weekly price row from st_data for a specific instrument.
+    Latest weekly price row for a specific instrument.
     """
     s, ex = _resolve_symbol_exchange(
         request=request,
@@ -152,7 +152,7 @@ def prices_history(
     limit: int = Query(default=260, ge=1, le=2600, description="Max rows to return (260 ~ 5 years weekly)"),
 ):
     """
-    Weekly price history from st_data for a specific instrument.
+    Weekly price history for a specific instrument.
     Returns rows ascending by weekdate.
     """
     s, ex = _resolve_symbol_exchange(

@@ -18,6 +18,12 @@ from discovery.inference_semantics import (
     STIM_PROVIDER_PROFILE_ENDPOINT,
     stim_interpretation_guidance,
 )
+from discovery.provenance import (
+    INDICATORS_PROVENANCE_TEXT,
+    STIM_PROVENANCE_TEXT,
+    endpoint_needs_provenance,
+    provenance_reference,
+)
 
 SUPPORTED_RAILS = ["subscription", "x402", "mpp"]
 
@@ -318,6 +324,8 @@ def _metadata(
         metadata["inference_provider"] = copy.deepcopy(inference_provider)
     if cognition_architecture is not None:
         metadata["cognition_architecture"] = cognition_architecture
+    if endpoint_needs_provenance(path):
+        metadata["provenance_reference"] = provenance_reference()
     return metadata
 
 
@@ -401,8 +409,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         category="indicators",
         pricing_rule_id="indicators_latest_paid",
         resource_description=(
-            "Latest Stock Trends indicator snapshot for a symbol, including trend state, trend age, "
-            "relative performance, volume tag, and signal fields used by Stock Trends research workflows."
+            "Latest Stock Trends indicator snapshot for a symbol. "
+            f"{INDICATORS_PROVENANCE_TEXT}"
         ),
         bazaar_output_description=(
             "Returns latest Stock Trends indicator fields for a requested symbol, including "
@@ -464,8 +472,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         category="indicators",
         pricing_rule_id="indicators_history_paid",
         resource_description=(
-            "Historical weekly Stock Trends indicator series for a symbol, including trend state, "
-            "trend persistence, trend maturity, relative performance, volume tags, and signal metadata."
+            "Historical weekly Stock Trends indicator series for a symbol. "
+            f"{INDICATORS_PROVENANCE_TEXT}"
         ),
         bazaar_output_description=(
             "Returns a weekly indicator history for a requested symbol with rows containing "
@@ -530,7 +538,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         pricing_rule_id="stim_latest_paid",
         resource_description=(
             "Latest Stock Trends Inference Model (ST-IM) outputs for a symbol: forward return "
-            "expectations and statistical distributions across 4-week, 13-week, and 40-week horizons."
+            "expectations and statistical distributions across 4-week, 13-week, and 40-week horizons. "
+            f"{STIM_PROVENANCE_TEXT}"
         ),
         bazaar_output_description=(
             "Returns latest ST-IM distribution fields for a symbol, including x4wk, x13wk, x40wk "
@@ -575,7 +584,10 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         title="STIM History",
         category="stim",
         pricing_rule_id="stim_history_paid",
-        resource_description="Historical ST-IM forward return distribution series for a symbol.",
+        resource_description=(
+            "Historical ST-IM forward return distribution series for a symbol. "
+            f"{STIM_PROVENANCE_TEXT}"
+        ),
         bazaar_output_description=(
             "Returns historical ST-IM records with expected returns, bounds, and standard deviations "
             "for 4-week, 13-week, and 40-week horizons."
@@ -661,8 +673,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         title="Selections Latest",
         category="selections",
         pricing_rule_id="selections_latest_paid",
-        resource_description="Latest base st_select list ranked by prob13wk descending, without the published STIM Select threshold filter.",
-        bazaar_output_description="Returns the latest st_select records with weekdate, exchange, symbol, prob13wk, and symbol_exchange; optional joins can add Stock Trends signal and instrument metadata.",
+        resource_description="Latest base ST-IM selection universe ranked by prob13wk descending, without the published STIM Select threshold filter.",
+        bazaar_output_description="Returns the latest base ST-IM selection records with weekdate, exchange, symbol, prob13wk, and symbol_exchange; optional enrichment can add Stock Trends signal and instrument metadata.",
         purpose="Retrieve latest base selection records ranked by prob13wk.",
         investment_agent_value="Lets agents inspect the broad selection universe before applying published STIM Select criteria or joining signal fields.",
         workflow_role="Selection universe discovery.",
@@ -677,7 +689,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         safe_example_request={"method": "GET", "path": "/v1/selections/latest", "query": {"limit": 25, "include_data": False}},
         response_shape=["request_id", "weekdate", "exchange", "min_prob13wk", "include_data", "include_mast", "cs_only", "count", "data[].weekdate", "data[].exchange", "data[].symbol", "data[].prob13wk", "data[].symbol_exchange"],
         example_object={"request_id": "req_demo", "weekdate": "YYYY-MM-DD", "count": 1, "data": [{"symbol_exchange": "SAMPLE-N", "prob13wk": 0.0}]},
-        output_summary="Latest base st_select list ranked by prob13wk descending.",
+        output_summary="Latest base ST-IM selection universe ranked by prob13wk descending.",
         analytical_role=ROLE_PROBABILISTIC_SELECTION_UNIVERSE,
         notes=[
             "No published threshold filter is applied unless min_prob13wk is set.",
@@ -696,8 +708,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         title="Selections History",
         category="selections",
         pricing_rule_id="selections_history_paid",
-        resource_description="Historical base st_select records for a symbol, exchange, or date range.",
-        bazaar_output_description="Returns historical st_select records with weekdate, exchange, symbol, prob13wk, symbol_exchange, and optional joined signal or instrument fields.",
+        resource_description="Historical base ST-IM selection records for a symbol, exchange, or date range.",
+        bazaar_output_description="Returns historical base ST-IM selection records with weekdate, exchange, symbol, prob13wk, symbol_exchange, and optional signal or instrument fields.",
         purpose="Retrieve base selection history for symbol or date-range review.",
         investment_agent_value="Helps agents inspect how selection membership and prob13wk changed over time.",
         workflow_role="Historical selection context.",
@@ -716,7 +728,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         safe_example_request={"method": "GET", "path": "/v1/selections/history", "query": {"symbol_exchange": "IBM-N", "limit": 52}},
         response_shape=["request_id", "symbol", "exchange", "symbol_exchange", "start", "end", "min_prob13wk", "include_data", "include_mast", "cs_only", "count", "data[].weekdate", "data[].prob13wk", "data[].symbol_exchange"],
         example_object={"request_id": "req_demo", "symbol_exchange": "SAMPLE-N", "count": 1, "data": [{"weekdate": "YYYY-MM-DD", "symbol_exchange": "SAMPLE-N", "prob13wk": 0.0}]},
-        output_summary="Historical base st_select records with prob13wk.",
+        output_summary="Historical base ST-IM selection records with prob13wk.",
         analytical_role=ROLE_PROBABILISTIC_SELECTION_UNIVERSE,
         notes=["Use published selection endpoints for the documented three-horizon STIM Select definition."],
         related_endpoints=["/v1/selections/latest", "/v1/selections/published/history"],
@@ -1592,6 +1604,7 @@ def build_endpoint_preview(
         "inference_contract",
         "inference_provider",
         "cognition_architecture",
+        "provenance_reference",
     ):
         if field in entry:
             preview[field] = copy.deepcopy(entry[field])
@@ -1648,6 +1661,8 @@ def build_compact_endpoint_preview(
         preview["safe_example_request"] = safe_example_request
     if entry.get("analytical_role"):
         preview["analytical_role"] = entry["analytical_role"]
+    if entry.get("provenance_reference"):
+        preview["provenance_reference"] = copy.deepcopy(entry["provenance_reference"])
     return preview
 
 
@@ -1825,6 +1840,7 @@ def build_tool_template(path: str) -> dict[str, Any] | None:
         "inference_contract",
         "inference_provider",
         "cognition_architecture",
+        "provenance_reference",
     ):
         if field in entry:
             template[field] = copy.deepcopy(entry[field])
@@ -2111,6 +2127,7 @@ def build_bazaar_extension(path: str, method: str | None = None) -> dict[str, An
         "inference_contract": copy.deepcopy((entry or {}).get("inference_contract")),
         "inference_provider": copy.deepcopy((entry or {}).get("inference_provider")),
         "cognition_architecture": (entry or {}).get("cognition_architecture"),
+        "provenance_reference": copy.deepcopy((entry or {}).get("provenance_reference")),
         "related_endpoints": copy.deepcopy((entry or {}).get("related_endpoints", [])),
         "next_recommended_calls": copy.deepcopy((entry or {}).get("next_recommended_calls", [])),
         "safe_for_autonomous_execution_with_budget_controls": True,
@@ -2209,6 +2226,8 @@ def build_compact_bazaar_extension(path: str, method: str | None = None) -> dict
     if entry is not None and entry.get("inference_provider"):
         info["provider"] = copy.deepcopy(entry["inference_provider"])
         info["inference_contract"] = INFERENCE_CONTRACT_ENDPOINT
+    if entry is not None and entry.get("provenance_reference"):
+        info["provenance_reference"] = copy.deepcopy(entry["provenance_reference"])
 
     return {
         "bazaar": {

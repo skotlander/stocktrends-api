@@ -19,6 +19,13 @@ from discovery.inference_semantics import (
     inference_contract,
     stim_provider_profile,
 )
+from discovery.provenance import (
+    AI_CONTEXT_PROVENANCE_TEXT,
+    INDICATORS_PROVENANCE_TEXT,
+    STIM_PROVENANCE_TEXT,
+    data_provenance,
+    provenance_reference,
+)
 from discovery.service_meta import DATASET_DESCRIPTION, SERVICE_POSITIONING
 from pricing.classifier import classify_request as _classify_request, NON_METERED_PATHS
 from payments.policy_provider import (
@@ -151,6 +158,7 @@ _TOOL_TEMPLATES = [
         "title": "AI Context",
         "description": (
             "Returns dataset overview, endpoint groups, access model, and agent usage guidance. "
+            "Includes long-horizon Stock Trends provenance for records extending back to 1980. "
             "Secondary explanatory context for agents after reading the machine-readable "
             "/v1/ai/tools manifest."
         ),
@@ -232,7 +240,7 @@ _TOOL_TEMPLATES = [
         "title": "Workflow Registry",
         "description": (
             "Returns the static workflow registry with live per-step STC costs resolved from "
-            "api_pricing_rules. Use this to understand available multi-step workflows and their costs."
+            "the pricing engine. Use this to understand available multi-step workflows and their costs."
         ),
         "endpoint": "/v1/workflows",
         "method": "GET",
@@ -353,7 +361,8 @@ _TOOL_TEMPLATES = [
         "title": "Indicator Metadata",
         "description": (
             "Planning helper with definitions for Stock Trends fields such as trend, trend_cnt, "
-            "mt_cnt, rsi, rsi_updn, and vol_tag."
+            "mt_cnt, rsi, rsi_updn, and vol_tag. Includes the multi-decade indicator "
+            "provenance reference."
         ),
         "endpoint": "/v1/meta/indicators",
         "method": "GET",
@@ -384,7 +393,8 @@ _TOOL_TEMPLATES = [
         "description": (
             "Planning helper explaining the ST-IM provider profile, fields, base-period mean "
             "returns, confidence bounds, and 4, 13, and 40 week horizons. ST-IM is the "
-            "current baseline inference provider, not the final intelligence layer."
+            "current baseline inference provider, not the final intelligence layer. Includes "
+            "historical classification provenance and limitations language."
         ),
         "endpoint": "/v1/meta/stim",
         "method": "GET",
@@ -569,7 +579,8 @@ _TOOL_TEMPLATES = [
         "description": (
             "Retrieves the latest ST-IM (Stock Trends Inference Model) outputs: forward return "
             "expectations and statistical distributions for a symbol. "
-            "Covers forward return distributions across 4, 13, and 40-week horizons."
+            "Covers forward return distributions across 4, 13, and 40-week horizons. "
+            f"{STIM_PROVENANCE_TEXT}"
         ),
         "endpoint": "/v1/stim/latest",
         "method": "GET",
@@ -593,7 +604,8 @@ _TOOL_TEMPLATES = [
             "Retrieves historical ST-IM (Stock Trends Inference Model) distribution records for a symbol. "
             "Returns forward return distribution fields across 4, 13, and 40-week horizons: "
             "xNwk1 (lower CI bound), xNwk (mean), xNwk2 (upper CI bound), xNwksd (std deviation). "
-            "Ordering depends on query scope; broad queries return most recent records first."
+            "Ordering depends on query scope; broad queries return most recent records first. "
+            f"{STIM_PROVENANCE_TEXT}"
         ),
         "endpoint": "/v1/stim/history",
         "method": "GET",
@@ -615,10 +627,10 @@ _TOOL_TEMPLATES = [
         "name": "selections_latest",
         "title": "Selections Latest",
         "description": (
-            "Returns the latest st_select stock list for the most recent weekdate, "
+            "Returns the latest base ST-IM selection universe for the most recent weekdate, "
             "ranked by prob13wk descending — the probability of exceeding the "
             "13-week base-period mean random return (2.19%), assuming a normal distribution. "
-            "No threshold filter is applied; all st_select records for the week are returned. "
+            "No published threshold filter is applied; all base selection records for the week are returned. "
             "Use /selections/published/latest for the three-horizon published STIM Select definition."
         ),
         "endpoint": "/v1/selections/latest",
@@ -644,7 +656,7 @@ _TOOL_TEMPLATES = [
         "name": "selections_history",
         "title": "Selections History",
         "description": (
-            "Returns historical st_select records. "
+            "Returns historical base ST-IM selection records. "
             "Filter by symbol_exchange, symbol, exchange, or date range. "
             "Each entry includes prob13wk — probability of exceeding the 13-week base-period "
             "mean random return (2.19%), assuming a normal distribution. "
@@ -913,6 +925,7 @@ def _build_workflow_summary(workflow: dict) -> dict:
         "best_for": workflow.get("best_for"),
         "analytical_role": workflow.get("analytical_role"),
         "research_goal": workflow.get("research_goal"),
+        "provenance_reference": provenance_reference(),
         "agent_goal_examples": workflow.get("agent_goal_examples", []),
         "symbol_selection_guidance": workflow.get("symbol_selection_guidance"),
         "interpretation_guidance": workflow.get("interpretation_guidance"),
@@ -953,6 +966,8 @@ def ai_context():
         "description": DATASET_DESCRIPTION,
         "service_description": SERVICE_POSITIONING,
         "dataset_description": DATASET_DESCRIPTION,
+        "provenance_summary": AI_CONTEXT_PROVENANCE_TEXT,
+        "data_provenance": data_provenance(),
         "service_identity": {
             "short_name": "Stock Trends API",
             "primary_category": "agent_native_probabilistic_market_intelligence_infrastructure",
@@ -977,6 +992,7 @@ def ai_context():
                 "Stock Trends trend classification",
                 "relative performance versus benchmark",
                 "trend persistence and maturity",
+                "long-horizon classification provenance",
                 "ST-IM forward-return distributions",
                 "market structure confirmation",
             ],
@@ -1011,6 +1027,8 @@ def ai_context():
         "coverage": {
             "region": "North America",
             "asset_types": ["equities", "ETFs"],
+            "historical_coverage_start_year": 1980,
+            "approximate_observation_count": "16M+",
             "forecast_horizons_weeks": [4, 13, 40]
         },
         "core_indicators": [
@@ -1059,7 +1077,7 @@ def ai_context():
                 "market_intelligence_filter": "Ranks candidate securities by signal quality before deeper analysis.",
                 "probabilistic_forward_inference": "ST-IM forward return distributions. Not momentum — requires base-period mean comparison.",
                 "probabilistic_selection_list": "STIM Select: securities satisfying all three ST-IM lower-bound thresholds plus prob13wk >= 55%.",
-                "probabilistic_selection_universe": "Base st_select universe without the published three-horizon threshold filter.",
+                "probabilistic_selection_universe": "Base ST-IM selection universe without the published three-horizon threshold filter.",
                 "symbol_signal_intelligence": "Current and historical Stock Trends indicator fields for a symbol.",
                 "symbol_decision_engine": "Deterministic decision-support context combining symbol signals and regime context.",
                 "portfolio_construction_engine": "Produces ranked equal-weight portfolio construction analysis from eligible signal candidates.",
@@ -1165,6 +1183,8 @@ def ai_context():
                 "provider_role": "current_baseline_inference_provider",
                 "provider_profile_endpoint": STIM_PROVIDER_PROFILE_ENDPOINT,
                 "not_final_intelligence_layer": True,
+                "provenance_summary": STIM_PROVENANCE_TEXT,
+                "provenance_reference": provenance_reference(),
                 "output_type": "probabilistic forward return distribution",
                 "not_momentum": True,
                 "not": ["momentum_indicator", "simple_price_change_model", "generic_technical_indicator"],
@@ -1234,7 +1254,7 @@ def ai_context():
             "selections_latest": {
                 "endpoints": ["/v1/selections/latest", "/v1/selections/history"],
                 "use_when": "filtered and ranked STIM candidate universe",
-                "semantics": "base st_select records ranked by prob13wk; no published threshold filter applied",
+                "semantics": "base ST-IM selection records ranked by prob13wk; no published threshold filter applied",
                 "interpret_with": ["/v1/meta/inference", "/v1/meta/stim", "/v1/stim/latest"],
             },
             "selections_published": {
@@ -1254,7 +1274,7 @@ def ai_context():
             "indicators": {
                 "endpoints": ["/v1/indicators/latest", "/v1/indicators/history"],
                 "use_when": "Stock Trends signal context for a symbol",
-                "semantics": "trend classification, persistence, maturity, RSI baseline 100, volume tags",
+                "semantics": INDICATORS_PROVENANCE_TEXT,
                 "interpret_with": ["/v1/meta/indicators"],
             },
             "regime": {
@@ -1677,6 +1697,8 @@ def ai_tools():
         "provider": "stocktrends",
         "version": "v1",
         "service_description": SERVICE_POSITIONING,
+        "provenance_summary": AI_CONTEXT_PROVENANCE_TEXT,
+        "data_provenance": data_provenance(),
         "discovery_entrypoints": {
             "primary_machine_readable": "/v1/ai/tools",
             "secondary_explanatory": "/v1/ai/context",
@@ -1715,6 +1737,7 @@ def ai_tools():
             "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
             "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
             "Use /v1/meta/inference for the provider-agnostic inference contract; use /v1/meta/stim for the current ST-IM baseline provider profile.",
+            "Treat the 1980+ historical classification record and 16M+ observations as research provenance, not a guarantee of future performance.",
             "Use helper endpoints for autonomous planning: /v1/cost-estimate, /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/inference, /v1/meta/stim, /v1/meta/stwr, /v1/leadership/definitions, and /v1/ai/proof/market-edge.",
             "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and rails.",
             "Use /v1/docs or /v1/openapi.json for exact request/response contracts.",
@@ -1733,7 +1756,7 @@ def ai_tools():
             "cost_estimate_endpoint": "/v1/cost-estimate",
             "x402_preview_location": "HTTP 402 response body field stocktrends_preview",
             "note": (
-                "STC costs are dynamic and resolved from api_pricing_rules. "
+                "STC costs are dynamic and resolved from the pricing catalog. "
                 "Do not hardcode costs — always fetch /v1/pricing/catalog at agent startup."
             ),
         },
@@ -1830,6 +1853,7 @@ def ai_tools():
             "For x402, inspect the 402 stocktrends_preview before paying.",
             "Use /v1/cost-estimate to plan STC spend before executing a workflow.",
             "Use /v1/ai/context as the secondary explanatory endpoint for dataset and endpoint overview.",
+            "Use data_provenance for historical coverage, observation count, semantic continuity, and limitations.",
             "See /v1/docs and /v1/openapi.json for exact request/response contracts.",
         ],
     }

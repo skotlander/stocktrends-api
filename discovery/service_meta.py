@@ -1,6 +1,11 @@
+from discovery.provenance import APPROXIMATE_OBSERVATION_COUNT, HISTORICAL_COVERAGE_START_YEAR
+
+
 SERVICE_POSITIONING = (
     "Autonomous portfolio intelligence API for AI agents. "
     "Agent-native probabilistic market intelligence infrastructure: "
+    f"multi-decade Stock Trends classification history from {HISTORICAL_COVERAGE_START_YEAR} "
+    f"with {APPROXIMATE_OBSERVATION_COUNT} observations, "
     "ST-IM (Stock Trends Inference Model) forward-return distributions, "
     "provider-agnostic inference metadata, "
     "market regime analysis, sector breadth confirmation, leadership rotation analytics, "
@@ -12,6 +17,8 @@ SERVICE_POSITIONING = (
 
 DATASET_DESCRIPTION = (
     "Weekly structured market intelligence dataset covering North American equities and ETFs, "
+    f"with records extending back to {HISTORICAL_COVERAGE_START_YEAR} and "
+    f"{APPROXIMATE_OBSERVATION_COUNT} historical observations, "
     "including Stock Trends trend classification, trend persistence, trend maturity, relative "
     "strength, unusual volume signals, breadth, leadership, ST-IM (Stock Trends Inference Model) "
     "forward return distributions, provider-agnostic inference metadata, market regime analytics, "

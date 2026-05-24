@@ -206,7 +206,7 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
                 detail={
                     "request_id": request_id,
                     "error": "no_signal_data",
-                    "message": "No weekdates available in st_data.",
+                    "message": "No Stock Trends weekdates available.",
                 },
             )
 
@@ -572,7 +572,7 @@ def _evaluation_notes(
     notes: list[str] = []
     if positions_missing > 0:
         notes.append(
-            f"{positions_missing} of {positions_total} positions not found in st_data "
+            f"{positions_missing} of {positions_total} positions not found in the Stock Trends coverage "
             f"for weekdate {latest_wd} — excluded from aggregates"
         )
         notes.append(
@@ -685,7 +685,7 @@ def evaluate_portfolio(body: EvaluatePortfolioRequest, request: Request):
                 detail={
                     "request_id": request_id,
                     "error": "no_signal_data",
-                    "message": "No weekdates available in st_data.",
+                    "message": "No Stock Trends weekdates available.",
                 },
             )
 
@@ -843,7 +843,7 @@ def evaluate_portfolio(body: EvaluatePortfolioRequest, request: Request):
                 "error": "all_positions_missing",
                 "message": (
                     f"None of the {len(parsed)} submitted positions were found "
-                    f"in st_data for weekdate {latest_wd}."
+                    f"in Stock Trends coverage for weekdate {latest_wd}."
                 ),
             },
         )
@@ -1272,7 +1272,7 @@ def compare_portfolios(body: ComparePortfolioRequest, request: Request):
                 detail={
                     "request_id": request_id,
                     "error": "no_signal_data",
-                    "message": "No weekdates available in st_data.",
+                    "message": "No Stock Trends weekdates available.",
                 },
             )
 
@@ -1382,7 +1382,7 @@ def compare_portfolios(body: ComparePortfolioRequest, request: Request):
                 "request_id": request_id,
                 "error": "all_positions_missing_both",
                 "message": (
-                    f"No positions from either portfolio were found in st_data "
+                    f"No positions from either portfolio were found in Stock Trends coverage "
                     f"for weekdate {latest_wd}."
                 ),
             },
@@ -1396,7 +1396,7 @@ def compare_portfolios(body: ComparePortfolioRequest, request: Request):
                 "side": "left",
                 "message": (
                     f"None of the {len(left_parsed)} left positions were found "
-                    f"in st_data for weekdate {latest_wd}."
+                    f"in Stock Trends coverage for weekdate {latest_wd}."
                 ),
             },
         )
@@ -1409,7 +1409,7 @@ def compare_portfolios(body: ComparePortfolioRequest, request: Request):
                 "side": "right",
                 "message": (
                     f"None of the {len(right_parsed)} right positions were found "
-                    f"in st_data for weekdate {latest_wd}."
+                    f"in Stock Trends coverage for weekdate {latest_wd}."
                 ),
             },
         )

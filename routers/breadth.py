@@ -324,7 +324,7 @@ def breadth_sector_latest(
         if not latest:
             raise HTTPException(
                 status_code=404,
-                detail={"request_id": request.state.request_id, "error": "no_data", "message": "No st_data available."},
+                detail={"request_id": request.state.request_id, "error": "no_data", "message": "No Stock Trends data available."},
             )
         wd = str(latest)
 

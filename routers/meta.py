@@ -5,6 +5,12 @@ from __future__ import annotations
 from fastapi import APIRouter, Request
 
 from discovery.inference_semantics import inference_contract, stim_provider_profile
+from discovery.provenance import (
+    INDICATORS_PROVENANCE_TEXT,
+    STIM_PROVENANCE_TEXT,
+    data_provenance,
+    provenance_reference,
+)
 from routers.signals import VALID_EXCHANGES
 
 router = APIRouter(prefix="/meta", tags=["meta"])
@@ -18,6 +24,8 @@ def meta_indicators(request: Request):
     """
     return {
         "request_id": getattr(request.state, "request_id", None),
+        "provenance_summary": INDICATORS_PROVENANCE_TEXT,
+        "data_provenance": data_provenance(),
         "exchanges": {
             "allowed": sorted(list(VALID_EXCHANGES)),
             "meaning": {
@@ -114,6 +122,7 @@ def meta_indicators(request: Request):
                 "structured, repeatable signal states that can be consumed by multiple "
                 "inference providers."
             ),
+            "provenance_reference": provenance_reference(),
             "inference_contract": "/v1/meta/inference",
             "current_baseline_provider": "/v1/meta/stim",
         },
@@ -144,6 +153,8 @@ def meta_stim(request: Request):
     return {
         "request_id": getattr(request.state, "request_id", None),
         "inference_contract": "/v1/meta/inference",
+        "description": STIM_PROVENANCE_TEXT,
+        "data_provenance": data_provenance(),
         "inference_provider": {
             "provider_id": profile["provider_id"],
             "provider_name": profile["provider_name"],
@@ -153,7 +164,6 @@ def meta_stim(request: Request):
         },
         "base_period_mean_returns_pct": profile["base_period_mean_returns_pct"],
         "forecast_horizons": profile["forecast_horizons"],
-        "returnmeans_table": "st_returnmeans",
         "columns": {
             "x4wk1/x13wk1/x40wk1": "Lower confidence interval bound for mean return (%)",
             "x4wk2/x13wk2/x40wk2": "Upper confidence interval bound for mean return (%)",
@@ -173,7 +183,7 @@ def meta_stim(request: Request):
             "providers should integrate through /v1/meta/inference rather than "
             "forcing all cognition surfaces into ST-IM-specific fields."
         ),
-        "missing_data_note": "If a symbol has no row for a weekdate in st_returnmeans, ST-IM could not estimate reliably due to insufficient samples.",
+        "missing_data_note": "If a symbol has no ST-IM estimate for a weekdate, the provider could not estimate reliably due to insufficient samples.",
     }
 
 
@@ -187,7 +197,7 @@ def meta_stwr(request: Request):
         "endpoint_family": "/v1/stwr/reports/latest and /v1/stwr/reports/history",
         "reports": [
             {"code": "pw", "name": "Picks of the Week", "hint": "Bullish xover or weak bearish + RSI+/volume rules"},
-            {"code": "select", "name": "ST-IM Select stocks of the Week", "hint": "Published select = st_select filtered by returnmeans CI rules"},
+            {"code": "select", "name": "ST-IM Select stocks of the Week", "hint": "Published select = ST-IM probability and confidence-interval criteria"},
             {"code": "toptrend", "name": "Top Trending", "hint": "Bullish bucket + momentum filters"},
             {"code": "bullcross", "name": "Bullish Crossovers", "hint": "trend=v^"},
             {"code": "bearcross", "name": "Bearish Crossovers", "hint": "trend=^v"},

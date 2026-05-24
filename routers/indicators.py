@@ -69,7 +69,7 @@ def indicators_latest(
     cs_only: bool = Query(default=True, description="Filter to Common Stocks only (type='CS')"),
 ):
     """
-    Latest weekly Stock Trends indicators from st_data for a specific instrument.
+    Latest weekly Stock Trends indicators for a specific instrument.
     """
     s, ex = _resolve_symbol_exchange(
         request=request,
@@ -158,7 +158,7 @@ def indicators_history(
     limit: int = Query(default=260, ge=1, le=2600, description="Max rows to return"),
 ):
     """
-    Weekly Stock Trends indicator history from st_data for a specific instrument.
+    Weekly Stock Trends indicator history for a specific instrument.
     Returns rows ascending by weekdate.
     """
     s, ex = _resolve_symbol_exchange(

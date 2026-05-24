@@ -179,7 +179,7 @@ def stim_latest(
         "contains expected returns and standard deviations for 4-week, 13-week, and 40-week "
         "horizons (xNwk, xNwksd, xNwk1, xNwk2). Rows returned ascending by weekdate. "
         "Set include_gaps=true to identify weeks where ST-IM estimates are absent "
-        "(insufficient sample vs available st_data). "
+        "(insufficient sample versus the latest available market week). "
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
@@ -193,7 +193,7 @@ def stim_history(
     limit: int = Query(default=260, ge=1, le=2600, description="Safety limit"),
     include_gaps: bool = Query(
         default=False,
-        description="If true, include missing weekdates vs st_data within start/end (may be slower).",
+        description="If true, include missing weekdates versus the available market weeks within start/end (may be slower).",
     ),
 ):
     s, ex = _resolve_symbol_exchange(

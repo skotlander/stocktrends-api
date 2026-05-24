@@ -133,7 +133,7 @@ def evaluate_symbol(body: EvaluateSymbolRequest, request: Request):
                 detail={
                     "request_id": request_id,
                     "error": "no_signal_data",
-                    "message": "No weekdates available in st_data.",
+                    "message": "No Stock Trends weekdates available.",
                 },
             )
 

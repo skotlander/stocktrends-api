@@ -34,7 +34,7 @@ def instrument_lookup(
 ):
     """
     Lookup all instruments that match a symbol across exchanges.
-    Uses st_mast (fast). Returns symbol_exchange keys like IBM-N.
+    Uses instrument metadata. Returns symbol_exchange keys like IBM-N.
     """
     s = _norm_symbol(symbol)
     engine = get_market_engine()

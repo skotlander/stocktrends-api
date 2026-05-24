@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from discovery.inference_semantics import openapi_inference_extension
+from discovery.provenance import AI_CONTEXT_PROVENANCE_TEXT, data_provenance, provenance_reference
 from discovery.service_meta import SERVICE_POSITIONING
 from middleware.request_id import RequestIdMiddleware
 from middleware.api_key import ApiKeyMiddleware
@@ -135,6 +136,8 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
     openapi_schema["servers"] = [
         {"url": "/v1", "description": "Stock Trends API v1"},
     ]
+    openapi_schema["x-stocktrends-provenance-summary"] = AI_CONTEXT_PROVENANCE_TEXT
+    openapi_schema["x-stocktrends-data-provenance"] = data_provenance()
 
     components = openapi_schema.setdefault("components", {})
     security_schemes = components.setdefault("securitySchemes", {})
@@ -277,6 +280,7 @@ def root():
     return {
         "message": "Start with the machine-readable tools manifest for agent discovery.",
         "description": APP_DESCRIPTION,
+        "provenance_reference": provenance_reference(),
         "planning_helpers": [
             _absolute_url("/v1/cost-estimate"),
             _absolute_url("/v1/workflows"),
@@ -314,6 +318,7 @@ def ai_plugin():
                 "Inspect x402 402 stocktrends_preview metadata before payment. Authentication or "
                 "machine payment is required for protected data endpoints."
             ),
+            "data_provenance": data_provenance(),
             "auth": {
                 "type": "api_key",
                 "in": "header",

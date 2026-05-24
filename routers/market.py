@@ -184,7 +184,7 @@ def market_regime_history(
                 detail={
                     "request_id": getattr(request.state, "request_id", None),
                     "error": "no_signal_data",
-                    "message": "No weekdates available in st_data.",
+                    "message": "No Stock Trends weekdates available.",
                 },
             )
 
@@ -310,7 +310,7 @@ def market_regime_forecast(
                 detail={
                     "request_id": getattr(request.state, "request_id", None),
                     "error": "no_signal_data",
-                    "message": "No weekdates available in st_data.",
+                    "message": "No Stock Trends weekdates available.",
                 },
             )
 

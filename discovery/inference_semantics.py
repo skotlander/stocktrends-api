@@ -10,6 +10,13 @@ from __future__ import annotations
 import copy
 from typing import Any
 
+from discovery.provenance import (
+    STIM_PROVENANCE_TEXT,
+    data_provenance,
+    openapi_provenance_extension,
+    provenance_reference,
+)
+
 
 COGNITION_ARCHITECTURE_DOC = "docs/STOCK_TRENDS_COGNITION_ARCHITECTURE.md"
 INFERENCE_CONTRACT_ENDPOINT = "/v1/meta/inference"
@@ -31,6 +38,7 @@ INFERENCE_CONTRACT: dict[str, Any] = {
         "Agent-facing surfaces should use provider-agnostic inference concepts where practical.",
         "Reasoning interfaces must preserve uncertainty, evidence, explanations, confidence, signal sources, and auditability.",
     ],
+    "framework_provenance": provenance_reference(),
     "provider_agnostic_concepts": {
         "inference_provider": "The model, method, or intelligence source producing an inference output.",
         "signal_source": "The upstream Stock Trends signal family or data product used as evidence.",
@@ -92,6 +100,8 @@ STIM_PROVIDER_PROFILE: dict[str, Any] = {
     "contract_endpoint": INFERENCE_CONTRACT_ENDPOINT,
     "architecture_source": COGNITION_ARCHITECTURE_DOC,
     "full_name": "Stock Trends Inference Model",
+    "description": STIM_PROVENANCE_TEXT,
+    "data_provenance": data_provenance(),
     "output_type": "probabilistic forward return distribution",
     "signal_sources": [
         "Stock Trends trend classification",
@@ -237,16 +247,21 @@ def stim_interpretation_guidance() -> dict[str, Any]:
 
 def openapi_inference_extension(path: str) -> dict[str, Any] | None:
     full_path = path if path.startswith("/v1/") else f"/v1{path}"
+    extension: dict[str, Any] = {}
+    provenance_extension = openapi_provenance_extension(full_path)
+    if provenance_extension:
+        extension.update(provenance_extension)
 
     if full_path == INFERENCE_CONTRACT_ENDPOINT:
-        return {
+        extension.update({
             "x-stocktrends-cognition-contract": "provider_agnostic_inference_contract",
             "x-stocktrends-cognition-architecture": COGNITION_ARCHITECTURE_DOC,
             "x-stocktrends-inference-provider-agnostic": True,
-        }
+        })
+        return extension
 
     if full_path == STIM_PROVIDER_PROFILE_ENDPOINT or full_path.startswith("/v1/stim"):
-        return {
+        extension.update({
             "x-stocktrends-cognition-contract": "provider_agnostic_inference_contract",
             "x-stocktrends-cognition-architecture": COGNITION_ARCHITECTURE_DOC,
             "x-stocktrends-inference-provider": "stim",
@@ -254,14 +269,16 @@ def openapi_inference_extension(path: str) -> dict[str, Any] | None:
             "x-stocktrends-provider-profile": STIM_PROVIDER_PROFILE_ENDPOINT,
             "x-stocktrends-inference-contract": INFERENCE_CONTRACT_ENDPOINT,
             "x-stocktrends-not-final-intelligence-layer": True,
-        }
+        })
+        return extension
 
     if full_path.startswith("/v1/selections") or full_path.startswith("/v1/portfolio") or full_path.startswith("/v1/decision"):
-        return {
+        extension.update({
             "x-stocktrends-cognition-contract": "provider_agnostic_inference_contract",
             "x-stocktrends-cognition-architecture": COGNITION_ARCHITECTURE_DOC,
             "x-stocktrends-inference-contract": INFERENCE_CONTRACT_ENDPOINT,
             "x-stocktrends-reasoning-interpretation": "decision_support_with_uncertainty_evidence_and_confidence",
-        }
+        })
+        return extension
 
-    return None
+    return extension or None

@@ -812,8 +812,8 @@ def stwr_reports_latest(
     request: Request,
     rpt: str = Query(..., description="Report code: e.g. pw, bullcross, toptrend, ..."),
     exchange: str = Query(..., description="Exchange code: N,Q,A,B,T,I"),
-    weekdate: str | None = Query(default=None, description="Override weekdate YYYY-MM-DD; default latest in st_data for exchange"),
-    include_mast: bool = Query(default=False, description="Join st_mast for richer metadata"),
+    weekdate: str | None = Query(default=None, description="Override weekdate YYYY-MM-DD; defaults to the latest available report week for the exchange"),
+    include_mast: bool = Query(default=False, description="Include richer instrument metadata"),
     limit: int | None = Query(default=None, ge=1, le=50000, description="Override report default limit"),
 
     # Common knobs (safe to pass to all builders; unused ones are ignored)
@@ -852,7 +852,7 @@ def stwr_reports_latest(
         if not latest:
             raise HTTPException(
                 status_code=404,
-                detail={"request_id": request.state.request_id, "error": "no_data", "message": f"No st_data for exchange {ex}"},
+                detail={"request_id": request.state.request_id, "error": "no_data", "message": f"No Stock Trends data available for exchange {ex}"},
             )
         wd = str(latest)
 

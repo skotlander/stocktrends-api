@@ -10,6 +10,7 @@ from sqlalchemy import text
 
 from db import get_metering_engine
 from discovery.endpoint_metadata import get_endpoint_metadata
+from discovery.provenance import data_provenance, provenance_reference
 
 logger = logging.getLogger("stocktrends_api.workflows")
 
@@ -117,7 +118,7 @@ WORKFLOW_REGISTRY: list[dict] = [
         "name": "Regime-Aware Symbol Decision",
         "description": (
             "Classify the current market regime then evaluate a single symbol "
-            "for a buy/sell/hold decision in that regime context."
+            "for a directional research bias in that regime context."
         ),
         "tags": ["agent", "research", "decision"],
         "supported_rails": ["subscription", "x402", "mpp"],
@@ -155,7 +156,7 @@ WORKFLOW_REGISTRY: list[dict] = [
                 "step_id": "evaluate_symbol",
                 "endpoint": "POST /v1/decision/evaluate-symbol",
                 "pricing_rule_id": "evaluate_symbol",
-                "description": "Evaluate a symbol buy/sell/hold decision given the current regime.",
+                "description": "Evaluate a symbol directional research bias given the current regime.",
                 "optional": False,
             },
         ],
@@ -505,12 +506,12 @@ def _resolve_workflow_costs(
     summary="Workflow registry",
     description=(
         "Returns the static workflow registry with live per-step STC costs resolved "
-        "from api_pricing_rules. Costs are authoritative and consistent with "
+        "from the pricing engine. Costs are authoritative and consistent with "
         "GET /v1/pricing/catalog. No authentication required. "
         "Each step includes method, path, pricing_rule_id, STC cost, estimated USD cost, "
         "input guidance, safe example request, output summary, and decision guidance. "
         "Returns HTTP 500 if any pricing_rule_id in the registry has no active row "
-        "in api_pricing_rules — this surfaces drift immediately."
+        "from the pricing catalog."
     ),
 )
 def get_workflows() -> JSONResponse:
@@ -539,7 +540,7 @@ def get_workflows() -> JSONResponse:
         )
         raise HTTPException(
             status_code=500,
-            detail="Registry integrity error: one or more pricing rules are missing from api_pricing_rules",
+            detail="Registry integrity error: one or more pricing rules are missing from the pricing catalog",
         )
 
     workflows = [
@@ -555,6 +556,7 @@ def get_workflows() -> JSONResponse:
                 "STC is the pricing source of truth. The estimated USD value uses the current "
                 "operational policy of 1 STC approximately 1 USD and is for planning only."
             ),
+            "provenance_reference": provenance_reference(),
             "decision_guidance": w.get("decision_guidance"),
             "best_for": w.get("best_for"),
             "agent_goal_examples": w.get("agent_goal_examples", []),
@@ -587,7 +589,9 @@ def get_workflows() -> JSONResponse:
                 ],
                 "payment_rails": ["subscription", "x402", "mpp"],
                 "pricing_note": "STC is the pricing source of truth across all rails.",
+                "provenance_reference": provenance_reference(),
             },
+            "data_provenance": data_provenance(),
             "workflows": workflows,
         }
     )
@@ -606,7 +610,7 @@ def get_workflows() -> JSONResponse:
     summary="Workflow cost estimate",
     description=(
         "Returns a deterministic cost estimate for a named workflow. "
-        "Costs are resolved from live pricing rules (api_pricing_rules). "
+        "Costs are resolved from live pricing rules in the pricing engine. "
         "Public and non-metered: no API key, payment, or usage charge is required for this call. "
         "quota_remaining is caller-supplied in v1 — accuracy depends on the caller's "
         "knowledge of their current usage state. "
@@ -687,7 +691,7 @@ def get_cost_estimate(
         )
         raise HTTPException(
             status_code=500,
-            detail="Registry integrity error: pricing rule not found in api_pricing_rules",
+            detail="Registry integrity error: pricing rule not found in the pricing catalog",
         )
 
     # --- Rail assignment ---
