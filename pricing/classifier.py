@@ -6,7 +6,7 @@ from payments.policy_provider import (
     get_effective_endpoint_payment_policy,
     is_agent_pay_route,
     is_free_metered_path,
-    is_public_stocktrends_portfolio_metadata_path,
+    is_public_stocktrends_portfolio_path,
 )
 
 
@@ -234,7 +234,7 @@ def classify_request(
     - Non-/v1 probe traffic is never treated as paid API usage
     """
 
-    if path in NON_METERED_PATHS or is_public_stocktrends_portfolio_metadata_path(path):
+    if path in NON_METERED_PATHS or is_public_stocktrends_portfolio_path(path):
         return _free_decision()
 
     if _is_noise_path(path):

@@ -30,6 +30,23 @@ That classification must agree across:
 A zero-cost pricing rule does not override payment-policy enforcement. Public
 endpoints must not be registered as payment-gated EndpointPaymentPolicy routes.
 
+Current public/free Stock Trends portfolio endpoints include:
+
+* `GET /v1/stocktrends/portfolios`
+* `GET /v1/stocktrends/portfolios/{port_id}`
+* `GET /v1/stocktrends/portfolios/{port_id}/returns`
+
+Official Stock Trends portfolio returns history is sourced from
+`stp_returnslog`, the canonical portfolio performance history. Do not
+reconstruct portfolio returns from `stp_positions`, which is a holdings/audit
+trail source rather than the public performance-history source.
+
+Current public response mapping:
+
+* `stp_returnslog.weekdate` -> `returns[].weekdate`
+* `stp_returnslog.return_pct` -> `returns[].return_pct`
+* `stp_returnslog.value` -> `returns[].value`
+
 ---
 
 ### 1. Request Received

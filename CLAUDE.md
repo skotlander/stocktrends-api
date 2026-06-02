@@ -233,6 +233,7 @@ Examples:
 - `/v1/meta/*`
 - `/v1/stocktrends/portfolios`
 - `/v1/stocktrends/portfolios/{port_id}`
+- `/v1/stocktrends/portfolios/{port_id}/returns`
 
 Requirements:
 
@@ -265,7 +266,7 @@ Requirements:
 Examples:
 
 - ST-IM inference endpoints.
-- Portfolio returns/history endpoints.
+- Premium portfolio intelligence endpoints.
 - Agent intelligence endpoints.
 
 Requirements:

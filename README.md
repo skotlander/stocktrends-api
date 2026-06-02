@@ -157,6 +157,17 @@ POST /v1/portfolio/evaluate
 POST /v1/portfolio/construct
 ```
 
+### Official Stock Trends Portfolios
+
+```text
+GET /v1/stocktrends/portfolios
+GET /v1/stocktrends/portfolios/{port_id}
+GET /v1/stocktrends/portfolios/{port_id}/returns
+```
+
+These routes expose official Stock Trends model portfolio metadata and returns
+history as public/free discovery data.
+
 ### Market Intelligence
 
 ```text

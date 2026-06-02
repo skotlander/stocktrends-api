@@ -43,10 +43,45 @@ class StockTrendsPortfolioDetailResponse(BaseModel):
     data: StockTrendsPortfolioMetadata
 
 
+class StockTrendsPortfolioReturnsPortfolio(BaseModel):
+    port_id: int = Field(..., description="Official Stock Trends portfolio identifier.")
+    name: str | None = Field(default=None, description="Official Stock Trends portfolio name.")
+    selection_universe: str | None = Field(
+        default=None,
+        description="Stock Trends strategy selection/filter universe configured for the portfolio.",
+    )
+
+
+class StockTrendsPortfolioReturnPoint(BaseModel):
+    weekdate: str = Field(..., description="Week-ending date for the portfolio return observation.")
+    return_pct: float | None = Field(
+        default=None,
+        description="Official portfolio return percentage for the week.",
+    )
+    value: float | None = Field(
+        default=None,
+        description="Official portfolio value for the week.",
+    )
+
+
+class StockTrendsPortfolioReturnsResponse(BaseModel):
+    request_id: str
+    port_id: int
+    portfolio: StockTrendsPortfolioReturnsPortfolio
+    count: int
+    returns: list[StockTrendsPortfolioReturnPoint]
+
+
 def _to_int(value: Any) -> int | None:
     if value is None:
         return None
     return int(value)
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
 
 
 def _row_to_portfolio(row: Any) -> dict[str, Any]:
@@ -62,9 +97,28 @@ def _row_to_portfolio(row: Any) -> dict[str, Any]:
     }
 
 
+def _row_to_portfolio_summary(row: Any) -> dict[str, Any]:
+    portfolio = _row_to_portfolio(row)
+    return {
+        "port_id": portfolio["port_id"],
+        "name": portfolio["name"],
+        "selection_universe": portfolio["selection_universe"],
+    }
+
+
+def _row_to_return_point(row: Any) -> dict[str, Any]:
+    data = dict(row)
+    weekdate = data.get("weekdate")
+    return {
+        "weekdate": weekdate.isoformat() if hasattr(weekdate, "isoformat") else str(weekdate),
+        "return_pct": _to_float(data.get("return_pct")),
+        "value": _to_float(data.get("value")),
+    }
+
+
 def _raise_db_query_failed(request: Request, exc: Exception) -> None:
     logger.exception(
-        "Stock Trends portfolio metadata query failed; request_id=%s",
+        "Stock Trends portfolio query failed; request_id=%s",
         request.state.request_id,
         exc_info=True,
     )
@@ -173,4 +227,76 @@ def get_stocktrends_portfolio(
     return {
         "request_id": request.state.request_id,
         "data": _row_to_portfolio(row),
+    }
+
+
+@router.get(
+    "/{port_id}/returns",
+    response_model=StockTrendsPortfolioReturnsResponse,
+    summary="Get official Stock Trends portfolio returns history",
+    description=(
+        "Official Stock Trends portfolio returns history. "
+        "Returns chronological performance observations for one live official "
+        "Stock Trends model portfolio. Only status=1 portfolios are exposed; "
+        "nonexistent or inactive portfolio IDs return 404."
+    ),
+)
+def get_stocktrends_portfolio_returns(
+    request: Request,
+    port_id: int = Path(..., ge=1, description="Official Stock Trends portfolio identifier."),
+):
+    portfolio_sql = text(
+        """
+        SELECT
+            port_id,
+            name,
+            strategy_id,
+            exchanges,
+            index_symbols,
+            description,
+            status
+        FROM stp_ports
+        WHERE port_id = :port_id
+          AND status = 1
+        LIMIT 1
+        """
+    )
+    returns_sql = text(
+        """
+        SELECT
+            weekdate,
+            return_pct,
+            value
+        FROM stp_returnslog
+        WHERE port_id = :port_id
+        ORDER BY weekdate ASC
+        """
+    )
+
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            portfolio_row = conn.execute(portfolio_sql, {"port_id": port_id}).mappings().first()
+            if not portfolio_row:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "request_id": request.state.request_id,
+                        "error": "portfolio_not_found",
+                        "port_id": port_id,
+                    },
+                )
+            return_rows = conn.execute(returns_sql, {"port_id": port_id}).mappings().all()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_db_query_failed(request, exc)
+
+    returns = [_row_to_return_point(row) for row in return_rows]
+    return {
+        "request_id": request.state.request_id,
+        "port_id": int(port_id),
+        "portfolio": _row_to_portfolio_summary(portfolio_row),
+        "count": len(returns),
+        "returns": returns,
     }

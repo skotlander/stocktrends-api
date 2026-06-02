@@ -15,7 +15,7 @@ from payments.policy_provider import (
     is_agent_pay_auth_candidate,
     is_agent_pay_enforcement_path,
     is_free_metered_path,
-    is_public_stocktrends_portfolio_metadata_path,
+    is_public_stocktrends_portfolio_path,
 )
 
 _ENABLE_AGENT_PAY = os.getenv("ENABLE_AGENT_PAY", "false").lower() == "true"
@@ -254,7 +254,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         # Public routes
         if (
             path in self.public_paths
-            or is_public_stocktrends_portfolio_metadata_path(path)
+            or is_public_stocktrends_portfolio_path(path)
             or any(path.startswith(prefix) for prefix in self.public_prefixes)
         ):
             return await call_next(request)

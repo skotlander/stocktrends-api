@@ -97,6 +97,12 @@ https://developer.stocktrends.com/mpp
   Evaluate a user-supplied portfolio
 * `POST /portfolio/compare`
   Compare two user-supplied portfolios
+* `GET /stocktrends/portfolios`
+  List official Stock Trends model portfolios
+* `GET /stocktrends/portfolios/{port_id}`
+  Get official Stock Trends model portfolio metadata
+* `GET /stocktrends/portfolios/{port_id}/returns`
+  Get official Stock Trends portfolio returns history
 
 ### Market Regime
 
