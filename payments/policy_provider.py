@@ -491,6 +491,10 @@ def _lookup_exact_endpoint_policy(
 
 
 def _path_pattern_matches(pattern: str, path: str) -> bool:
+    # Most callers pass request.url.path, but tolerate a full path with query
+    # string for direct policy-helper calls.
+    path = path.split("?", 1)[0]
+
     if pattern == path:
         return True
 

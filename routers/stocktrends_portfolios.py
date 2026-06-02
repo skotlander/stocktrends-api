@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Path, Request
@@ -11,6 +12,7 @@ from sqlalchemy import text
 from db import get_engine
 
 
+logger = logging.getLogger("stocktrends_api.stocktrends_portfolios")
 router = APIRouter(prefix="/stocktrends/portfolios", tags=["stocktrends-portfolios"])
 
 
@@ -60,6 +62,22 @@ def _row_to_portfolio(row: Any) -> dict[str, Any]:
     }
 
 
+def _raise_db_query_failed(request: Request, exc: Exception) -> None:
+    logger.exception(
+        "Stock Trends portfolio metadata query failed; request_id=%s",
+        request.state.request_id,
+        exc_info=True,
+    )
+    raise HTTPException(
+        status_code=500,
+        detail={
+            "request_id": request.state.request_id,
+            "error": "db_query_failed",
+            "message": "Database query failed.",
+        },
+    )
+
+
 @router.get(
     "",
     response_model=StockTrendsPortfolioListResponse,
@@ -93,14 +111,7 @@ def list_stocktrends_portfolios(request: Request):
         with engine.connect() as conn:
             rows = conn.execute(sql).mappings().all()
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "request_id": request.state.request_id,
-                "error": "db_query_failed",
-                "message": str(exc),
-            },
-        )
+        _raise_db_query_failed(request, exc)
 
     data = [_row_to_portfolio(row) for row in rows]
     return {
@@ -147,14 +158,7 @@ def get_stocktrends_portfolio(
         with engine.connect() as conn:
             row = conn.execute(sql, {"port_id": port_id}).mappings().first()
     except Exception as exc:
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "request_id": request.state.request_id,
-                "error": "db_query_failed",
-                "message": str(exc),
-            },
-        )
+        _raise_db_query_failed(request, exc)
 
     if not row:
         raise HTTPException(

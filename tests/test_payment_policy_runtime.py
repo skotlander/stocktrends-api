@@ -136,7 +136,7 @@ class PaymentPolicyRuntimeTests(unittest.TestCase):
                 "GET",
             )
             accepted = policy_provider.get_accepted_payment_methods_for_path(
-                "/v1/stocktrends/portfolios/1",
+                "/v1/stocktrends/portfolios/1?include=ignored",
                 "default_subscription",
                 method="GET",
             )

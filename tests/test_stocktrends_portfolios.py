@@ -92,6 +92,11 @@ class _Engine:
         return _Connection(self.rows, self.executed)
 
 
+class _FailingEngine:
+    def connect(self):
+        raise RuntimeError("SELECT failed: private schema detail")
+
+
 def _fake_authenticate(self, path: str, raw_key: str):
     return True, {
         "api_key_id": "test-key-id",
@@ -166,7 +171,7 @@ def test_portfolio_list_returns_only_live_records_and_expected_fields(protected_
     assert response.headers["x-stocktrends-accepted-payment-methods"] == "subscription,x402,mpp"
 
 
-def test_portfolio_detail_returns_live_portfolio(protected_client):
+def test_portfolio_detail_returns_live_portfolio(protected_client, portfolio_engine):
     response = protected_client.get(
         "/v1/stocktrends/portfolios/2",
         headers={"X-API-Key": "test-key"},
@@ -178,6 +183,11 @@ def test_portfolio_detail_returns_live_portfolio(protected_client):
     assert body["data"]["selection_universe"] == "SPTX60"
     assert "index_symbols" not in body["data"]
     assert "web_content" not in body["data"]
+    executed_sql = portfolio_engine.executed[0][0]
+    assert "FROM stp_ports" in executed_sql
+    assert "WHERE port_id = :port_id" in executed_sql
+    assert "AND status = 1" in executed_sql
+    assert "web_content" not in executed_sql
     assert response.headers["x-stocktrends-pricing-rule"] == "stocktrends_portfolios_detail_paid"
 
 
@@ -198,6 +208,21 @@ def test_stocktrends_portfolio_endpoints_are_protected(protected_client):
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Missing API key"}
+
+
+def test_portfolio_detail_db_errors_use_caller_safe_message(protected_client, monkeypatch):
+    monkeypatch.setattr(portfolios_router, "get_engine", lambda: _FailingEngine())
+
+    response = protected_client.get(
+        "/v1/stocktrends/portfolios/2",
+        headers={"X-API-Key": "test-key"},
+    )
+
+    assert response.status_code == 500
+    detail = response.json()["detail"]
+    assert detail["error"] == "db_query_failed"
+    assert detail["message"] == "Database query failed."
+    assert "private schema detail" not in str(detail)
 
 
 def test_stocktrends_portfolio_endpoints_appear_in_openapi(protected_client):
