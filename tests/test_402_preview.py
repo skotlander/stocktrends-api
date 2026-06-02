@@ -47,6 +47,7 @@ from discovery.preview import get_endpoint_preview, _PREVIEW_BY_PATH
 
 _KNOWN_PREVIEW_PATH = "/v1/indicators/latest"
 _INDICATORS_HISTORY_PATH = "/v1/indicators/history"
+_DEVELOPER_ORIGIN = "https://developer.stocktrends.com"
 
 _CHALLENGE_BODY_TEMPLATE = {
     "error": "payment_required",
@@ -519,6 +520,59 @@ def test_x402_challenge_payment_required_header_present(client_x402_challenge_kn
     )
     # Must NOT be the wrong header name
     assert "x-payment-required" not in response.headers
+
+
+def test_stim_latest_no_payment_request_still_returns_402(monkeypatch):
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    with TestClient(main.app) as client:
+        response = client.get("/v1/stim/latest")
+
+    assert response.status_code == 402
+
+
+def test_x402_402_response_is_readable_from_developer_portal(monkeypatch):
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/v1/stim/latest",
+            headers={"Origin": _DEVELOPER_ORIGIN},
+        )
+
+    assert response.status_code == 402
+    assert response.headers["access-control-allow-origin"] == _DEVELOPER_ORIGIN
+    exposed_headers = response.headers["access-control-expose-headers"].lower()
+    assert "payment-required" in exposed_headers
+    assert "x-stocktrends-pricing-rule" in exposed_headers
+    assert "x-stocktrends-payment-required" in exposed_headers
+    assert response.headers["cache-control"] == "no-store, private"
+
+
+def test_x402_preflight_allows_payment_headers_for_paid_route():
+    with TestClient(main.app) as client:
+        response = client.options(
+            "/v1/stim/latest",
+            headers={
+                "Origin": _DEVELOPER_ORIGIN,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-payment,x-stocktrends-payment-method",
+            },
+        )
+
+    assert response.status_code < 300
+    assert response.status_code not in {401, 402, 405}
+    assert response.headers["access-control-allow-origin"] == _DEVELOPER_ORIGIN
+    allowed_headers = response.headers["access-control-allow-headers"].lower()
+    assert "x-payment" in allowed_headers
+    assert "x-stocktrends-payment-method" in allowed_headers
+
+
+def test_public_tools_endpoint_remains_non_payment_public():
+    with TestClient(main.app) as client:
+        response = client.get("/v1/ai/tools")
+
+    assert response.status_code == 200
+    assert response.headers.get("x-stocktrends-payment-required") == "false"
+    assert response.headers.get("cache-control") != "no-store, private"
 
 
 # ---------------------------------------------------------------------------
