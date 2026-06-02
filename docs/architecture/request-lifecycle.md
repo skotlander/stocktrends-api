@@ -103,6 +103,29 @@ It summarizes:
   * `sell_trigger IS NOT NULL`
   * `sell_trigger <> ''`
 
+The summary ROI block uses the canonical Stock Trends average-investment method:
+
+```text
+avg_investment = avg_net_cost * avg_positions
+
+annualized_roi_percent =
+    (total_gain_loss / avg_investment)
+    / ((total_weeks * 7) / 365.25)
+    * 100
+```
+
+For the public summary implementation:
+
+* `total_gain_loss` comes from `SUM(stp_positions.gain_loss)`
+* `avg_net_cost` comes from `AVG(stp_positions.total_cost)`
+* `avg_positions` is derived from closed position-weeks over elapsed weeks
+* `total_weeks` is the elapsed closed-position period from earliest `date_in`
+  to latest `date_out` in the filtered closed-position set
+* ROI uses the same closed-position filter and `date_out` filters as the
+  closed-position summary
+* `annualized_roi_percent` is null when `avg_investment` or `total_weeks` is
+  zero or null
+
 Current live holdings are excluded from the summary. Do not make arbitrary
 `/summary/*` child paths public/free.
 

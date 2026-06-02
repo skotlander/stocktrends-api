@@ -104,7 +104,7 @@ https://developer.stocktrends.com/mpp
 * `GET /stocktrends/portfolios/{port_id}/returns`
   Get official Stock Trends portfolio returns history
 * `GET /stocktrends/portfolios/{port_id}/summary`
-  Get a compact public history summary for an official Stock Trends model portfolio. Current live holdings are intentionally excluded.
+  Get a compact public history summary for an official Stock Trends model portfolio, including annualized ROI on average invested capital. Current live holdings are intentionally excluded.
 * `GET /stocktrends/portfolios/{port_id}/positions/history`
   Get official Stock Trends historical closed-position records. Current live holdings are intentionally excluded.
 

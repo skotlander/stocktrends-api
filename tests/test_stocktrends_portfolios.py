@@ -177,10 +177,10 @@ _POSITIONS_ROWS = [
         "qty": 25,
         "trcost_in": Decimal("1.99"),
         "cost_adjs": Decimal("0.00"),
-        "total_cost": Decimal("1251.99"),
+        "total_cost": Decimal("999999.99"),
         "stop_loss": Decimal("45.00"),
         "date_out": date(2024, 1, 26),
-        "weeks_held": 1,
+        "weeks_held": 999,
         "sell_trigger": "",
         "price_out": Decimal("0.00"),
         "trcost_out": Decimal("0.00"),
@@ -292,12 +292,20 @@ class _Connection:
             if "COUNT(*) AS closed_position_count" in sql:
                 gains = [row["gain_loss"] for row in rows if row.get("gain_loss") is not None]
                 gain_percents = [row["gl_percent"] for row in rows if row.get("gl_percent") is not None]
+                total_costs = [row["total_cost"] for row in rows if row.get("total_cost") is not None]
+                weeks_held = [row["weeks_held"] for row in rows if row.get("weeks_held") is not None]
                 total_gain = sum(gains, Decimal("0")) if gains else None
                 average_gain_percent = (
                     sum(gain_percents, Decimal("0")) / len(gain_percents)
                     if gain_percents
                     else None
                 )
+                average_net_cost = (
+                    sum(total_costs, Decimal("0")) / len(total_costs)
+                    if total_costs
+                    else None
+                )
+                total_position_weeks = sum(weeks_held, 0) if weeks_held else None
                 return _Result(
                     [
                         {
@@ -307,6 +315,8 @@ class _Connection:
                             "latest_date_out": rows[-1]["date_out"] if rows else None,
                             "total_realized_gain_loss": total_gain,
                             "average_gain_loss_percent": average_gain_percent,
+                            "average_net_cost": average_net_cost,
+                            "total_position_weeks": total_position_weeks,
                             "winning_positions": sum(1 for row in rows if row.get("gain_loss", 0) > 0),
                             "losing_positions": sum(1 for row in rows if row.get("gain_loss", 0) < 0),
                         }
@@ -755,34 +765,43 @@ def test_portfolio_summary_returns_public_history_overview(protected_client, por
         "name": "TSX 60 Portfolio",
         "selection_universe": "SPTX60",
     }
-    assert body["summary"] == {
-        "returns": {
-            "count": 2,
-            "first_weekdate": "2024-01-05",
-            "latest_weekdate": "2024-01-12",
-            "latest_total_valuation": 12290.12,
-            "latest_cumulative_total_gain": 1388.9,
-            "latest_cumulative_realized_gain": 1188.89,
-        },
-        "closed_positions": {
-            "count": 2,
-            "first_date_in": "2023-10-06",
-            "first_date_out": "2024-01-05",
-            "latest_date_out": "2024-01-12",
-            "total_realized_gain_loss": 1718.54,
-            "average_gain_loss_percent": 8.59,
-            "winning_positions": 2,
-            "losing_positions": 0,
-        },
-        "verification": {
-            "returns_endpoint": "/v1/stocktrends/portfolios/2/returns",
-            "historical_positions_endpoint": "/v1/stocktrends/portfolios/2/positions/history",
-            "current_live_holdings_excluded": True,
-        },
+    summary = body["summary"]
+    assert summary["returns"] == {
+        "count": 2,
+        "first_weekdate": "2024-01-05",
+        "latest_weekdate": "2024-01-12",
+        "latest_total_valuation": 12290.12,
+        "latest_cumulative_total_gain": 1388.9,
+        "latest_cumulative_realized_gain": 1188.89,
+    }
+    assert summary["closed_positions"] == {
+        "count": 2,
+        "first_date_in": "2023-10-06",
+        "first_date_out": "2024-01-05",
+        "latest_date_out": "2024-01-12",
+        "total_realized_gain_loss": 1718.54,
+        "average_gain_loss_percent": 8.59,
+        "winning_positions": 2,
+        "losing_positions": 0,
+    }
+    assert summary["roi"] == {
+        "method": "stocktrends_average_investment",
+        "total_gain_loss": 1718.54,
+        "average_net_cost": 10008.115,
+        "average_positions": pytest.approx(1.5714285714285714),
+        "average_investment": pytest.approx(15727.037857142857),
+        "total_weeks": 14.0,
+        "annualized_roi_percent": pytest.approx(40.726478709280665),
+    }
+    assert summary["verification"] == {
+        "returns_endpoint": "/v1/stocktrends/portfolios/2/returns",
+        "historical_positions_endpoint": "/v1/stocktrends/portfolios/2/positions/history",
+        "current_live_holdings_excluded": True,
     }
     assert "LIVE" not in str(body)
     assert "IBM" not in str(body)
     assert "MSFT" not in str(body)
+    assert "999999" not in str(body)
     assert "last_update" not in str(body)
 
     executed_sql = "\n".join(sql for sql, _params in portfolio_engine.executed)
@@ -795,6 +814,8 @@ def test_portfolio_summary_returns_public_history_overview(protected_client, por
     assert "cum_realizedgain" in executed_sql
     assert "FROM stp_positions" in executed_sql
     assert "COUNT(*) AS closed_position_count" in executed_sql
+    assert "AVG(total_cost) AS average_net_cost" in executed_sql
+    assert "SUM(weeks_held) AS total_position_weeks" in executed_sql
     assert "sell_trigger IS NOT NULL" in executed_sql
     assert "sell_trigger <> ''" in executed_sql
     assert "last_update" not in executed_sql
@@ -819,6 +840,15 @@ def test_portfolio_summary_start_and_end_date_filter_public_history(
     assert summary["closed_positions"]["first_date_out"] == "2024-01-12"
     assert summary["closed_positions"]["latest_date_out"] == "2024-01-12"
     assert summary["closed_positions"]["total_realized_gain_loss"] == 738.52
+    assert summary["roi"] == {
+        "method": "stocktrends_average_investment",
+        "total_gain_loss": 738.52,
+        "average_net_cost": 10006.24,
+        "average_positions": 1.0,
+        "average_investment": 10006.24,
+        "total_weeks": 10.0,
+        "annualized_roi_percent": pytest.approx(38.51088777745544),
+    }
 
     executed_sql = "\n".join(sql for sql, _params in portfolio_engine.executed)
     assert "weekdate >= :start_date" in executed_sql
@@ -865,7 +895,88 @@ def test_portfolio_summary_with_empty_public_history_uses_zero_and_null_values(
         "winning_positions": 0,
         "losing_positions": 0,
     }
+    assert summary["roi"] == {
+        "method": "stocktrends_average_investment",
+        "total_gain_loss": 0.0,
+        "average_net_cost": None,
+        "average_positions": None,
+        "average_investment": None,
+        "total_weeks": None,
+        "annualized_roi_percent": None,
+    }
     assert summary["verification"]["current_live_holdings_excluded"] is True
+
+
+def test_portfolio_summary_roi_excludes_current_live_positions(protected_client):
+    response = protected_client.get("/v1/stocktrends/portfolios/2/summary")
+
+    assert response.status_code == 200
+    _assert_no_payment_challenge(response)
+    roi = response.json()["summary"]["roi"]
+    assert roi["total_gain_loss"] == 1718.54
+    assert roi["average_net_cost"] == 10008.115
+    assert roi["average_positions"] == pytest.approx(22 / 14)
+    assert roi["average_investment"] == pytest.approx(15727.037857142857)
+    assert roi["annualized_roi_percent"] == pytest.approx(40.726478709280665)
+    assert "999999" not in str(response.json())
+
+
+def test_portfolio_summary_roi_null_when_total_weeks_is_zero(
+    protected_client,
+    portfolio_engine,
+):
+    portfolio_engine.position_rows = [
+        {
+            **_POSITIONS_ROWS[0],
+            "date_in": date(2024, 1, 5),
+            "date_out": date(2024, 1, 5),
+            "weeks_held": 0,
+            "total_cost": Decimal("10000.00"),
+            "gain_loss": Decimal("100.00"),
+            "sell_trigger": "BC",
+        }
+    ]
+
+    response = protected_client.get("/v1/stocktrends/portfolios/2/summary")
+
+    assert response.status_code == 200
+    _assert_no_payment_challenge(response)
+    roi = response.json()["summary"]["roi"]
+    assert roi["total_gain_loss"] == 100.0
+    assert roi["average_net_cost"] == 10000.0
+    assert roi["average_positions"] is None
+    assert roi["average_investment"] is None
+    assert roi["total_weeks"] == 0.0
+    assert roi["annualized_roi_percent"] is None
+
+
+def test_portfolio_summary_roi_null_when_average_investment_is_zero(
+    protected_client,
+    portfolio_engine,
+):
+    portfolio_engine.position_rows = [
+        {
+            **_POSITIONS_ROWS[0],
+            "date_in": date(2024, 1, 5),
+            "date_out": date(2024, 1, 12),
+            "weeks_held": 1,
+            "total_cost": Decimal("0.00"),
+            "gain_loss": Decimal("100.00"),
+            "sell_trigger": "BC",
+        }
+    ]
+
+    response = protected_client.get("/v1/stocktrends/portfolios/2/summary")
+
+    assert response.status_code == 200
+    _assert_no_payment_challenge(response)
+    roi = response.json()["summary"]["roi"]
+    assert roi["total_gain_loss"] == 100.0
+    assert roi["average_net_cost"] == 0.0
+    assert roi["average_positions"] == 1.0
+    assert roi["average_investment"] == 0.0
+    assert roi["total_weeks"] == 1.0
+    assert roi["annualized_roi_percent"] is None
 
 
 @pytest.mark.parametrize("port_id", [404, 99])
@@ -1049,6 +1160,8 @@ def test_stocktrends_portfolio_endpoints_appear_in_openapi(protected_client):
 
     summary_description = paths["/stocktrends/portfolios/{port_id}/summary"]["get"]["description"]
     assert "Official Stock Trends portfolio public history summary" in summary_description
+    assert "annualized ROI" in summary_description
+    assert "average-investment method" in summary_description
     assert "Current live holdings are intentionally excluded" in summary_description
     assert "stp_" not in summary_description
     summary_parameters = {
