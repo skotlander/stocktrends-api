@@ -192,6 +192,19 @@ GET /v1/selections/latest
 GET /v1/breadth/sector/latest
 ```
 
+### Public ST-IM Select Signal Outcomes
+
+```text
+GET /v1/selections/stim-select/outcomes/summary
+```
+
+Public/free aggregate historical outcome evidence for observations meeting
+Stock Trends Inference Model Select criteria. The summary uses mature realized
+13-week forward returns from `st_data.fpr_chg13` and returns counts, date range,
+average/median return, positive-return rate, and 13-week base-period
+outperformance rate. It does not expose current selections, current matching
+symbols, or individual historical symbols.
+
 ### Cognition Metadata
 
 ```text

@@ -40,6 +40,7 @@ Current public/free Stock Trends portfolio endpoints include:
 * `GET /v1/stocktrends/strategies`
 * `GET /v1/stocktrends/strategies/{strategy_id}`
 * `GET /v1/stocktrends/portfolios/{port_id}/strategy`
+* `GET /v1/selections/stim-select/outcomes/summary`
 
 Official Stock Trends portfolio returns history is sourced from
 `stp_returnslog`, the canonical portfolio performance history. Do not
@@ -177,6 +178,41 @@ remain protected unless intentionally reclassified later:
 * `/v1/stocktrends/strategies/{strategy_id}/current`
 * `/v1/stocktrends/portfolios/{port_id}/strategy/current`
 * `/v1/stocktrends/portfolios/{port_id}/strategy/matches`
+
+Public ST-IM Select signal outcome summary is public/free aggregate evidence.
+It summarizes mature historical observations meeting the ST-IM Select
+signal-selection rule:
+
+* `stweekly.st_returnmeans.x4wk1 > 0`
+* `stweekly.st_returnmeans.x13wk1 > 2.19`
+* `stweekly.st_returnmeans.x40wk1 > 6.45`
+* `stdata.st_data.price >= 2`
+* `stdata.st_data.volume > 1000`
+* `stdata.st_data.fpr_chg13 IS NOT NULL`
+
+The endpoint uses the canonical join:
+
+```text
+stdata.st_data.weekdate = stweekly.st_returnmeans.weekdate
+AND stdata.st_data.exchange = stweekly.st_returnmeans.exchange
+AND stdata.st_data.symbol = stweekly.st_returnmeans.symbol
+```
+
+It uses `stdata.st_data.fpr_chg13` as the realized 13-week forward return. It
+does not reconstruct forward returns from future price joins. It is not limited
+to published reports and does not return current selections, current matching
+symbols, current candidates, or individual historical symbols.
+
+Only this exact path is public/free:
+
+* `/v1/selections/stim-select/outcomes/summary`
+
+Do not make arbitrary ST-IM Select outcome child paths public/free. In
+particular, these remain protected unless intentionally reclassified later:
+
+* `/v1/selections/stim-select/outcomes`
+* `/v1/selections/stim-select/outcomes/current`
+* `/v1/selections/stim-select/outcomes/symbols`
 
 ---
 

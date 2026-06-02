@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+from datetime import date
+from decimal import Decimal, InvalidOperation
+from statistics import median
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -10,7 +14,15 @@ from sqlalchemy import text
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
 
+logger = logging.getLogger("stocktrends_api.selections")
 router = APIRouter(prefix="/selections", tags=["selections"])
+
+STIM_SELECT_BASE_4WK = 0.0
+STIM_SELECT_BASE_13WK = 2.19
+STIM_SELECT_BASE_40WK = 6.45
+STIM_SELECT_MIN_PRICE = 2.0
+STIM_SELECT_MIN_VOLUME = 1000
+STIM_SELECT_OUTCOME_EXCHANGES = {"N", "Q", "A", "B", "T"}
 
 
 def _norm_symbol(s: str) -> str:
@@ -25,6 +37,210 @@ def _norm_exchange(ex: str) -> str:
             detail=f"Invalid exchange '{ex}'. Must be one of {sorted(VALID_EXCHANGES)}",
         )
     return ex
+
+
+def _norm_outcome_exchange(ex: str) -> str:
+    ex = ex.strip().upper()
+    if ex not in STIM_SELECT_OUTCOME_EXCHANGES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid exchange '{ex}'. Must be one of {sorted(STIM_SELECT_OUTCOME_EXCHANGES)}",
+        )
+    return ex
+
+
+def _to_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _to_int_or_zero(value: Any) -> int:
+    if value is None:
+        return 0
+    return int(value)
+
+
+def _to_date_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _to_decimal(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return numerator / denominator
+
+
+def _stim_select_outcomes_base_where(
+    *,
+    ex: str | None,
+    start_date: date | None,
+    end_date: date | None,
+    params: dict[str, Any],
+) -> str:
+    params.update(
+        {
+            "base_4wk": STIM_SELECT_BASE_4WK,
+            "base_13wk": STIM_SELECT_BASE_13WK,
+            "base_40wk": STIM_SELECT_BASE_40WK,
+            "min_price": STIM_SELECT_MIN_PRICE,
+            "min_volume": STIM_SELECT_MIN_VOLUME,
+        }
+    )
+    where = """
+        WHERE b.x4wk1 > :base_4wk
+          AND b.x13wk1 > :base_13wk
+          AND b.x40wk1 > :base_40wk
+          AND a.price >= :min_price
+          AND a.volume > :min_volume
+          AND a.fpr_chg13 IS NOT NULL
+    """
+
+    if start_date is not None:
+        where += " AND a.weekdate >= :start_date"
+        params["start_date"] = start_date
+    if end_date is not None:
+        where += " AND a.weekdate <= :end_date"
+        params["end_date"] = end_date
+    if ex is not None:
+        where += " AND a.exchange = :exchange"
+        params["exchange"] = ex
+
+    return where
+
+
+def _stim_select_outcomes_source_sql(where: str) -> str:
+    return f"""
+        FROM stdata.st_data a
+        JOIN stweekly.st_returnmeans b
+          ON a.weekdate = b.weekdate
+         AND a.exchange = b.exchange
+         AND a.symbol = b.symbol
+        {where}
+    """
+
+
+def _stim_select_outcomes_ranked_cte(where: str) -> str:
+    # Ranking by this z-score is equivalent to prob13wk DESC for positive
+    # standard deviations, without requiring a database-specific normal CDF.
+    return f"""
+        WITH qualifying AS (
+            SELECT
+                a.weekdate,
+                a.exchange,
+                a.symbol,
+                a.fpr_chg13,
+                ((b.x4wk + b.x13wk + b.x40wk) / 3) AS avgmean,
+                ROW_NUMBER() OVER (
+                    PARTITION BY a.weekdate
+                    ORDER BY
+                        CASE
+                            WHEN b.x13wksd IS NULL OR b.x13wksd = 0 THEN -999999999999
+                            ELSE ((b.x13wk - :base_13wk) / b.x13wksd)
+                        END DESC,
+                        b.x13wk DESC,
+                        a.exchange ASC,
+                        a.symbol ASC
+                ) AS rank_13wk_probability
+            {_stim_select_outcomes_source_sql(where)}
+        )
+    """
+
+
+def _stim_select_outcomes_aggregate_sql(*, where: str, limit_rank: int | None):
+    if limit_rank is None:
+        return text(f"""
+            SELECT
+                COUNT(*) AS outcome_count,
+                MIN(a.weekdate) AS first_weekdate,
+                MAX(a.weekdate) AS latest_weekdate,
+                AVG(a.fpr_chg13) AS average_fpr_chg13,
+                SUM(CASE WHEN a.fpr_chg13 > 0 THEN 1 ELSE 0 END) AS positive_return_count,
+                SUM(CASE WHEN a.fpr_chg13 > :base_13wk THEN 1 ELSE 0 END) AS outperform_base_count
+            {_stim_select_outcomes_source_sql(where)}
+        """)
+
+    return text(f"""
+        {_stim_select_outcomes_ranked_cte(where)}
+        SELECT
+            COUNT(*) AS outcome_count,
+            MIN(weekdate) AS first_weekdate,
+            MAX(weekdate) AS latest_weekdate,
+            AVG(fpr_chg13) AS average_fpr_chg13,
+            SUM(CASE WHEN fpr_chg13 > 0 THEN 1 ELSE 0 END) AS positive_return_count,
+            SUM(CASE WHEN fpr_chg13 > :base_13wk THEN 1 ELSE 0 END) AS outperform_base_count
+        FROM qualifying
+        WHERE rank_13wk_probability <= :limit_rank
+    """)
+
+
+def _stim_select_outcomes_values_sql(*, where: str, limit_rank: int | None):
+    if limit_rank is None:
+        return text(f"""
+            SELECT a.fpr_chg13
+            {_stim_select_outcomes_source_sql(where)}
+        """)
+
+    return text(f"""
+        {_stim_select_outcomes_ranked_cte(where)}
+        SELECT fpr_chg13
+        FROM qualifying
+        WHERE rank_13wk_probability <= :limit_rank
+    """)
+
+
+def _stim_select_signal_metadata() -> dict[str, Any]:
+    return {
+        "signal_id": "stim_select",
+        "name": "ST-IM Select",
+        "description": "Historical observations meeting Stock Trends Inference Model Select criteria.",
+        "criteria": {
+            "x4wk1_gt": STIM_SELECT_BASE_4WK,
+            "x13wk1_gt": STIM_SELECT_BASE_13WK,
+            "x40wk1_gt": STIM_SELECT_BASE_40WK,
+            "price_gte": STIM_SELECT_MIN_PRICE,
+            "volume_gt": STIM_SELECT_MIN_VOLUME,
+            "avgmean_formula": "(x4wk + x13wk + x40wk) / 3",
+            "prob4wk_formula": "1 - normal_cdf((0 - x4wk) / x4wksd)",
+            "prob13wk_formula": "1 - normal_cdf((2.19 - x13wk) / x13wksd)",
+            "prob40wk_formula": "1 - normal_cdf((6.45 - x40wk) / x40wksd)",
+            "ranking": "prob13wk_desc",
+        },
+        "base_period_mean_13wk": STIM_SELECT_BASE_13WK,
+    }
+
+
+def _stim_select_outcome_provenance() -> dict[str, Any]:
+    return {
+        "source": "stim_select_signal_outcome_summary",
+        "realized_return_field": "fpr_chg13",
+        "realized_return_horizon": "13 weeks",
+        "uses_mature_outcomes_only": True,
+        "published_report_limited": False,
+        "current_live_selections_excluded": True,
+        "current_matching_symbols_excluded": True,
+        "related_endpoints": [
+            "/v1/meta/stim",
+            "/v1/stim/latest",
+            "/v1/selections/history",
+            "/v1/selections/published/history",
+        ],
+    }
 
 
 def _mast_select(include_mast: bool) -> str:
@@ -54,6 +270,131 @@ def _mast_join(include_mast: bool) -> str:
           ON m.exchange = s.exchange
          AND m.symbol = s.symbol
     """
+
+
+@router.get(
+    "/stim-select/outcomes/summary",
+    summary="Public ST-IM Select signal outcome summary",
+    description=(
+        "Public aggregate historical outcome summary for observations meeting "
+        "Stock Trends Inference Model Select criteria. Uses mature realized "
+        "13-week forward returns from fpr_chg13. Does not expose current "
+        "selections, current matching stocks, or individual symbols. Optional "
+        "start_date and end_date filters apply to the signal weekdate. "
+        "limit_rank applies a per-week rank cutoff ordered by the 13-week "
+        "outperformance probability implied by the ST-IM normal-distribution "
+        "model."
+    ),
+)
+def stim_select_outcomes_summary(
+    request: Request,
+    start_date: date | None = Query(
+        default=None,
+        description="Inclusive signal weekdate filter in YYYY-MM-DD format.",
+    ),
+    end_date: date | None = Query(
+        default=None,
+        description="Inclusive signal weekdate filter in YYYY-MM-DD format.",
+    ),
+    exchange: str | None = Query(
+        default=None,
+        description="Optional exchange filter: N,Q,A,B,T.",
+    ),
+    limit_rank: int | None = Query(
+        default=None,
+        ge=1,
+        le=5000,
+        description=(
+            "Optional per-week rank cutoff. Ranking is by prob13wk descending; "
+            "for example, 10 includes only the top 10 qualifying observations per week."
+        ),
+    ),
+):
+    """
+    Public aggregate evidence for the ST-IM Select signal-selection rule.
+
+    This summarizes mature historical observations from stdata.st_data joined
+    to stweekly.st_returnmeans. It intentionally returns aggregate outcomes only.
+    """
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "request_id": request.state.request_id,
+                "error": "invalid_date_range",
+                "message": "start_date must be before or equal to end_date.",
+            },
+        )
+
+    ex = _norm_outcome_exchange(exchange) if exchange else None
+    params: dict[str, Any] = {}
+    where = _stim_select_outcomes_base_where(
+        ex=ex,
+        start_date=start_date,
+        end_date=end_date,
+        params=params,
+    )
+    if limit_rank is not None:
+        params["limit_rank"] = int(limit_rank)
+
+    aggregate_sql = _stim_select_outcomes_aggregate_sql(where=where, limit_rank=limit_rank)
+    values_sql = _stim_select_outcomes_values_sql(where=where, limit_rank=limit_rank)
+
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            aggregate_row = conn.execute(aggregate_sql, params).mappings().first()
+            value_rows = conn.execute(values_sql, params).mappings().all()
+    except Exception as exc:
+        logger.exception(
+            "ST-IM Select outcome summary query failed; request_id=%s",
+            request.state.request_id,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "request_id": request.state.request_id,
+                "error": "db_query_failed",
+                "message": "Database query failed.",
+            },
+        )
+
+    aggregate = dict(aggregate_row or {})
+    count = _to_int_or_zero(aggregate.get("outcome_count"))
+    positive_count = _to_int_or_zero(aggregate.get("positive_return_count"))
+    outperform_count = _to_int_or_zero(aggregate.get("outperform_base_count"))
+    outcome_values = [
+        float(value)
+        for row in value_rows
+        if (value := _to_decimal(dict(row).get("fpr_chg13"))) is not None
+    ]
+    median_fpr_chg13 = float(median(outcome_values)) if outcome_values else None
+
+    return {
+        "request_id": request.state.request_id,
+        "signal": _stim_select_signal_metadata(),
+        "filters": {
+            "start_date": start_date.isoformat() if start_date else None,
+            "end_date": end_date.isoformat() if end_date else None,
+            "exchange": ex,
+            "limit_rank": limit_rank,
+        },
+        "outcomes": {
+            "horizon": "13w",
+            "count": count,
+            "first_weekdate": _to_date_string(aggregate.get("first_weekdate")),
+            "latest_weekdate": _to_date_string(aggregate.get("latest_weekdate")),
+            "average_fpr_chg13": _to_float(aggregate.get("average_fpr_chg13")),
+            "median_fpr_chg13": median_fpr_chg13,
+            "positive_return_count": positive_count,
+            "positive_return_rate": _rate(positive_count, count),
+            "outperform_base_count": outperform_count,
+            "outperform_base_rate": _rate(outperform_count, count),
+            "base_period_mean_13wk": STIM_SELECT_BASE_13WK,
+        },
+        "provenance": _stim_select_outcome_provenance(),
+    }
 
 
 @router.get(

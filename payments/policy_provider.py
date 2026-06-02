@@ -96,6 +96,7 @@ _PUBLIC_STOCKTRENDS_STRATEGY_METADATA_LIST_PATH = "/v1/stocktrends/strategies"
 _PUBLIC_STOCKTRENDS_STRATEGY_METADATA_DETAIL_PREFIX = (
     f"{_PUBLIC_STOCKTRENDS_STRATEGY_METADATA_LIST_PATH}/"
 )
+_PUBLIC_STIM_SELECT_OUTCOME_SUMMARY_PATH = "/v1/selections/stim-select/outcomes/summary"
 
 
 def is_public_stocktrends_portfolio_metadata_path(path: str) -> bool:
@@ -176,8 +177,17 @@ def is_public_stocktrends_strategy_path(path: str) -> bool:
     return is_public_stocktrends_strategy_metadata_path(path)
 
 
+def is_public_stim_select_outcome_summary_path(path: str) -> bool:
+    path = path.split("?", 1)[0]
+    return path == _PUBLIC_STIM_SELECT_OUTCOME_SUMMARY_PATH
+
+
 def is_public_stocktrends_path(path: str) -> bool:
-    return is_public_stocktrends_portfolio_path(path) or is_public_stocktrends_strategy_path(path)
+    return (
+        is_public_stocktrends_portfolio_path(path)
+        or is_public_stocktrends_strategy_path(path)
+        or is_public_stim_select_outcome_summary_path(path)
+    )
 
 # Matches standard 8-4-4-4-12 UUID format.  Control-plane systems sometimes use
 # their internal database UUID as a policy identifier rather than the semantic

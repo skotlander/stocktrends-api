@@ -54,6 +54,7 @@ _MANIFEST_PUBLIC_PATHS: frozenset = frozenset({
     "/v1/meta/stim",
     "/v1/meta/stwr",
     "/v1/leadership/definitions",
+    "/v1/selections/stim-select/outcomes/summary",
     "/v1/ai/context",
     "/v1/ai/tools",
     "/v1/ai/proof/market-edge",
@@ -1260,6 +1261,13 @@ def ai_context():
                 "semantics": "current STIM Select methodology using three-horizon lower-bound thresholds plus prob13wk publication criteria",
                 "thresholds_source": "/v1/meta/stim",
                 "authoritative_threshold_context": "/v1/meta/stim",
+                "interpret_with": ["/v1/meta/inference", "/v1/meta/stim"],
+            },
+            "stim_select_outcomes": {
+                "endpoints": ["/v1/selections/stim-select/outcomes/summary"],
+                "use_when": "public aggregate evidence for historical ST-IM Select signal-rule outcomes",
+                "semantics": "mature realized 13-week outcomes from fpr_chg13 for observations meeting ST-IM Select criteria",
+                "business_boundary": "aggregate only; no current selections, current matching symbols, or individual symbols",
                 "interpret_with": ["/v1/meta/inference", "/v1/meta/stim"],
             },
             "stim": {

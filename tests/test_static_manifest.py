@@ -109,6 +109,7 @@ _KNOWN_PUBLIC_TOOL_PATHS: frozenset[str] = frozenset({
     "/meta/stim",            # middleware.public_paths; public planning helper
     "/meta/stwr",            # middleware.public_paths; public planning helper
     "/leadership/definitions", # middleware.public_paths; public planning helper
+    "/selections/stim-select/outcomes/summary", # public aggregate signal-outcome evidence
 })
 
 
@@ -194,6 +195,17 @@ def test_selections_published_latest_correct_path(manifest):
     assert tool is not None, "selections_published_latest must be present in tools.json"
     assert tool.get("path") == "/selections/published/latest", \
         f"Expected /selections/published/latest, got {tool.get('path')!r}"
+
+
+def test_stim_select_outcomes_summary_static_tool_is_public(manifest):
+    tool = _tool_by_name(manifest, "stim_select_outcomes_summary")
+    assert tool is not None, "stim_select_outcomes_summary must be present in tools.json"
+    assert tool.get("path") == "/selections/stim-select/outcomes/summary"
+    assert tool.get("auth_required") is False
+    assert tool.get("access_type") == "free"
+    assert tool.get("requires_payment") is False
+    assert tool["interpretation_guidance"]["outcome_measurement"]["realized_return_field"] == "fpr_chg13"
+    assert tool["interpretation_guidance"]["business_boundary"]["aggregate_only"] is True
 
 
 def test_indicators_tools_present(manifest):
@@ -400,6 +412,7 @@ _EXPECTED_STATIC_ANALYTICAL_ROLES: dict[str, str] = {
     "stim_history": "probabilistic_forward_inference",
     "selections_latest": "probabilistic_selection_universe",
     "selections_history": "probabilistic_selection_universe",
+    "stim_select_outcomes_summary": "probabilistic_signal_outcome_evidence",
     "selections_published_latest": "probabilistic_selection_list",
     "selections_published_history": "probabilistic_selection_list",
     "evaluate_symbol": "symbol_decision_engine",

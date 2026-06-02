@@ -62,6 +62,7 @@ NON_METERED_PATHS = {
     "/v1/meta/stim",
     "/v1/meta/stwr",
     "/v1/leadership/definitions",
+    "/v1/selections/stim-select/outcomes/summary",
     # MCP tools manifest: public discovery surface, no metering.
     "/v1/ai/tools",
     # Free proof-of-value endpoint: non-metered, no billing record.

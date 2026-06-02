@@ -733,6 +733,84 @@
       "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
+      "name": "stim_select_outcomes_summary",
+      "analytical_role": "probabilistic_signal_outcome_evidence",
+      "title": "ST-IM Select Outcomes Summary",
+      "description": "Public aggregate historical outcome summary for observations meeting Stock Trends Inference Model Select criteria. Uses mature realized 13-week forward returns from fpr_chg13. Does not expose current selections or individual symbols.",
+      "method": "GET",
+      "path": "/selections/stim-select/outcomes/summary",
+      "auth_required": false,
+      "category": "selections",
+      "access_type": "free",
+      "requires_payment": false,
+      "supported_rails": [],
+      "pricing_note": "No paid STC price applies to this discovery entry.",
+      "input_location": "query",
+      "parameter_source": "query",
+      "parameters": [
+        {
+          "name": "start_date",
+          "in": "query",
+          "input_location": "query",
+          "parameter_source": "query",
+          "type": "string",
+          "format": "date",
+          "required": false,
+          "description": "Inclusive signal weekdate filter in YYYY-MM-DD format."
+        },
+        {
+          "name": "end_date",
+          "in": "query",
+          "input_location": "query",
+          "parameter_source": "query",
+          "type": "string",
+          "format": "date",
+          "required": false,
+          "description": "Inclusive signal weekdate filter in YYYY-MM-DD format."
+        },
+        {
+          "name": "exchange",
+          "in": "query",
+          "input_location": "query",
+          "parameter_source": "query",
+          "type": "string",
+          "required": false,
+          "allowed_values": ["N", "Q", "A", "B", "T"],
+          "description": "Optional exchange filter."
+        },
+        {
+          "name": "limit_rank",
+          "in": "query",
+          "input_location": "query",
+          "parameter_source": "query",
+          "type": "integer",
+          "required": false,
+          "minimum": 1,
+          "maximum": 5000,
+          "description": "Optional per-week rank cutoff by prob13wk descending."
+        }
+      ],
+      "safe_example_request": {
+        "method": "GET",
+        "path": "/v1/selections/stim-select/outcomes/summary",
+        "query": {"limit_rank": 10}
+      },
+      "interpretation_guidance": {
+        "outcome_measurement": {
+          "realized_return_field": "fpr_chg13",
+          "horizon": "13 weeks",
+          "mature_outcomes_only": true,
+          "base_period_mean_13wk": 2.19
+        },
+        "business_boundary": {
+          "aggregate_only": true,
+          "published_report_limited": false,
+          "current_live_selections_excluded": true,
+          "individual_symbols_excluded": true
+        }
+      }
+    },
+    {
       "name": "selections_published_latest",
       "analytical_role": "probabilistic_selection_list",
       "interpretation_guidance": {

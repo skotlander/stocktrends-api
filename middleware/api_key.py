@@ -79,6 +79,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             "/v1/meta/stim",
             "/v1/meta/stwr",
             "/v1/leadership/definitions",
+            "/v1/selections/stim-select/outcomes/summary",
             # Workflow catalog is public discovery — no auth required.
             "/v1/workflows",
             # Discovery endpoints — public like /v1/docs and /v1/openapi.json.

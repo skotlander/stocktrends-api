@@ -56,6 +56,7 @@ ROLE_LEADERSHIP_INTELLIGENCE = "leadership_intelligence"
 ROLE_PROBABILISTIC_FORWARD_INFERENCE = "probabilistic_forward_inference"
 ROLE_PROBABILISTIC_SELECTION_LIST = "probabilistic_selection_list"
 ROLE_PROBABILISTIC_SELECTION_UNIVERSE = "probabilistic_selection_universe"
+ROLE_PROBABILISTIC_SIGNAL_OUTCOME_EVIDENCE = "probabilistic_signal_outcome_evidence"
 ROLE_SYMBOL_SIGNAL_INTELLIGENCE = "symbol_signal_intelligence"
 ROLE_SYMBOL_DECISION_ENGINE = "symbol_decision_engine"
 ROLE_PORTFOLIO_CONSTRUCTION_ENGINE = "portfolio_construction_engine"
@@ -210,6 +211,31 @@ STIM_SELECT_INTERPRETATION_GUIDANCE = {
         "These are probabilistic candidates, not guaranteed outcomes — not investment advice.",
         "Use /v1/stim/latest on individual symbols to see full distribution context.",
     ],
+    "base_period_context_endpoint": "/v1/meta/stim",
+}
+
+STIM_SELECT_SIGNAL_OUTCOME_GUIDANCE = {
+    "signal_criteria": {
+        "x4wk1": {"operator": ">", "threshold_pct": 0.0, "description": "4-week ST-IM lower CI bound must exceed base-period mean of 0%."},
+        "x13wk1": {"operator": ">", "threshold_pct": 2.19, "description": "13-week ST-IM lower CI bound must exceed base-period mean of 2.19%."},
+        "x40wk1": {"operator": ">", "threshold_pct": 6.45, "description": "40-week ST-IM lower CI bound must exceed base-period mean of 6.45%."},
+        "price": {"operator": ">=", "threshold": 2.0, "description": "Signal observation price must be at least 2."},
+        "volume": {"operator": ">", "threshold": 1000, "description": "Signal observation volume must exceed 1000."},
+        "ranking": "prob13wk descending",
+        "all_criteria_required": True,
+    },
+    "outcome_measurement": {
+        "realized_return_field": "fpr_chg13",
+        "horizon": "13 weeks",
+        "mature_outcomes_only": True,
+        "base_period_mean_13wk": 2.19,
+    },
+    "business_boundary": {
+        "aggregate_only": True,
+        "published_report_limited": False,
+        "current_live_selections_excluded": True,
+        "individual_symbols_excluded": True,
+    },
     "base_period_context_endpoint": "/v1/meta/stim",
 }
 
@@ -732,6 +758,138 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["Use published selection endpoints for the documented three-horizon STIM Select definition."],
         related_endpoints=["/v1/selections/latest", "/v1/selections/published/history"],
         next_recommended_calls=["/v1/selections/published/history"],
+        inference_contract=INFERENCE_CONTRACT_METADATA,
+        inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
+        cognition_architecture=COGNITION_ARCHITECTURE_DOC,
+    ),
+    "/v1/selections/stim-select/outcomes/summary": _metadata(
+        path="/v1/selections/stim-select/outcomes/summary",
+        method="GET",
+        tool_name="stim_select_outcomes_summary",
+        title="ST-IM Select Outcomes Summary",
+        category="selections",
+        pricing_rule_id="default_free",
+        supported_rails=[],
+        access_type="free",
+        requires_payment=False,
+        resource_description=(
+            "Public aggregate historical outcome summary for observations meeting "
+            "Stock Trends Inference Model Select criteria."
+        ),
+        bazaar_output_description=(
+            "Returns aggregate mature 13-week realized outcome metrics for ST-IM Select "
+            "signal-rule observations using fpr_chg13. No current selections or individual symbols are returned."
+        ),
+        purpose="Summarize mature historical outcomes for the ST-IM Select signal-selection rule.",
+        investment_agent_value=(
+            "Gives agents public evidence about historical ST-IM Select signal outcomes before "
+            "paying for current selection lists or symbol-level inference."
+        ),
+        workflow_role="Public signal outcome evidence.",
+        optional_inputs={
+            "start_date": {
+                "type": "string",
+                "required": False,
+                "format": "date",
+                "example": "2020-01-03",
+                "description": "Inclusive signal weekdate filter in YYYY-MM-DD format.",
+            },
+            "end_date": {
+                "type": "string",
+                "required": False,
+                "format": "date",
+                "example": "2024-12-27",
+                "description": "Inclusive signal weekdate filter in YYYY-MM-DD format.",
+            },
+            "exchange": {
+                "type": "string",
+                "required": False,
+                "enum": ["N", "Q", "A", "B", "T"],
+                "example": "N",
+                "description": "Optional exchange filter.",
+            },
+            "limit_rank": {
+                "type": "integer",
+                "required": False,
+                "minimum": 1,
+                "maximum": 5000,
+                "example": 10,
+                "description": "Optional per-week rank cutoff by prob13wk descending.",
+            },
+        },
+        safe_example_request={
+            "method": "GET",
+            "path": "/v1/selections/stim-select/outcomes/summary",
+            "query": {"limit_rank": 10},
+        },
+        response_shape=[
+            "request_id",
+            "signal.signal_id",
+            "signal.criteria",
+            "filters.start_date",
+            "filters.end_date",
+            "filters.exchange",
+            "filters.limit_rank",
+            "outcomes.horizon",
+            "outcomes.count",
+            "outcomes.first_weekdate",
+            "outcomes.latest_weekdate",
+            "outcomes.average_fpr_chg13",
+            "outcomes.median_fpr_chg13",
+            "outcomes.positive_return_count",
+            "outcomes.positive_return_rate",
+            "outcomes.outperform_base_count",
+            "outcomes.outperform_base_rate",
+            "outcomes.base_period_mean_13wk",
+            "provenance.uses_mature_outcomes_only",
+            "provenance.published_report_limited",
+            "provenance.current_live_selections_excluded",
+            "provenance.current_matching_symbols_excluded",
+        ],
+        example_object={
+            "request_id": "req_demo",
+            "signal": {
+                "signal_id": "stim_select",
+                "name": "ST-IM Select",
+                "base_period_mean_13wk": 2.19,
+            },
+            "filters": {"start_date": None, "end_date": None, "exchange": None, "limit_rank": 10},
+            "outcomes": {
+                "horizon": "13w",
+                "count": 12345,
+                "first_weekdate": "YYYY-MM-DD",
+                "latest_weekdate": "YYYY-MM-DD",
+                "average_fpr_chg13": 4.56,
+                "median_fpr_chg13": 3.21,
+                "positive_return_rate": 0.64,
+                "outperform_base_rate": 0.52,
+                "base_period_mean_13wk": 2.19,
+            },
+            "provenance": {
+                "uses_mature_outcomes_only": True,
+                "published_report_limited": False,
+                "current_live_selections_excluded": True,
+                "current_matching_symbols_excluded": True,
+            },
+        },
+        output_summary=(
+            "Aggregate historical count, date range, average/median fpr_chg13, positive-return "
+            "rate, and 13-week base-period outperformance rate for ST-IM Select signal observations."
+        ),
+        analytical_role=ROLE_PROBABILISTIC_SIGNAL_OUTCOME_EVIDENCE,
+        notes=[
+            "Uses mature observations only: st_data.fpr_chg13 IS NOT NULL.",
+            "This is signal-rule evidence, not a published-report-membership endpoint.",
+            "No current selections, current matching stocks, or individual symbols are returned.",
+        ],
+        related_endpoints=[
+            "/v1/meta/stim",
+            "/v1/stim/latest",
+            "/v1/selections/history",
+            "/v1/selections/published/history",
+        ],
+        next_recommended_calls=["/v1/meta/stim", "/v1/selections/published/latest"],
+        interpretation_guidance=STIM_SELECT_SIGNAL_OUTCOME_GUIDANCE,
         inference_contract=INFERENCE_CONTRACT_METADATA,
         inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
         cognition_architecture=COGNITION_ARCHITECTURE_DOC,
