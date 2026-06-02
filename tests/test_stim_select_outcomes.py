@@ -365,6 +365,23 @@ def test_stim_select_outcomes_summary_filters_end_date(client):
     assert outcomes["latest_weekdate"] == "2024-01-12"
 
 
+def test_stim_select_outcomes_summary_rejects_inverted_date_range(client):
+    response = client.get(
+        "/v1/selections/stim-select/outcomes/summary"
+        "?start_date=2024-01-19&end_date=2024-01-05"
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_date_range"
+
+
+def test_stim_select_outcomes_summary_rejects_invalid_exchange(client):
+    response = client.get("/v1/selections/stim-select/outcomes/summary?exchange=I")
+
+    assert response.status_code == 400
+    assert "Invalid exchange" in response.json()["detail"]
+
+
 def test_stim_select_outcomes_summary_combined_dates_and_exchange_filter(client):
     response = client.get(
         "/v1/selections/stim-select/outcomes/summary"

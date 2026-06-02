@@ -145,7 +145,6 @@ def _stim_select_outcomes_ranked_cte(where: str) -> str:
                 a.exchange,
                 a.symbol,
                 a.fpr_chg13,
-                ((b.x4wk + b.x13wk + b.x40wk) / 3) AS avgmean,
                 ROW_NUMBER() OVER (
                     PARTITION BY a.weekdate
                     ORDER BY
