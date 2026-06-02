@@ -109,6 +109,38 @@ class StockTrendsPortfolioReturnsResponse(BaseModel):
     returns: list[StockTrendsPortfolioReturnPoint]
 
 
+class StockTrendsPortfolioClosedPosition(BaseModel):
+    position_id: int = Field(..., description="Official Stock Trends closed-position identifier.")
+    symbol: str | None = Field(default=None, description="Security ticker symbol.")
+    exchange: str | None = Field(default=None, description="Stock Trends exchange code.")
+    name: str | None = Field(default=None, description="Security name.")
+    date_in: str | None = Field(default=None, description="Position entry date.")
+    price_in: float | None = Field(default=None, description="Position entry price.")
+    qty: int | None = Field(default=None, description="Position share quantity.")
+    transaction_cost_in: float | None = Field(default=None, description="Entry transaction cost.")
+    cost_adjustments: float | None = Field(default=None, description="Entry-side cost adjustments.")
+    total_cost: float | None = Field(default=None, description="Total entry cost.")
+    stop_loss: float | None = Field(default=None, description="Recorded stop-loss level.")
+    date_out: str | None = Field(default=None, description="Position close date.")
+    weeks_held: int | None = Field(default=None, description="Number of weeks the position was held.")
+    sell_trigger: str = Field(..., description="Historical close trigger. Empty live-position triggers are excluded.")
+    price_out: float | None = Field(default=None, description="Position close price.")
+    transaction_cost_out: float | None = Field(default=None, description="Exit transaction cost.")
+    sell_adjustments: float | None = Field(default=None, description="Exit-side sale adjustments.")
+    total_proceeds: float | None = Field(default=None, description="Total close proceeds.")
+    gain_loss: float | None = Field(default=None, description="Realized gain or loss.")
+    gain_loss_percent: float | None = Field(default=None, description="Realized gain or loss percentage.")
+    weekdate: str | None = Field(default=None, description="Week-ending date associated with the closed position.")
+
+
+class StockTrendsPortfolioClosedPositionsResponse(BaseModel):
+    request_id: str
+    port_id: int
+    portfolio: StockTrendsPortfolioReturnsPortfolio
+    count: int
+    positions: list[StockTrendsPortfolioClosedPosition]
+
+
 def _to_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -119,6 +151,14 @@ def _to_float(value: Any) -> float | None:
     if value is None:
         return None
     return float(value)
+
+
+def _to_date_string(value: Any) -> str | None:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
 
 
 def _row_to_portfolio(row: Any) -> dict[str, Any]:
@@ -159,6 +199,33 @@ def _row_to_return_point(row: Any) -> dict[str, Any]:
         "cumulative_total_gain": _to_float(data.get("cum_totalgain")),
         "tsx_index": _to_float(data.get("tsxindex")),
         "sp_index": _to_float(data.get("spindex")),
+    }
+
+
+def _row_to_closed_position(row: Any) -> dict[str, Any]:
+    data = dict(row)
+    return {
+        "position_id": int(data["position_id"]),
+        "symbol": data.get("symbol"),
+        "exchange": data.get("exchange"),
+        "name": data.get("name"),
+        "date_in": _to_date_string(data.get("date_in")),
+        "price_in": _to_float(data.get("price_in")),
+        "qty": _to_int(data.get("qty")),
+        "transaction_cost_in": _to_float(data.get("trcost_in")),
+        "cost_adjustments": _to_float(data.get("cost_adjs")),
+        "total_cost": _to_float(data.get("total_cost")),
+        "stop_loss": _to_float(data.get("stop_loss")),
+        "date_out": _to_date_string(data.get("date_out")),
+        "weeks_held": _to_int(data.get("weeks_held")),
+        "sell_trigger": str(data["sell_trigger"]),
+        "price_out": _to_float(data.get("price_out")),
+        "transaction_cost_out": _to_float(data.get("trcost_out")),
+        "sell_adjustments": _to_float(data.get("sell_adjs")),
+        "total_proceeds": _to_float(data.get("total_proceeds")),
+        "gain_loss": _to_float(data.get("gain_loss")),
+        "gain_loss_percent": _to_float(data.get("gl_percent")),
+        "weekdate": _to_date_string(data.get("weekdate")),
     }
 
 
@@ -372,4 +439,116 @@ def get_stocktrends_portfolio_returns(
         "portfolio": _row_to_portfolio_summary(portfolio_row),
         "count": len(returns),
         "returns": returns,
+    }
+
+
+@router.get(
+    "/{port_id}/positions/history",
+    response_model=StockTrendsPortfolioClosedPositionsResponse,
+    summary="Get official Stock Trends historical closed positions",
+    description=(
+        "Official Stock Trends historical closed-position records for one live "
+        "model portfolio. Current live holdings are intentionally excluded. "
+        "Only status=1 portfolios are exposed; nonexistent or inactive portfolio "
+        "IDs return 404."
+    ),
+)
+def get_stocktrends_portfolio_positions_history(
+    request: Request,
+    port_id: int = Path(..., ge=1, description="Official Stock Trends portfolio identifier."),
+    start_date: date | None = Query(
+        default=None,
+        description="Inclusive start close-date filter in YYYY-MM-DD format.",
+    ),
+    end_date: date | None = Query(
+        default=None,
+        description="Inclusive end close-date filter in YYYY-MM-DD format.",
+    ),
+):
+    portfolio_sql = text(
+        """
+        SELECT
+            port_id,
+            name,
+            strategy_id,
+            exchanges,
+            index_symbols,
+            description,
+            status
+        FROM stp_ports
+        WHERE port_id = :port_id
+          AND status = 1
+        LIMIT 1
+        """
+    )
+
+    positions_where = [
+        "port_id = :port_id",
+        "sell_trigger IS NOT NULL",
+        "sell_trigger <> ''",
+    ]
+    positions_params: dict[str, Any] = {"port_id": port_id}
+    if start_date is not None:
+        positions_where.append("date_out >= :start_date")
+        positions_params["start_date"] = start_date
+    if end_date is not None:
+        positions_where.append("date_out <= :end_date")
+        positions_params["end_date"] = end_date
+
+    positions_sql = text(
+        f"""
+        SELECT
+            position_id,
+            symbol,
+            exchange,
+            name,
+            date_in,
+            price_in,
+            qty,
+            trcost_in,
+            cost_adjs,
+            total_cost,
+            stop_loss,
+            date_out,
+            weeks_held,
+            sell_trigger,
+            price_out,
+            trcost_out,
+            sell_adjs,
+            total_proceeds,
+            gain_loss,
+            gl_percent,
+            weekdate
+        FROM stp_positions
+        WHERE {" AND ".join(positions_where)}
+        ORDER BY date_out ASC, position_id ASC
+        """
+    )
+
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            portfolio_row = conn.execute(portfolio_sql, {"port_id": port_id}).mappings().first()
+            if not portfolio_row:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "request_id": request.state.request_id,
+                        "error": "portfolio_not_found",
+                        "port_id": port_id,
+                    },
+                )
+            position_rows = conn.execute(positions_sql, positions_params).mappings().all()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_db_query_failed(request, exc)
+
+    positions = [_row_to_closed_position(row) for row in position_rows]
+    return {
+        "request_id": request.state.request_id,
+        "port_id": int(port_id),
+        "portfolio": _row_to_portfolio_summary(portfolio_row),
+        "count": len(positions),
+        "positions": positions,
     }

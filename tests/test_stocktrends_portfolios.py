@@ -115,6 +115,109 @@ _RETURNS_ROWS = [
     },
 ]
 
+_POSITIONS_ROWS = [
+    {
+        "port_id": 2,
+        "position_id": 20,
+        "symbol": "IBM",
+        "exchange": "N",
+        "name": "International Business Machines",
+        "date_in": date(2023, 10, 6),
+        "price_in": Decimal("100.00"),
+        "qty": 100,
+        "trcost_in": Decimal("9.99"),
+        "cost_adjs": Decimal("0.00"),
+        "total_cost": Decimal("10009.99"),
+        "stop_loss": Decimal("90.00"),
+        "date_out": date(2024, 1, 5),
+        "weeks_held": 12,
+        "sell_trigger": "BC",
+        "price_out": Decimal("110.00"),
+        "trcost_out": Decimal("9.99"),
+        "sell_adjs": Decimal("0.00"),
+        "total_proceeds": Decimal("10990.01"),
+        "gain_loss": Decimal("980.02"),
+        "gl_percent": Decimal("9.80"),
+        "weekdate": date(2024, 1, 5),
+        "last_update": "operational metadata should not leak",
+    },
+    {
+        "port_id": 2,
+        "position_id": 21,
+        "symbol": "MSFT",
+        "exchange": "Q",
+        "name": "Microsoft",
+        "date_in": date(2023, 11, 3),
+        "price_in": Decimal("200.00"),
+        "qty": 50,
+        "trcost_in": Decimal("4.99"),
+        "cost_adjs": Decimal("1.25"),
+        "total_cost": Decimal("10006.24"),
+        "stop_loss": Decimal("180.00"),
+        "date_out": date(2024, 1, 12),
+        "weeks_held": 10,
+        "sell_trigger": "PT",
+        "price_out": Decimal("215.00"),
+        "trcost_out": Decimal("4.99"),
+        "sell_adjs": Decimal("-0.25"),
+        "total_proceeds": Decimal("10744.76"),
+        "gain_loss": Decimal("738.52"),
+        "gl_percent": Decimal("7.38"),
+        "weekdate": date(2024, 1, 12),
+        "last_update": "operational metadata should not leak",
+    },
+    {
+        "port_id": 2,
+        "position_id": 22,
+        "symbol": "LIVE",
+        "exchange": "N",
+        "name": "Current Live Holding",
+        "date_in": date(2024, 1, 19),
+        "price_in": Decimal("50.00"),
+        "qty": 25,
+        "trcost_in": Decimal("1.99"),
+        "cost_adjs": Decimal("0.00"),
+        "total_cost": Decimal("1251.99"),
+        "stop_loss": Decimal("45.00"),
+        "date_out": date(2024, 1, 26),
+        "weeks_held": 1,
+        "sell_trigger": "",
+        "price_out": Decimal("0.00"),
+        "trcost_out": Decimal("0.00"),
+        "sell_adjs": Decimal("0.00"),
+        "total_proceeds": Decimal("0.00"),
+        "gain_loss": Decimal("0.00"),
+        "gl_percent": Decimal("0.00"),
+        "weekdate": date(2024, 1, 26),
+        "last_update": "current holdings must not leak",
+    },
+    {
+        "port_id": 99,
+        "position_id": 99,
+        "symbol": "INACTIVE",
+        "exchange": "N",
+        "name": "Inactive Portfolio Closed Position",
+        "date_in": date(2023, 1, 6),
+        "price_in": Decimal("10.00"),
+        "qty": 10,
+        "trcost_in": Decimal("1.00"),
+        "cost_adjs": Decimal("0.00"),
+        "total_cost": Decimal("101.00"),
+        "stop_loss": Decimal("9.00"),
+        "date_out": date(2024, 1, 5),
+        "weeks_held": 52,
+        "sell_trigger": "BC",
+        "price_out": Decimal("12.00"),
+        "trcost_out": Decimal("1.00"),
+        "sell_adjs": Decimal("0.00"),
+        "total_proceeds": Decimal("119.00"),
+        "gain_loss": Decimal("18.00"),
+        "gl_percent": Decimal("17.82"),
+        "weekdate": date(2024, 1, 5),
+        "last_update": "inactive portfolio data should not leak",
+    },
+]
+
 
 class _Result:
     def __init__(self, rows: list[dict[str, Any]]):
@@ -135,10 +238,12 @@ class _Connection:
         self,
         portfolio_rows: list[dict[str, Any]],
         return_rows: list[dict[str, Any]],
+        position_rows: list[dict[str, Any]],
         executed: list[tuple[str, dict[str, Any]]],
     ):
         self._portfolio_rows = portfolio_rows
         self._return_rows = return_rows
+        self._position_rows = position_rows
         self._executed = executed
 
     def __enter__(self):
@@ -160,6 +265,19 @@ class _Connection:
                 rows = [row for row in rows if row["weekdate"] <= params["end_date"]]
             return _Result(rows)
 
+        if "FROM stp_positions" in sql:
+            rows = [
+                row
+                for row in self._position_rows
+                if row["port_id"] == params.get("port_id") and row.get("sell_trigger") not in (None, "")
+            ]
+            if "start_date" in params:
+                rows = [row for row in rows if row["date_out"] >= params["start_date"]]
+            if "end_date" in params:
+                rows = [row for row in rows if row["date_out"] <= params["end_date"]]
+            rows = sorted(rows, key=lambda row: (row["date_out"], row["position_id"]))
+            return _Result(rows)
+
         rows = [row for row in self._portfolio_rows if row["status"] == 1]
         if "port_id" in params:
             rows = [row for row in rows if row["port_id"] == params["port_id"]]
@@ -171,13 +289,15 @@ class _Engine:
         self,
         portfolio_rows: list[dict[str, Any]],
         return_rows: list[dict[str, Any]],
+        position_rows: list[dict[str, Any]],
     ):
         self.portfolio_rows = portfolio_rows
         self.return_rows = return_rows
+        self.position_rows = position_rows
         self.executed: list[tuple[str, dict[str, Any]]] = []
 
     def connect(self):
-        return _Connection(self.portfolio_rows, self.return_rows, self.executed)
+        return _Connection(self.portfolio_rows, self.return_rows, self.position_rows, self.executed)
 
 
 class _FailingEngine:
@@ -215,7 +335,7 @@ def _schema_has_date_format(schema: Any) -> bool:
 
 @pytest.fixture
 def portfolio_engine(monkeypatch):
-    engine = _Engine(_ROWS, _RETURNS_ROWS)
+    engine = _Engine(_ROWS, _RETURNS_ROWS, _POSITIONS_ROWS)
     monkeypatch.setattr(portfolios_router, "get_engine", lambda: engine)
     monkeypatch.setattr(portfolios_router, "text", lambda sql: sql)
     return engine
@@ -437,9 +557,172 @@ def test_portfolio_returns_history_start_and_end_date_work_together(protected_cl
     assert "ORDER BY weekdate ASC" in executed_sql
 
 
+def test_portfolio_positions_history_is_public_and_uses_closed_positions(protected_client, portfolio_engine):
+    response = protected_client.get("/v1/stocktrends/portfolios/2/positions/history")
+
+    assert response.status_code == 200
+    _assert_no_payment_challenge(response)
+    body = response.json()
+    assert body["port_id"] == 2
+    assert body["portfolio"] == {
+        "port_id": 2,
+        "name": "TSX 60 Portfolio",
+        "selection_universe": "SPTX60",
+    }
+    assert body["count"] == 2
+    assert body["positions"] == [
+        {
+            "position_id": 20,
+            "symbol": "IBM",
+            "exchange": "N",
+            "name": "International Business Machines",
+            "date_in": "2023-10-06",
+            "price_in": 100.0,
+            "qty": 100,
+            "transaction_cost_in": 9.99,
+            "cost_adjustments": 0.0,
+            "total_cost": 10009.99,
+            "stop_loss": 90.0,
+            "date_out": "2024-01-05",
+            "weeks_held": 12,
+            "sell_trigger": "BC",
+            "price_out": 110.0,
+            "transaction_cost_out": 9.99,
+            "sell_adjustments": 0.0,
+            "total_proceeds": 10990.01,
+            "gain_loss": 980.02,
+            "gain_loss_percent": 9.8,
+            "weekdate": "2024-01-05",
+        },
+        {
+            "position_id": 21,
+            "symbol": "MSFT",
+            "exchange": "Q",
+            "name": "Microsoft",
+            "date_in": "2023-11-03",
+            "price_in": 200.0,
+            "qty": 50,
+            "transaction_cost_in": 4.99,
+            "cost_adjustments": 1.25,
+            "total_cost": 10006.24,
+            "stop_loss": 180.0,
+            "date_out": "2024-01-12",
+            "weeks_held": 10,
+            "sell_trigger": "PT",
+            "price_out": 215.0,
+            "transaction_cost_out": 4.99,
+            "sell_adjustments": -0.25,
+            "total_proceeds": 10744.76,
+            "gain_loss": 738.52,
+            "gain_loss_percent": 7.38,
+            "weekdate": "2024-01-12",
+        },
+    ]
+    assert "LIVE" not in str(body)
+    assert "last_update" not in str(body)
+    assert "trcost_in" not in str(body)
+    assert "gl_percent" not in str(body)
+
+    executed_sql = "\n".join(sql for sql, _params in portfolio_engine.executed)
+    assert "FROM stp_ports" in executed_sql
+    assert "AND status = 1" in executed_sql
+    assert "FROM stp_positions" in executed_sql
+    assert "sell_trigger <> ''" in executed_sql
+    assert "date_out" in executed_sql
+    assert "ORDER BY date_out ASC, position_id ASC" in executed_sql
+    assert "last_update" not in executed_sql
+    assert "FROM stp_returnslog" not in executed_sql
+
+
+def test_portfolio_positions_history_with_no_rows_returns_empty_list(protected_client):
+    response = protected_client.get("/v1/stocktrends/portfolios/1/positions/history")
+
+    assert response.status_code == 200
+    _assert_no_payment_challenge(response)
+    body = response.json()
+    assert body["port_id"] == 1
+    assert body["count"] == 0
+    assert body["positions"] == []
+
+
+def test_portfolio_positions_history_start_date_filters_earlier_closed_rows(
+    protected_client,
+    portfolio_engine,
+):
+    response = protected_client.get(
+        "/v1/stocktrends/portfolios/2/positions/history?start_date=2024-01-12"
+    )
+
+    assert response.status_code == 200
+    _assert_no_payment_challenge(response)
+    body = response.json()
+    assert body["count"] == 1
+    assert [row["position_id"] for row in body["positions"]] == [21]
+
+    executed_sql, params = portfolio_engine.executed[-1]
+    assert "date_out >= :start_date" in executed_sql
+    assert params["start_date"] == date(2024, 1, 12)
+    assert "ORDER BY date_out ASC, position_id ASC" in executed_sql
+
+
+def test_portfolio_positions_history_end_date_filters_later_closed_rows(
+    protected_client,
+    portfolio_engine,
+):
+    response = protected_client.get(
+        "/v1/stocktrends/portfolios/2/positions/history?end_date=2024-01-05"
+    )
+
+    assert response.status_code == 200
+    _assert_no_payment_challenge(response)
+    body = response.json()
+    assert body["count"] == 1
+    assert [row["position_id"] for row in body["positions"]] == [20]
+
+    executed_sql, params = portfolio_engine.executed[-1]
+    assert "date_out <= :end_date" in executed_sql
+    assert params["end_date"] == date(2024, 1, 5)
+    assert "ORDER BY date_out ASC, position_id ASC" in executed_sql
+
+
+def test_portfolio_positions_history_start_and_end_date_work_together(
+    protected_client,
+    portfolio_engine,
+):
+    response = protected_client.get(
+        "/v1/stocktrends/portfolios/2/positions/history?start_date=2024-01-06&end_date=2024-01-12"
+    )
+
+    assert response.status_code == 200
+    _assert_no_payment_challenge(response)
+    body = response.json()
+    assert body["count"] == 1
+    assert [row["position_id"] for row in body["positions"]] == [21]
+
+    executed_sql, params = portfolio_engine.executed[-1]
+    assert "date_out >= :start_date" in executed_sql
+    assert "date_out <= :end_date" in executed_sql
+    assert params["start_date"] == date(2024, 1, 6)
+    assert params["end_date"] == date(2024, 1, 12)
+    assert "ORDER BY date_out ASC, position_id ASC" in executed_sql
+
+
 @pytest.mark.parametrize("port_id", [404, 99])
 def test_portfolio_returns_history_returns_404_for_missing_or_inactive(protected_client, port_id):
     response = protected_client.get(f"/v1/stocktrends/portfolios/{port_id}/returns")
+
+    assert response.status_code == 404
+    assert response.json()["detail"]["error"] == "portfolio_not_found"
+    assert response.json()["detail"]["port_id"] == port_id
+    _assert_no_payment_challenge(response)
+
+
+@pytest.mark.parametrize("port_id", [404, 99])
+def test_portfolio_positions_history_returns_404_for_missing_or_inactive(
+    protected_client,
+    port_id,
+):
+    response = protected_client.get(f"/v1/stocktrends/portfolios/{port_id}/positions/history")
 
     assert response.status_code == 404
     assert response.json()["detail"]["error"] == "portfolio_not_found"
@@ -472,8 +755,40 @@ def test_portfolio_returns_access_classification_layers_are_public_free():
     assert accepted == "none"
 
 
+def test_portfolio_positions_history_access_classification_layers_are_public_free():
+    path = "/v1/stocktrends/portfolios/2/positions/history"
+
+    decision = classifier_module.classify_request(
+        path=path,
+        method="GET",
+        has_paid_auth=False,
+        payment_method_header=None,
+        plan_code=None,
+        agent_identifier=None,
+    )
+    accepted = policy_provider.get_accepted_payment_methods_for_path(
+        path,
+        decision.log_pricing_rule_id,
+        method="GET",
+    )
+
+    assert policy_provider.get_effective_endpoint_payment_policy(path, "GET") is None
+    assert policy_provider.is_public_stocktrends_portfolio_positions_history_path(path)
+    assert decision.access_granted is True
+    assert decision.is_metered == 0
+    assert decision.econ_payment_required == 0
+    assert accepted == "none"
+
+
 def test_future_stocktrends_portfolio_child_paths_are_not_public_bypasses(protected_client):
     response = protected_client.get("/v1/stocktrends/portfolios/2/positions")
+
+    assert response.status_code == 401
+    assert response.json() == {"detail": "Missing API key"}
+
+
+def test_future_stocktrends_current_positions_path_is_not_public_bypass(protected_client):
+    response = protected_client.get("/v1/stocktrends/portfolios/2/positions/current")
 
     assert response.status_code == 401
     assert response.json() == {"detail": "Missing API key"}
@@ -510,6 +825,7 @@ def test_stocktrends_portfolio_endpoints_appear_in_openapi(protected_client):
     assert "/stocktrends/portfolios" in paths
     assert "/stocktrends/portfolios/{port_id}" in paths
     assert "/stocktrends/portfolios/{port_id}/returns" in paths
+    assert "/stocktrends/portfolios/{port_id}/positions/history" in paths
     assert "Official Stock Trends model portfolios" in paths["/stocktrends/portfolios"]["get"]["description"]
     assert "Official Stock Trends model portfolio" in paths["/stocktrends/portfolios/{port_id}"]["get"]["description"]
     returns_description = paths["/stocktrends/portfolios/{port_id}/returns"]["get"]["description"]
@@ -526,3 +842,19 @@ def test_stocktrends_portfolio_endpoints_appear_in_openapi(protected_client):
     assert returns_parameters["end_date"]["in"] == "query"
     assert returns_parameters["end_date"]["required"] is False
     assert _schema_has_date_format(returns_parameters["end_date"]["schema"])
+
+    positions_description = paths["/stocktrends/portfolios/{port_id}/positions/history"]["get"]["description"]
+    assert "Official Stock Trends historical closed-position records" in positions_description
+    assert "Current live holdings are intentionally excluded" in positions_description
+    assert "stp_positions" not in positions_description
+    positions_parameters = {
+        parameter["name"]: parameter
+        for parameter in paths["/stocktrends/portfolios/{port_id}/positions/history"]["get"]["parameters"]
+        if "name" in parameter
+    }
+    assert positions_parameters["start_date"]["in"] == "query"
+    assert positions_parameters["start_date"]["required"] is False
+    assert _schema_has_date_format(positions_parameters["start_date"]["schema"])
+    assert positions_parameters["end_date"]["in"] == "query"
+    assert positions_parameters["end_date"]["required"] is False
+    assert _schema_has_date_format(positions_parameters["end_date"]["schema"])

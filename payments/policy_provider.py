@@ -116,10 +116,21 @@ def is_public_stocktrends_portfolio_returns_path(path: str) -> bool:
     return len(parts) == 2 and bool(parts[0]) and parts[1] == "returns"
 
 
+def is_public_stocktrends_portfolio_positions_history_path(path: str) -> bool:
+    path = path.split("?", 1)[0]
+    if not path.startswith(_PUBLIC_STOCKTRENDS_PORTFOLIO_METADATA_DETAIL_PREFIX):
+        return False
+
+    suffix = path[len(_PUBLIC_STOCKTRENDS_PORTFOLIO_METADATA_DETAIL_PREFIX):]
+    parts = suffix.split("/")
+    return len(parts) == 3 and bool(parts[0]) and parts[1] == "positions" and parts[2] == "history"
+
+
 def is_public_stocktrends_portfolio_path(path: str) -> bool:
     return (
         is_public_stocktrends_portfolio_metadata_path(path)
         or is_public_stocktrends_portfolio_returns_path(path)
+        or is_public_stocktrends_portfolio_positions_history_path(path)
     )
 
 # Matches standard 8-4-4-4-12 UUID format.  Control-plane systems sometimes use

@@ -35,11 +35,21 @@ Current public/free Stock Trends portfolio endpoints include:
 * `GET /v1/stocktrends/portfolios`
 * `GET /v1/stocktrends/portfolios/{port_id}`
 * `GET /v1/stocktrends/portfolios/{port_id}/returns`
+* `GET /v1/stocktrends/portfolios/{port_id}/positions/history`
 
 Official Stock Trends portfolio returns history is sourced from
 `stp_returnslog`, the canonical portfolio performance history. Do not
 reconstruct portfolio returns from `stp_positions`, which is a holdings/audit
 trail source rather than the public performance-history source.
+
+Official Stock Trends historical closed-position records are sourced from
+`stp_positions`, filtered to closed rows only:
+
+* `sell_trigger <> ''`
+
+Rows where `sell_trigger = ''` are current live holdings and must remain
+protected. Do not make arbitrary `/positions/*` child paths public; only
+`/positions/history` is public/free.
 
 Current public response mapping:
 
@@ -55,6 +65,33 @@ Current public response mapping:
 * `stp_returnslog.cum_totalgain` -> `returns[].cumulative_total_gain`
 * `stp_returnslog.tsxindex` -> `returns[].tsx_index`
 * `stp_returnslog.spindex` -> `returns[].sp_index`
+
+Current public closed-position mapping:
+
+* `stp_positions.position_id` -> `positions[].position_id`
+* `stp_positions.symbol` -> `positions[].symbol`
+* `stp_positions.exchange` -> `positions[].exchange`
+* `stp_positions.name` -> `positions[].name`
+* `stp_positions.date_in` -> `positions[].date_in`
+* `stp_positions.price_in` -> `positions[].price_in`
+* `stp_positions.qty` -> `positions[].qty`
+* `stp_positions.trcost_in` -> `positions[].transaction_cost_in`
+* `stp_positions.cost_adjs` -> `positions[].cost_adjustments`
+* `stp_positions.total_cost` -> `positions[].total_cost`
+* `stp_positions.stop_loss` -> `positions[].stop_loss`
+* `stp_positions.date_out` -> `positions[].date_out`
+* `stp_positions.weeks_held` -> `positions[].weeks_held`
+* `stp_positions.sell_trigger` -> `positions[].sell_trigger`
+* `stp_positions.price_out` -> `positions[].price_out`
+* `stp_positions.trcost_out` -> `positions[].transaction_cost_out`
+* `stp_positions.sell_adjs` -> `positions[].sell_adjustments`
+* `stp_positions.total_proceeds` -> `positions[].total_proceeds`
+* `stp_positions.gain_loss` -> `positions[].gain_loss`
+* `stp_positions.gl_percent` -> `positions[].gain_loss_percent`
+* `stp_positions.weekdate` -> `positions[].weekdate`
+
+Do not expose `stp_positions.last_update` in the public closed-position
+response.
 
 ---
 
