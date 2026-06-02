@@ -163,13 +163,15 @@ POST /v1/portfolio/construct
 GET /v1/stocktrends/portfolios
 GET /v1/stocktrends/portfolios/{port_id}
 GET /v1/stocktrends/portfolios/{port_id}/returns
+GET /v1/stocktrends/portfolios/{port_id}/summary
 GET /v1/stocktrends/portfolios/{port_id}/positions/history
 ```
 
 These routes expose official Stock Trends model portfolio metadata and returns
-history plus historical closed-position records as public/free discovery data.
-Current live holdings are intentionally excluded from the public portfolio
-history surface.
+history, a compact public history summary, and historical closed-position
+records as public/free discovery data. The summary includes Stock Trends
+annualized ROI on average invested capital. Current live holdings are
+intentionally excluded from the public portfolio history surface.
 
 ### Market Intelligence
 

@@ -35,6 +35,7 @@ Current public/free Stock Trends portfolio endpoints include:
 * `GET /v1/stocktrends/portfolios`
 * `GET /v1/stocktrends/portfolios/{port_id}`
 * `GET /v1/stocktrends/portfolios/{port_id}/returns`
+* `GET /v1/stocktrends/portfolios/{port_id}/summary`
 * `GET /v1/stocktrends/portfolios/{port_id}/positions/history`
 
 Official Stock Trends portfolio returns history is sourced from
@@ -92,6 +93,41 @@ Current public closed-position mapping:
 
 Do not expose `stp_positions.last_update` in the public closed-position
 response.
+
+Official Stock Trends portfolio public history summary is also public/free.
+It summarizes:
+
+* active portfolio metadata from `stp_ports WHERE port_id = :port_id AND status = 1`
+* public return-history aggregates from `stp_returnslog`
+* closed-position aggregates from `stp_positions` filtered to:
+  * `sell_trigger IS NOT NULL`
+  * `sell_trigger <> ''`
+
+The summary ROI block uses the canonical Stock Trends average-investment method:
+
+```text
+avg_investment = avg_net_cost * avg_positions
+
+annualized_roi_percent =
+    (total_realized_gain_loss / avg_investment)
+    / ((total_weeks * 7) / 365.25)
+    * 100
+```
+
+For the public summary implementation:
+
+* `total_realized_gain_loss` comes from `SUM(stp_positions.gain_loss)`
+* `avg_net_cost` comes from `AVG(stp_positions.total_cost)`
+* `avg_positions` is derived from closed position-weeks over elapsed weeks
+* `total_weeks` is the elapsed closed-position period from earliest `date_in`
+  to latest `date_out` in the filtered closed-position set
+* ROI uses the same closed-position filter and `date_out` filters as the
+  closed-position summary
+* `annualized_roi_percent` is null when `avg_investment` or `total_weeks` is
+  zero or null
+
+Current live holdings are excluded from the summary. Do not make arbitrary
+`/summary/*` child paths public/free.
 
 ---
 

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request
@@ -141,6 +142,98 @@ class StockTrendsPortfolioClosedPositionsResponse(BaseModel):
     positions: list[StockTrendsPortfolioClosedPosition]
 
 
+class StockTrendsPortfolioSummaryReturns(BaseModel):
+    count: int = Field(..., description="Number of public return observations summarized.")
+    first_weekdate: str | None = Field(default=None, description="Earliest public return observation weekdate.")
+    latest_weekdate: str | None = Field(default=None, description="Latest public return observation weekdate.")
+    latest_total_valuation: float | None = Field(
+        default=None,
+        description="Latest official total portfolio valuation in the summarized public return history.",
+    )
+    latest_cumulative_total_gain: float | None = Field(
+        default=None,
+        description="Latest official cumulative total gain in the summarized public return history.",
+    )
+    latest_cumulative_realized_gain: float | None = Field(
+        default=None,
+        description="Latest official cumulative realized gain in the summarized public return history.",
+    )
+
+
+class StockTrendsPortfolioSummaryClosedPositions(BaseModel):
+    count: int = Field(..., description="Number of closed historical positions summarized.")
+    first_date_in: str | None = Field(default=None, description="Earliest entry date among closed historical positions.")
+    first_date_out: str | None = Field(default=None, description="Earliest close date among closed historical positions.")
+    latest_date_out: str | None = Field(default=None, description="Latest close date among closed historical positions.")
+    total_realized_gain_loss: float = Field(
+        ...,
+        description="Total realized gain or loss across closed historical positions.",
+    )
+    average_gain_loss_percent: float | None = Field(
+        default=None,
+        description="Average realized gain/loss percentage across closed historical positions.",
+    )
+    winning_positions: int = Field(..., description="Closed positions with positive realized gain/loss.")
+    losing_positions: int = Field(..., description="Closed positions with negative realized gain/loss.")
+
+
+class StockTrendsPortfolioSummaryRoi(BaseModel):
+    method: str = Field(
+        ...,
+        description="Annualized ROI method identifier.",
+    )
+    total_realized_gain_loss: float = Field(
+        ...,
+        description="Total realized gain or loss across closed historical positions.",
+    )
+    average_net_cost: float | None = Field(
+        default=None,
+        description="Average net cost per closed historical position.",
+    )
+    average_positions: float | None = Field(
+        default=None,
+        description="Average number of positions held across the summarized closed-position period.",
+    )
+    average_investment: float | None = Field(
+        default=None,
+        description="Average invested capital used for the Stock Trends annualized ROI calculation.",
+    )
+    total_weeks: float | None = Field(
+        default=None,
+        description="Elapsed weeks across the summarized closed-position period.",
+    )
+    annualized_roi_percent: float | None = Field(
+        default=None,
+        description="Annualized ROI percentage using the Stock Trends average-investment method.",
+    )
+
+
+class StockTrendsPortfolioSummaryVerification(BaseModel):
+    returns_endpoint: str = Field(..., description="Public endpoint for portfolio return-history evidence.")
+    historical_positions_endpoint: str = Field(
+        ...,
+        description="Public endpoint for closed historical position evidence.",
+    )
+    current_live_holdings_excluded: bool = Field(
+        ...,
+        description="True when current live holdings are intentionally excluded from the public summary.",
+    )
+
+
+class StockTrendsPortfolioHistorySummary(BaseModel):
+    returns: StockTrendsPortfolioSummaryReturns
+    closed_positions: StockTrendsPortfolioSummaryClosedPositions
+    roi: StockTrendsPortfolioSummaryRoi
+    verification: StockTrendsPortfolioSummaryVerification
+
+
+class StockTrendsPortfolioSummaryResponse(BaseModel):
+    request_id: str
+    port_id: int
+    portfolio: StockTrendsPortfolioReturnsPortfolio
+    summary: StockTrendsPortfolioHistorySummary
+
+
 def _to_int(value: Any) -> int | None:
     if value is None:
         return None
@@ -153,12 +246,98 @@ def _to_float(value: Any) -> float | None:
     return float(value)
 
 
+def _to_decimal(value: Any) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _to_int_or_zero(value: Any) -> int:
+    if value is None:
+        return 0
+    return int(value)
+
+
+def _to_float_or_zero(value: Any) -> float:
+    if value is None:
+        return 0.0
+    return float(value)
+
+
 def _to_date_string(value: Any) -> str | None:
     if value is None:
         return None
     if hasattr(value, "isoformat"):
         return value.isoformat()
     return str(value)
+
+
+def _to_date_value(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value)[:10])
+    except ValueError:
+        return None
+
+
+def _to_float_from_decimal(value: Decimal | None) -> float | None:
+    if value is None:
+        return None
+    return float(value)
+
+
+def _calculate_roi_summary(closed_summary: dict[str, Any]) -> dict[str, Any]:
+    total_realized_gain_loss = _to_decimal(closed_summary.get("total_realized_gain_loss"))
+    if total_realized_gain_loss is None:
+        total_realized_gain_loss = Decimal("0")
+    average_net_cost = _to_decimal(closed_summary.get("average_net_cost"))
+    position_weeks = _to_decimal(closed_summary.get("total_position_weeks"))
+    first_date_in = _to_date_value(closed_summary.get("first_date_in"))
+    latest_date_out = _to_date_value(closed_summary.get("latest_date_out"))
+
+    total_weeks: Decimal | None = None
+    if first_date_in is not None and latest_date_out is not None:
+        elapsed_days = (latest_date_out - first_date_in).days
+        if elapsed_days >= 0:
+            total_weeks = Decimal(elapsed_days) / Decimal("7")
+
+    average_positions: Decimal | None = None
+    if position_weeks is not None and total_weeks is not None and total_weeks != 0:
+        average_positions = position_weeks / total_weeks
+
+    average_investment: Decimal | None = None
+    if average_net_cost is not None and average_positions is not None:
+        average_investment = average_net_cost * average_positions
+
+    annualized_roi_percent: Decimal | None = None
+    if (
+        average_investment is not None
+        and average_investment != 0
+        and total_weeks is not None
+        and total_weeks != 0
+    ):
+        years = (total_weeks * Decimal("7")) / Decimal("365.25")
+        annualized_roi_percent = (total_realized_gain_loss / average_investment) / years * Decimal("100")
+
+    return {
+        "method": "stocktrends_average_investment",
+        "total_realized_gain_loss": float(total_realized_gain_loss),
+        "average_net_cost": _to_float_from_decimal(average_net_cost),
+        "average_positions": _to_float_from_decimal(average_positions),
+        "average_investment": _to_float_from_decimal(average_investment),
+        "total_weeks": _to_float_from_decimal(total_weeks),
+        "annualized_roi_percent": _to_float_from_decimal(annualized_roi_percent),
+    }
 
 
 def _row_to_portfolio(row: Any) -> dict[str, Any]:
@@ -226,6 +405,45 @@ def _row_to_closed_position(row: Any) -> dict[str, Any]:
         "gain_loss": _to_float(data.get("gain_loss")),
         "gain_loss_percent": _to_float(data.get("gl_percent")),
         "weekdate": _to_date_string(data.get("weekdate")),
+    }
+
+
+def _rows_to_history_summary(
+    returns_summary_row: Any,
+    returns_latest_row: Any,
+    closed_positions_summary_row: Any,
+    *,
+    port_id: int,
+) -> dict[str, Any]:
+    returns_summary = dict(returns_summary_row or {})
+    returns_latest = dict(returns_latest_row or {})
+    closed_summary = dict(closed_positions_summary_row or {})
+
+    return {
+        "returns": {
+            "count": _to_int_or_zero(returns_summary.get("return_count")),
+            "first_weekdate": _to_date_string(returns_summary.get("first_weekdate")),
+            "latest_weekdate": _to_date_string(returns_summary.get("latest_weekdate")),
+            "latest_total_valuation": _to_float(returns_latest.get("totalvaluation")),
+            "latest_cumulative_total_gain": _to_float(returns_latest.get("cum_totalgain")),
+            "latest_cumulative_realized_gain": _to_float(returns_latest.get("cum_realizedgain")),
+        },
+        "closed_positions": {
+            "count": _to_int_or_zero(closed_summary.get("closed_position_count")),
+            "first_date_in": _to_date_string(closed_summary.get("first_date_in")),
+            "first_date_out": _to_date_string(closed_summary.get("first_date_out")),
+            "latest_date_out": _to_date_string(closed_summary.get("latest_date_out")),
+            "total_realized_gain_loss": _to_float_or_zero(closed_summary.get("total_realized_gain_loss")),
+            "average_gain_loss_percent": _to_float(closed_summary.get("average_gain_loss_percent")),
+            "winning_positions": _to_int_or_zero(closed_summary.get("winning_positions")),
+            "losing_positions": _to_int_or_zero(closed_summary.get("losing_positions")),
+        },
+        "roi": _calculate_roi_summary(closed_summary),
+        "verification": {
+            "returns_endpoint": f"/v1/stocktrends/portfolios/{port_id}/returns",
+            "historical_positions_endpoint": f"/v1/stocktrends/portfolios/{port_id}/positions/history",
+            "current_live_holdings_excluded": True,
+        },
     }
 
 
@@ -439,6 +657,157 @@ def get_stocktrends_portfolio_returns(
         "portfolio": _row_to_portfolio_summary(portfolio_row),
         "count": len(returns),
         "returns": returns,
+    }
+
+
+@router.get(
+    "/{port_id}/summary",
+    response_model=StockTrendsPortfolioSummaryResponse,
+    summary="Get official Stock Trends portfolio public history summary",
+    description=(
+        "Official Stock Trends portfolio public history summary. "
+        "Summarizes public metadata, returns history, and closed historical "
+        "positions for one live official Stock Trends model portfolio, including "
+        "annualized ROI using the Stock Trends average-investment method. Current "
+        "live holdings are intentionally excluded. Optional start_date and end_date "
+        "filters apply to return weekdates and closed-position close dates."
+    ),
+)
+def get_stocktrends_portfolio_summary(
+    request: Request,
+    port_id: int = Path(..., ge=1, description="Official Stock Trends portfolio identifier."),
+    start_date: date | None = Query(
+        default=None,
+        description=(
+            "Inclusive start date in YYYY-MM-DD format. Applies to return "
+            "weekdates and closed-position close dates."
+        ),
+    ),
+    end_date: date | None = Query(
+        default=None,
+        description=(
+            "Inclusive end date in YYYY-MM-DD format. Applies to return "
+            "weekdates and closed-position close dates."
+        ),
+    ),
+):
+    portfolio_sql = text(
+        """
+        SELECT
+            port_id,
+            name,
+            strategy_id,
+            exchanges,
+            index_symbols,
+            description,
+            status
+        FROM stp_ports
+        WHERE port_id = :port_id
+          AND status = 1
+        LIMIT 1
+        """
+    )
+
+    returns_where = ["port_id = :port_id"]
+    returns_params: dict[str, Any] = {"port_id": port_id}
+    if start_date is not None:
+        returns_where.append("weekdate >= :start_date")
+        returns_params["start_date"] = start_date
+    if end_date is not None:
+        returns_where.append("weekdate <= :end_date")
+        returns_params["end_date"] = end_date
+
+    returns_summary_sql = text(
+        f"""
+        SELECT
+            COUNT(*) AS return_count,
+            MIN(weekdate) AS first_weekdate,
+            MAX(weekdate) AS latest_weekdate
+        FROM stp_returnslog
+        WHERE {" AND ".join(returns_where)}
+        """
+    )
+
+    returns_latest_sql = text(
+        f"""
+        SELECT
+            weekdate,
+            totalvaluation,
+            cum_totalgain,
+            cum_realizedgain
+        FROM stp_returnslog
+        WHERE {" AND ".join(returns_where)}
+        ORDER BY weekdate DESC
+        LIMIT 1
+        """
+    )
+
+    positions_where = [
+        "port_id = :port_id",
+        "sell_trigger IS NOT NULL",
+        "sell_trigger <> ''",
+    ]
+    positions_params: dict[str, Any] = {"port_id": port_id}
+    if start_date is not None:
+        positions_where.append("date_out >= :start_date")
+        positions_params["start_date"] = start_date
+    if end_date is not None:
+        positions_where.append("date_out <= :end_date")
+        positions_params["end_date"] = end_date
+
+    closed_positions_summary_sql = text(
+        f"""
+        SELECT
+            COUNT(*) AS closed_position_count,
+            MIN(date_in) AS first_date_in,
+            MIN(date_out) AS first_date_out,
+            MAX(date_out) AS latest_date_out,
+            SUM(gain_loss) AS total_realized_gain_loss,
+            AVG(gl_percent) AS average_gain_loss_percent,
+            AVG(total_cost) AS average_net_cost,
+            SUM(weeks_held) AS total_position_weeks,
+            SUM(CASE WHEN gain_loss > 0 THEN 1 ELSE 0 END) AS winning_positions,
+            SUM(CASE WHEN gain_loss < 0 THEN 1 ELSE 0 END) AS losing_positions
+        FROM stp_positions
+        WHERE {" AND ".join(positions_where)}
+        """
+    )
+
+    engine = get_engine()
+    try:
+        with engine.connect() as conn:
+            portfolio_row = conn.execute(portfolio_sql, {"port_id": port_id}).mappings().first()
+            if not portfolio_row:
+                raise HTTPException(
+                    status_code=404,
+                    detail={
+                        "request_id": request.state.request_id,
+                        "error": "portfolio_not_found",
+                        "port_id": port_id,
+                    },
+                )
+
+            returns_summary_row = conn.execute(returns_summary_sql, returns_params).mappings().first()
+            returns_latest_row = conn.execute(returns_latest_sql, returns_params).mappings().first()
+            closed_positions_summary_row = conn.execute(
+                closed_positions_summary_sql,
+                positions_params,
+            ).mappings().first()
+    except HTTPException:
+        raise
+    except Exception as exc:
+        _raise_db_query_failed(request, exc)
+
+    return {
+        "request_id": request.state.request_id,
+        "port_id": int(port_id),
+        "portfolio": _row_to_portfolio_summary(portfolio_row),
+        "summary": _rows_to_history_summary(
+            returns_summary_row,
+            returns_latest_row,
+            closed_positions_summary_row,
+            port_id=int(port_id),
+        ),
     }
 
 
