@@ -109,14 +109,14 @@ The summary ROI block uses the canonical Stock Trends average-investment method:
 avg_investment = avg_net_cost * avg_positions
 
 annualized_roi_percent =
-    (total_gain_loss / avg_investment)
+    (total_realized_gain_loss / avg_investment)
     / ((total_weeks * 7) / 365.25)
     * 100
 ```
 
 For the public summary implementation:
 
-* `total_gain_loss` comes from `SUM(stp_positions.gain_loss)`
+* `total_realized_gain_loss` comes from `SUM(stp_positions.gain_loss)`
 * `avg_net_cost` comes from `AVG(stp_positions.total_cost)`
 * `avg_positions` is derived from closed position-weeks over elapsed weeks
 * `total_weeks` is the elapsed closed-position period from earliest `date_in`

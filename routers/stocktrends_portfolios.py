@@ -182,7 +182,7 @@ class StockTrendsPortfolioSummaryRoi(BaseModel):
         ...,
         description="Annualized ROI method identifier.",
     )
-    total_gain_loss: float = Field(
+    total_realized_gain_loss: float = Field(
         ...,
         description="Total realized gain or loss across closed historical positions.",
     )
@@ -297,7 +297,9 @@ def _to_float_from_decimal(value: Decimal | None) -> float | None:
 
 
 def _calculate_roi_summary(closed_summary: dict[str, Any]) -> dict[str, Any]:
-    total_gain_loss = _to_decimal(closed_summary.get("total_realized_gain_loss")) or Decimal("0")
+    total_realized_gain_loss = _to_decimal(closed_summary.get("total_realized_gain_loss"))
+    if total_realized_gain_loss is None:
+        total_realized_gain_loss = Decimal("0")
     average_net_cost = _to_decimal(closed_summary.get("average_net_cost"))
     position_weeks = _to_decimal(closed_summary.get("total_position_weeks"))
     first_date_in = _to_date_value(closed_summary.get("first_date_in"))
@@ -325,12 +327,11 @@ def _calculate_roi_summary(closed_summary: dict[str, Any]) -> dict[str, Any]:
         and total_weeks != 0
     ):
         years = (total_weeks * Decimal("7")) / Decimal("365.25")
-        if years != 0:
-            annualized_roi_percent = (total_gain_loss / average_investment) / years * Decimal("100")
+        annualized_roi_percent = (total_realized_gain_loss / average_investment) / years * Decimal("100")
 
     return {
         "method": "stocktrends_average_investment",
-        "total_gain_loss": float(total_gain_loss),
+        "total_realized_gain_loss": float(total_realized_gain_loss),
         "average_net_cost": _to_float_from_decimal(average_net_cost),
         "average_positions": _to_float_from_decimal(average_positions),
         "average_investment": _to_float_from_decimal(average_investment),

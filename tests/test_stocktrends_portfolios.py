@@ -786,7 +786,7 @@ def test_portfolio_summary_returns_public_history_overview(protected_client, por
     }
     assert summary["roi"] == {
         "method": "stocktrends_average_investment",
-        "total_gain_loss": 1718.54,
+        "total_realized_gain_loss": 1718.54,
         "average_net_cost": 10008.115,
         "average_positions": pytest.approx(1.5714285714285714),
         "average_investment": pytest.approx(15727.037857142857),
@@ -842,7 +842,7 @@ def test_portfolio_summary_start_and_end_date_filter_public_history(
     assert summary["closed_positions"]["total_realized_gain_loss"] == 738.52
     assert summary["roi"] == {
         "method": "stocktrends_average_investment",
-        "total_gain_loss": 738.52,
+        "total_realized_gain_loss": 738.52,
         "average_net_cost": 10006.24,
         "average_positions": 1.0,
         "average_investment": 10006.24,
@@ -897,7 +897,7 @@ def test_portfolio_summary_with_empty_public_history_uses_zero_and_null_values(
     }
     assert summary["roi"] == {
         "method": "stocktrends_average_investment",
-        "total_gain_loss": 0.0,
+        "total_realized_gain_loss": 0.0,
         "average_net_cost": None,
         "average_positions": None,
         "average_investment": None,
@@ -913,7 +913,8 @@ def test_portfolio_summary_roi_excludes_current_live_positions(protected_client)
     assert response.status_code == 200
     _assert_no_payment_challenge(response)
     roi = response.json()["summary"]["roi"]
-    assert roi["total_gain_loss"] == 1718.54
+    assert roi["total_realized_gain_loss"] == 1718.54
+    assert "total_gain_loss" not in roi
     assert roi["average_net_cost"] == 10008.115
     assert roi["average_positions"] == pytest.approx(22 / 14)
     assert roi["average_investment"] == pytest.approx(15727.037857142857)
@@ -942,7 +943,7 @@ def test_portfolio_summary_roi_null_when_total_weeks_is_zero(
     assert response.status_code == 200
     _assert_no_payment_challenge(response)
     roi = response.json()["summary"]["roi"]
-    assert roi["total_gain_loss"] == 100.0
+    assert roi["total_realized_gain_loss"] == 100.0
     assert roi["average_net_cost"] == 10000.0
     assert roi["average_positions"] is None
     assert roi["average_investment"] is None
@@ -971,7 +972,7 @@ def test_portfolio_summary_roi_null_when_average_investment_is_zero(
     assert response.status_code == 200
     _assert_no_payment_challenge(response)
     roi = response.json()["summary"]["roi"]
-    assert roi["total_gain_loss"] == 100.0
+    assert roi["total_realized_gain_loss"] == 100.0
     assert roi["average_net_cost"] == 0.0
     assert roi["average_positions"] == 1.0
     assert roi["average_investment"] == 0.0
@@ -1179,6 +1180,9 @@ def test_stocktrends_portfolio_endpoints_appear_in_openapi(protected_client):
     assert _schema_has_date_format(summary_parameters["end_date"]["schema"])
     assert "weekdates" in summary_parameters["end_date"]["description"]
     assert "closed-position close dates" in summary_parameters["end_date"]["description"]
+    roi_schema = schema["components"]["schemas"]["StockTrendsPortfolioSummaryRoi"]
+    assert "total_realized_gain_loss" in roi_schema["properties"]
+    assert "total_gain_loss" not in roi_schema["properties"]
 
     positions_description = paths["/stocktrends/portfolios/{port_id}/positions/history"]["get"]["description"]
     assert "Official Stock Trends historical closed-position records" in positions_description
