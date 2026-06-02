@@ -293,6 +293,15 @@ def build_x402_requirements(
     http_method = method.upper()
     resource_url = f"{X402_API_BASE_URL}{path}" if X402_API_BASE_URL else path
     resource_description = description or get_resource_description(path)
+    resource_info = {
+        "url": resource_url,
+        "description": resource_description,
+        "mimeType": mime_type,
+        "serviceName": SERVICE_NAME,
+        "tags": list(SERVICE_TAGS),
+        "iconUrl": SERVICE_ICON_URL,
+    }
+    extra["resource"] = dict(resource_info)
     normalized_challenge_mode = normalize_challenge_mode(challenge_mode)
     if normalized_challenge_mode == X402_CHALLENGE_MODE_COMPACT:
         bazaar_extension = build_compact_bazaar_extension(path, http_method)
@@ -303,14 +312,7 @@ def build_x402_requirements(
     return {
         "x402Version": 2,
         # V2 canonical resource identity (ResourceInfo) — separate from accepts entries.
-        "resource": {
-            "url": resource_url,
-            "description": resource_description,
-            "mimeType": mime_type,
-            "serviceName": SERVICE_NAME,
-            "tags": list(SERVICE_TAGS),
-            "iconUrl": SERVICE_ICON_URL,
-        },
+        "resource": resource_info,
         "accepts": [
             {
                 "scheme": scheme,

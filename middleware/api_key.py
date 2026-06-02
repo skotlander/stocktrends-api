@@ -259,6 +259,11 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         ):
             return await call_next(request)
 
+        # OPTIONS preflight requests are handled by CORSMiddleware (outermost).
+        # Pass through unconditionally so auth enforcement never blocks preflights.
+        if request.method == "OPTIONS":
+            return await call_next(request)
+
         raw_key = extract_api_key(request)
 
         # Free-metered routes:

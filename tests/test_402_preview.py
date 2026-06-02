@@ -39,6 +39,7 @@ import middleware.metering as metering_module
 import pricing.classifier as classifier_module
 from payments.enforcement import PaymentEnforcementResult
 from discovery.preview import get_endpoint_preview, _PREVIEW_BY_PATH
+from pricing.classifier import PricingDecision
 
 
 # ---------------------------------------------------------------------------
@@ -47,6 +48,7 @@ from discovery.preview import get_endpoint_preview, _PREVIEW_BY_PATH
 
 _KNOWN_PREVIEW_PATH = "/v1/indicators/latest"
 _INDICATORS_HISTORY_PATH = "/v1/indicators/history"
+_DEVELOPER_ORIGIN = "https://developer.stocktrends.com"
 
 _CHALLENGE_BODY_TEMPLATE = {
     "error": "payment_required",
@@ -519,6 +521,100 @@ def test_x402_challenge_payment_required_header_present(client_x402_challenge_kn
     )
     # Must NOT be the wrong header name
     assert "x-payment-required" not in response.headers
+
+
+def test_stim_latest_no_payment_request_still_returns_402(monkeypatch):
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    with TestClient(main.app) as client:
+        response = client.get("/v1/stim/latest")
+
+    assert response.status_code == 402
+
+
+def test_x402_402_response_is_readable_from_developer_portal(monkeypatch):
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/v1/stim/latest",
+            headers={"Origin": _DEVELOPER_ORIGIN},
+        )
+
+    assert response.status_code == 402
+    assert response.headers["access-control-allow-origin"] == _DEVELOPER_ORIGIN
+    exposed_headers = response.headers["access-control-expose-headers"].lower()
+    assert "payment-required" in exposed_headers
+    assert "x-stocktrends-pricing-rule" in exposed_headers
+    assert "x-stocktrends-payment-required" in exposed_headers
+    assert response.headers["cache-control"] == "no-store, private"
+
+
+def test_x402_preflight_allows_payment_headers_for_paid_route():
+    with TestClient(main.app) as client:
+        response = client.options(
+            "/v1/stim/latest",
+            headers={
+                "Origin": _DEVELOPER_ORIGIN,
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": "x-payment,x-stocktrends-payment-method",
+            },
+        )
+
+    assert response.status_code < 300
+    assert response.status_code not in {401, 402, 405}
+    assert response.headers["access-control-allow-origin"] == _DEVELOPER_ORIGIN
+    allowed_headers = response.headers["access-control-allow-headers"].lower()
+    assert "x-payment" in allowed_headers
+    assert "x-stocktrends-payment-method" in allowed_headers
+
+
+def test_public_tools_endpoint_remains_non_payment_public():
+    with TestClient(main.app) as client:
+        response = client.get("/v1/ai/tools")
+
+    assert response.status_code == 200
+    assert response.headers.get("x-stocktrends-payment-required") == "false"
+    assert response.headers.get("cache-control") != "no-store, private"
+
+
+def test_non_developer_origin_gets_no_cors_headers(monkeypatch):
+    """Requests from non-whitelisted origins must not receive access-control-allow-origin."""
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    with TestClient(main.app) as client:
+        response = client.get(
+            "/v1/stim/latest",
+            headers={"Origin": "https://evil.example.com"},
+        )
+
+    assert "access-control-allow-origin" not in response.headers
+
+
+def test_paid_200_response_gets_no_store_cache_control(monkeypatch):
+    """A successful paid endpoint response (200) receives Cache-Control: no-store, private."""
+    paid_decision = PricingDecision(
+        is_metered=1,
+        access_granted=True,
+        deny_reason=None,
+        log_pricing_rule_id="stim_latest",
+        log_payment_method="subscription",
+        econ_pricing_rule_id="stim_latest",
+        econ_payment_required=0,
+        econ_payment_status=None,
+        econ_payment_method="subscription",
+    )
+    monkeypatch.setattr(metering_module, "classify_request", lambda **kwargs: paid_decision)
+    monkeypatch.setattr(metering_module, "log_api_request_event", lambda *a, **kw: None)
+    monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *a, **kw: None)
+    monkeypatch.setattr(
+        metering_module,
+        "resolve_economic_amounts",
+        lambda *a, **kw: (Decimal("0.05"), Decimal("0.05"), Decimal("0.05")),
+    )
+
+    with TestClient(main.app) as client:
+        response = client.get("/v1/ai/tools")
+
+    assert response.status_code == 200
+    assert response.headers.get("cache-control") == "no-store, private"
 
 
 # ---------------------------------------------------------------------------

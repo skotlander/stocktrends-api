@@ -55,6 +55,8 @@ def _parse_csv_env(env_name: str, default: str = "") -> set[str]:
 
 AGENT_PAY_TEST_CUSTOMER_IDS = _parse_csv_env("AGENT_PAY_TEST_CUSTOMER_IDS")
 AGENT_PAY_TEST_API_KEY_IDS = _parse_csv_env("AGENT_PAY_TEST_API_KEY_IDS")
+PAYMENT_RESPONSE_CACHE_CONTROL = "no-store, private"
+FREE_CACHEABLE_PRICING_RULE_IDS = {"default_free", "default_free_metered"}
 
 
 def validate_payment_headers(request: Request):
@@ -151,6 +153,22 @@ def apply_pricing_headers(response, pricing_rule_id: str | None, payment_require
 
     response.headers["X-StockTrends-Payment-Required"] = "true" if payment_required else "false"
     response.headers["X-StockTrends-Accepted-Payment-Methods"] = accepted_methods
+    if payment_required:
+        apply_payment_cache_headers(response)
+
+
+def apply_payment_cache_headers(response) -> None:
+    response.headers["Cache-Control"] = PAYMENT_RESPONSE_CACHE_CONTROL
+
+
+def should_no_store_protected_paid_response(decision) -> bool:
+    pricing_rule_id = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
+    return bool(
+        decision.access_granted
+        and decision.is_metered
+        and pricing_rule_id
+        and pricing_rule_id not in FREE_CACHEABLE_PRICING_RULE_IDS
+    )
 
 
 def _apply_quota_headers(response, request: Request, decision) -> None:
@@ -1824,6 +1842,8 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                     )
 
                 _apply_quota_headers(response, request, decision)
+                if should_no_store_protected_paid_response(decision):
+                    apply_payment_cache_headers(response)
 
             event = build_request_event(
                 request_id=request_id,

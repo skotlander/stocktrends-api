@@ -5,6 +5,7 @@ from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
 from fastapi.openapi.utils import get_openapi
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from discovery.inference_semantics import openapi_inference_extension
@@ -53,6 +54,35 @@ DISCOVERY_DOCS = "/v1/docs"
 DISCOVERY_OPENAPI = "/v1/openapi.json"
 PUBLIC_API_BASE_URL = "https://api.stocktrends.com"
 DEVELOPER_PORTAL_URL = "https://developer.stocktrends.com/"
+X402_BROWSER_ALLOWED_ORIGINS = ["https://developer.stocktrends.com"]
+X402_BROWSER_ALLOWED_HEADERS = [
+    "Authorization",
+    "Content-Type",
+    "Payment-Signature",
+    "X-Payment",
+    "X-StockTrends-Agent-Id",
+    "X-StockTrends-Agent-Type",
+    "X-StockTrends-Agent-Vendor",
+    "X-StockTrends-Agent-Version",
+    "X-StockTrends-Challenge-Mode",
+    "X-StockTrends-Payment-Amount",
+    "X-StockTrends-Payment-Method",
+    "X-StockTrends-Payment-Network",
+    "X-StockTrends-Payment-Reference",
+    "X-StockTrends-Payment-Token",
+    "X-StockTrends-Request-Purpose",
+    "X-StockTrends-Session-Id",
+]
+X402_BROWSER_EXPOSED_HEADERS = [
+    "PAYMENT-REQUIRED",
+    "PAYMENT-RESPONSE",
+    "X-StockTrends-Accepted-Payment-Methods",
+    "X-StockTrends-Effective-Price-USD",
+    "X-StockTrends-Payment-Required",
+    "X-StockTrends-Pricing-Rule",
+    "X-StockTrends-Selected-Payment-Rail",
+    "X-StockTrends-STC-Cost",
+]
 
 
 def is_protected_v1_path(path: str) -> bool:
@@ -345,6 +375,13 @@ app.add_middleware(RequestLoggerMiddleware)
 app.add_middleware(MeteringMiddleware)
 app.add_middleware(ApiKeyMiddleware)
 app.add_middleware(RequestIdMiddleware)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=X402_BROWSER_ALLOWED_ORIGINS,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"],
+    allow_headers=X402_BROWSER_ALLOWED_HEADERS,
+    expose_headers=X402_BROWSER_EXPOSED_HEADERS,
+)
 
 
 # v1 app

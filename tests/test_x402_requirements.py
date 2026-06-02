@@ -179,6 +179,7 @@ class TestAcceptsEntry:
     def test_resource_absent_from_accepts(self, reqs):
         # V2: resource identity is top-level, not inside accepts entries
         assert "resource" not in reqs["accepts"][0]
+        assert reqs["accepts"][0]["extra"]["resource"] == reqs["resource"]
 
     def test_mimeType_absent_from_accepts(self, reqs):
         # mimeType belongs on top-level resource object
@@ -326,6 +327,12 @@ class TestPaymentRequiredHeader:
         _, hdr = build_x402_challenge(path=_PATH, amount_usd=_AMOUNT, method="GET")
         decoded = self._decode(hdr)
         assert decoded["resource"]["url"] == _FULL_URL
+
+    def test_header_accept_extra_echoes_resource(self, monkeypatch):
+        monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
+        _, hdr = build_x402_challenge(path=_PATH, amount_usd=_AMOUNT, method="GET")
+        decoded = self._decode(hdr)
+        assert decoded["accepts"][0]["extra"]["resource"] == decoded["resource"]
 
     def test_compact_challenge_resource_has_bazaar_service_identity(self, monkeypatch):
         monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
@@ -825,6 +832,7 @@ class TestCompactChallengeMode:
         assert "payTo" in accept
         assert "maxTimeoutSeconds" in accept
         assert "extra" in accept
+        assert accept["extra"]["resource"] == decoded["resource"]
 
     def test_stim_latest_default_challenge_is_compact_and_keeps_atomic_amount(self, monkeypatch):
         monkeypatch.setattr(x402_module, "X402_API_BASE_URL", _BASE_URL)
