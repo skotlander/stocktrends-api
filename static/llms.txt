@@ -103,6 +103,8 @@ https://developer.stocktrends.com/mpp
   Get official Stock Trends model portfolio metadata
 * `GET /stocktrends/portfolios/{port_id}/returns`
   Get official Stock Trends portfolio returns history
+* `GET /stocktrends/portfolios/{port_id}/summary`
+  Get a compact public history summary for an official Stock Trends model portfolio. Current live holdings are intentionally excluded.
 * `GET /stocktrends/portfolios/{port_id}/positions/history`
   Get official Stock Trends historical closed-position records. Current live holdings are intentionally excluded.
 
@@ -301,6 +303,7 @@ Publicly accessible resources include:
 * `GET /v1/stocktrends/portfolios`
 * `GET /v1/stocktrends/portfolios/{port_id}`
 * `GET /v1/stocktrends/portfolios/{port_id}/returns`
+* `GET /v1/stocktrends/portfolios/{port_id}/summary`
 * `GET /v1/stocktrends/portfolios/{port_id}/positions/history`
 
 Use these for discovery, schema inspection, and grounding. Start with `/v1/ai/tools`.

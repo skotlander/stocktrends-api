@@ -35,6 +35,7 @@ Current public/free Stock Trends portfolio endpoints include:
 * `GET /v1/stocktrends/portfolios`
 * `GET /v1/stocktrends/portfolios/{port_id}`
 * `GET /v1/stocktrends/portfolios/{port_id}/returns`
+* `GET /v1/stocktrends/portfolios/{port_id}/summary`
 * `GET /v1/stocktrends/portfolios/{port_id}/positions/history`
 
 Official Stock Trends portfolio returns history is sourced from
@@ -92,6 +93,18 @@ Current public closed-position mapping:
 
 Do not expose `stp_positions.last_update` in the public closed-position
 response.
+
+Official Stock Trends portfolio public history summary is also public/free.
+It summarizes:
+
+* active portfolio metadata from `stp_ports WHERE port_id = :port_id AND status = 1`
+* public return-history aggregates from `stp_returnslog`
+* closed-position aggregates from `stp_positions` filtered to:
+  * `sell_trigger IS NOT NULL`
+  * `sell_trigger <> ''`
+
+Current live holdings are excluded from the summary. Do not make arbitrary
+`/summary/*` child paths public/free.
 
 ---
 
