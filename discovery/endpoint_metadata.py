@@ -244,6 +244,10 @@ STIM_SELECT_SIGNAL_OUTCOME_GUIDANCE = {
         "default_no_date_window_reads_summary_table": True,
         "summary_table": "stweekly.stim_select_outcome_summary",
         "refresh_command": "python -m maintenance.refresh_stim_select_outcome_summary_cache",
+        "supported_default_rows": [
+            {"exchange": None, "limit_rank": None},
+            {"exchange": None, "limit_rank": 10},
+        ],
         "explicit_date_windows_may_compute_live": True,
     },
     "base_period_context_endpoint": "/v1/meta/stim",
@@ -833,7 +837,12 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
                 "minimum": 1,
                 "maximum": 5000,
                 "example": 10,
-                "description": "Optional per-week rank cutoff by prob13wk descending.",
+                "description": (
+                    "Optional per-week rank cutoff by prob13wk descending. When start_date and "
+                    "end_date are omitted, seeded default summary rows support limit_rank "
+                    "omitted/null and limit_rank=10; other no-date limit_rank values require "
+                    "explicit date filters or a custom summary refresh."
+                ),
             },
         },
         safe_example_request={
@@ -862,10 +871,13 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "outcomes.outperform_base_rate",
             "outcomes.base_period_mean_13wk",
             "outcomes_by_horizon.4w.realized_return_field",
+            "outcomes_by_horizon.4w.count",
             "outcomes_by_horizon.4w.average_fpr_chg",
             "outcomes_by_horizon.13w.realized_return_field",
+            "outcomes_by_horizon.13w.count",
             "outcomes_by_horizon.13w.average_fpr_chg",
             "outcomes_by_horizon.40w.realized_return_field",
+            "outcomes_by_horizon.40w.count",
             "outcomes_by_horizon.40w.average_fpr_chg",
             "provenance.uses_mature_outcomes_only",
             "provenance.summary_table.served_from_summary_table",
@@ -944,7 +956,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "Uses mature observations only: st_data.fpr_chg13 IS NOT NULL.",
             "If start_date and end_date are both omitted, reads stweekly.stim_select_outcome_summary and never runs the expensive live historical aggregate.",
             "Default no-date responses expose generated_at and source_latest_mature_weekdate from the persistent summary table.",
-            "Supported default rows should include exchange=NULL with limit_rank=NULL and exchange=NULL with limit_rank=10; additional rows can be refreshed on demand.",
+            "Seeded no-date default rows support exchange=NULL with limit_rank=NULL and exchange=NULL with limit_rank=10.",
+            "Other no-date exchange or limit_rank rows require explicit date filters or a custom summary refresh.",
             "Refresh stweekly.stim_select_outcome_summary manually, monthly, weekly, or after major data updates with python -m maintenance.refresh_stim_select_outcome_summary_cache.",
             "Explicit date-window requests may still compute the historical aggregate live.",
             "This is signal-rule evidence, not a published-report-membership endpoint.",

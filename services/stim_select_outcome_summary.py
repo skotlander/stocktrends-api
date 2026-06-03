@@ -28,6 +28,11 @@ STIM_SELECT_MIN_PRICE = Decimal("2.0")
 STIM_SELECT_MIN_VOLUME = 1000
 STIM_SELECT_OUTCOME_EXCHANGES = {"N", "Q", "A", "B", "T"}
 STIM_SELECT_OUTCOME_DEFAULT_WINDOW_YEARS = 10
+MYSQL_ER_NO_SUCH_TABLE = 1146
+STIM_SELECT_SUPPORTED_DEFAULT_SUMMARY_COMBINATIONS = (
+    {"exchange": None, "limit_rank": None},
+    {"exchange": None, "limit_rank": 10},
+)
 
 HORIZON_DEFINITIONS = {
     "4w": {
@@ -53,6 +58,31 @@ HORIZON_DEFINITIONS = {
 
 class StimSelectOutcomeSummaryTableMissing(Exception):
     """Raised when the durable historical outcome summary table is unavailable."""
+
+
+def _candidate_error_codes(exc: BaseException):
+    for candidate in (getattr(exc, "orig", None), exc):
+        if candidate is None:
+            continue
+        for attr in ("errno", "code"):
+            value = getattr(candidate, attr, None)
+            if value is not None:
+                yield value
+        args = getattr(candidate, "args", ())
+        if isinstance(args, (tuple, list)):
+            yield from args
+        elif args:
+            yield args
+
+
+def is_mysql_no_such_table_error(exc: BaseException) -> bool:
+    for value in _candidate_error_codes(exc):
+        try:
+            if int(value) == MYSQL_ER_NO_SUCH_TABLE:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
 
 
 def build_default_summary_key(*, exchange: str | None, limit_rank: int | None) -> str:
@@ -109,6 +139,9 @@ def create_stim_select_outcome_summary_table(conn) -> None:
                 generated_at DATETIME NOT NULL,
                 source_latest_mature_weekdate DATE NULL,
                 `count` BIGINT NOT NULL DEFAULT 0,
+                count_4wk BIGINT NOT NULL DEFAULT 0,
+                count_13wk BIGINT NOT NULL DEFAULT 0,
+                count_40wk BIGINT NOT NULL DEFAULT 0,
                 first_weekdate DATE NULL,
                 latest_weekdate DATE NULL,
                 average_fpr_chg4 DECIMAL(18, 6) NULL,
@@ -164,6 +197,9 @@ def fetch_default_stim_select_outcome_summary(
                     generated_at,
                     source_latest_mature_weekdate,
                     `count` AS outcome_count,
+                    count_4wk,
+                    count_13wk,
+                    count_40wk,
                     first_weekdate,
                     latest_weekdate,
                     average_fpr_chg4,
@@ -197,8 +233,10 @@ def fetch_default_stim_select_outcome_summary(
                 "signal_id": STIM_SELECT_OUTCOME_SIGNAL_ID,
             },
         ).mappings().first()
-    except OperationalError as exc:
-        raise StimSelectOutcomeSummaryTableMissing() from exc
+    except DBAPIError as exc:
+        if is_mysql_no_such_table_error(exc):
+            raise StimSelectOutcomeSummaryTableMissing() from exc
+        raise
     return dict(row) if row else None
 
 
@@ -232,6 +270,9 @@ def replace_stim_select_outcome_summary(conn, record: dict[str, Any]) -> str:
                 generated_at,
                 source_latest_mature_weekdate,
                 `count`,
+                count_4wk,
+                count_13wk,
+                count_40wk,
                 first_weekdate,
                 latest_weekdate,
                 average_fpr_chg4,
@@ -266,6 +307,9 @@ def replace_stim_select_outcome_summary(conn, record: dict[str, Any]) -> str:
                 :generated_at,
                 :source_latest_mature_weekdate,
                 :count,
+                :count_4wk,
+                :count_13wk,
+                :count_40wk,
                 :first_weekdate,
                 :latest_weekdate,
                 :average_fpr_chg4,
@@ -383,6 +427,9 @@ def outcome_aggregate_sql(*, where: str, limit_rank: int | None):
         return text(f"""
             SELECT
                 COUNT(*) AS outcome_count,
+                COUNT(a.fpr_chg4) AS count_4wk,
+                COUNT(a.fpr_chg13) AS count_13wk,
+                COUNT(a.fpr_chg40) AS count_40wk,
                 MIN(a.weekdate) AS first_weekdate,
                 MAX(a.weekdate) AS latest_weekdate,
                 AVG(a.fpr_chg4) AS average_fpr_chg4,
@@ -401,6 +448,9 @@ def outcome_aggregate_sql(*, where: str, limit_rank: int | None):
         {ranked_outcomes_cte(where)}
         SELECT
             COUNT(*) AS outcome_count,
+            COUNT(fpr_chg4) AS count_4wk,
+            COUNT(fpr_chg13) AS count_13wk,
+            COUNT(fpr_chg40) AS count_40wk,
             MIN(weekdate) AS first_weekdate,
             MAX(weekdate) AS latest_weekdate,
             AVG(fpr_chg4) AS average_fpr_chg4,
@@ -519,11 +569,13 @@ def compute_summary_record(
         ]
         positive_count = to_int_or_zero(aggregate.get(f"positive_return_count_{suffix}"))
         outperform_count = to_int_or_zero(aggregate.get(f"outperform_base_count_{suffix}"))
+        horizon_count = to_int_or_zero(aggregate.get(f"count_{suffix}"))
+        record[f"count_{suffix}"] = horizon_count
         record[f"average_{field}"] = aggregate.get(f"average_{field}")
         record[f"median_{field}"] = median(values) if values else None
         record[f"positive_return_count_{suffix}"] = positive_count
-        record[f"positive_return_rate_{suffix}"] = rate(positive_count, count)
+        record[f"positive_return_rate_{suffix}"] = rate(positive_count, horizon_count)
         record[f"outperform_base_count_{suffix}"] = outperform_count
-        record[f"outperform_base_rate_{suffix}"] = rate(outperform_count, count)
+        record[f"outperform_base_rate_{suffix}"] = rate(outperform_count, horizon_count)
 
     return record

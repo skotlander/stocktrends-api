@@ -1269,7 +1269,8 @@ def ai_context():
                 "semantics": (
                     "historical realized outcome evidence for observations meeting ST-IM Select criteria; "
                     "legacy outcomes use fpr_chg13, while default no-date responses read "
-                    "stweekly.stim_select_outcome_summary and expose fpr_chg4, fpr_chg13, and fpr_chg40 metrics"
+                    "stweekly.stim_select_outcome_summary and expose fpr_chg4, fpr_chg13, and fpr_chg40 metrics; "
+                    "seeded no-date cache rows support limit_rank omitted/null and limit_rank=10"
                 ),
                 "business_boundary": "aggregate only; no current selections, current matching symbols, or individual symbols",
                 "interpret_with": ["/v1/meta/inference", "/v1/meta/stim"],

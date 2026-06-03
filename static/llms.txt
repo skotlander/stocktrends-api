@@ -245,7 +245,7 @@ Securities are ranked by prob13wk descending — the probability of exceeding th
 **Public STIM Select outcome evidence**:
 
 * `GET /selections/stim-select/outcomes/summary`
-  Public aggregate historical outcome summary for observations meeting STIM Select criteria. The legacy `outcomes` block uses mature realized 13-week forward returns from `fpr_chg13`; if both date filters are omitted, reads the persistent `stweekly.stim_select_outcome_summary` table, returns `filters.default_window_applied`, and exposes generated_at plus source_latest_mature_weekdate provenance; default no-date responses also include `fpr_chg4`, `fpr_chg13`, and `fpr_chg40` metrics; explicit date windows may still compute live; this is historical evidence, not current live selections, and does not expose current matching symbols or individual symbols.
+  Public aggregate historical outcome summary for observations meeting STIM Select criteria. The legacy `outcomes` block uses mature realized 13-week forward returns from `fpr_chg13`; if both date filters are omitted, reads the persistent `stweekly.stim_select_outcome_summary` table, returns `filters.default_window_applied`, and exposes generated_at plus source_latest_mature_weekdate provenance; seeded no-date rows support `limit_rank` omitted/null and `limit_rank=10`; other no-date `limit_rank` values require explicit date filters or a custom summary refresh; default no-date responses also include `fpr_chg4`, `fpr_chg13`, and `fpr_chg40` metrics; explicit date windows may still compute live; this is historical evidence, not current live selections, and does not expose current matching symbols or individual symbols.
 
 ### Workflows
 
@@ -320,7 +320,7 @@ Publicly accessible resources include:
 * `GET /v1/stocktrends/strategies/{strategy_id}`
 * `GET /v1/stocktrends/portfolios/{port_id}/strategy`
 * `GET /v1/selections/stim-select/outcomes/summary`
-  Default no-date summary is served from persistent `stweekly.stim_select_outcome_summary`, refreshed manually, monthly, weekly, on demand, or after major data updates with `python -m maintenance.refresh_stim_select_outcome_summary_cache`. Supported default rows should include exchange=NULL with limit_rank=NULL and exchange=NULL with limit_rank=10.
+  Default no-date summary is served from persistent `stweekly.stim_select_outcome_summary`, refreshed manually, monthly, weekly, on demand, or after major data updates with `python -m maintenance.refresh_stim_select_outcome_summary_cache`. Seeded default rows support exchange=NULL with limit_rank=NULL and exchange=NULL with limit_rank=10; other no-date `limit_rank` or exchange combinations require explicit date filters or a custom summary refresh.
 
 Use these for discovery, schema inspection, and grounding. Start with `/v1/ai/tools`.
 

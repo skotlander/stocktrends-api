@@ -95,6 +95,21 @@ _OUTCOME_ROWS = [
     },
     {
         "weekdate": date(2024, 1, 19),
+        "exchange": "N",
+        "symbol": "NO40",
+        "x4wk1": Decimal("0.3"),
+        "x13wk1": Decimal("2.8"),
+        "x40wk1": Decimal("7.0"),
+        "x13wk": Decimal("3.0"),
+        "x13wksd": Decimal("1.2"),
+        "price": Decimal("6.0"),
+        "volume": 3000,
+        "fpr_chg4": Decimal("2.0"),
+        "fpr_chg13": Decimal("4.0"),
+        "fpr_chg40": None,
+    },
+    {
+        "weekdate": date(2024, 1, 19),
         "exchange": "A",
         "symbol": "LOWPRICE",
         "x4wk1": Decimal("0.3"),
@@ -155,6 +170,25 @@ class _Result:
         return self._rows[0] if self._rows else None
 
 
+class _OrigDatabaseError:
+    def __init__(self, errno: int):
+        self.errno = errno
+        self.args = (errno, "database error")
+
+
+def _operational_error(errno: int):
+    orig = _OrigDatabaseError(errno)
+    try:
+        exc = outcome_summary_service.OperationalError("SELECT 1", {}, orig)
+        if not hasattr(exc, "orig"):
+            setattr(exc, "orig", orig)
+        return exc
+    except TypeError:
+        exc = outcome_summary_service.OperationalError("database error")
+        setattr(exc, "orig", orig)
+        return exc
+
+
 def _subtract_years(value: date, years: int) -> date:
     try:
         return value.replace(year=value.year - years)
@@ -170,11 +204,13 @@ class _Connection:
         executed: list[tuple[str, dict[str, Any]]],
         *,
         summary_table_missing: bool = False,
+        summary_operational_error_number: int | None = None,
     ):
         self._rows = rows
         self._summary_rows = summary_rows
         self._executed = executed
         self._summary_table_missing = summary_table_missing
+        self._summary_operational_error_number = summary_operational_error_number
 
     def __enter__(self):
         return self
@@ -232,7 +268,9 @@ class _Connection:
             {"summary_key", "signal_id"}.issubset(params)
         ):
             if self._summary_table_missing:
-                raise outcome_summary_service.OperationalError("missing summary table")
+                raise _operational_error(1146)
+            if self._summary_operational_error_number is not None:
+                raise _operational_error(self._summary_operational_error_number)
             summary_key = params.get("summary_key")
             return _Result(
                 [
@@ -244,8 +282,8 @@ class _Connection:
 
         rows = self._qualifying_rows(params)
         values = [row["fpr_chg13"] for row in rows]
-        values_4wk = [row["fpr_chg4"] for row in rows]
-        values_40wk = [row["fpr_chg40"] for row in rows]
+        values_4wk = [row["fpr_chg4"] for row in rows if row["fpr_chg4"] is not None]
+        values_40wk = [row["fpr_chg40"] for row in rows if row["fpr_chg40"] is not None]
 
         if "latest_mature_outcome_date" in sql:
             return _Result(
@@ -264,6 +302,9 @@ class _Connection:
                 [
                     {
                         "outcome_count": len(rows),
+                        "count_4wk": len(values_4wk),
+                        "count_13wk": len(values),
+                        "count_40wk": len(values_40wk),
                         "first_weekdate": min((row["weekdate"] for row in rows), default=None),
                         "latest_weekdate": max((row["weekdate"] for row in rows), default=None),
                         "average_fpr_chg4": (sum(values_4wk, Decimal("0")) / len(values_4wk)) if values_4wk else None,
@@ -338,22 +379,24 @@ def _summary_row_for(
         field = definition["field"]
         suffix = definition["suffix"]
         base = definition["base"]
-        horizon_values = [row[field] for row in qualified]
+        horizon_values = [row[field] for row in qualified if row[field] is not None]
+        horizon_count = len(horizon_values)
         positive_count = sum(1 for value in horizon_values if value > 0)
         outperform_count = sum(1 for value in horizon_values if value > base)
         summary[f"average_{field}"] = (
-            sum(horizon_values, Decimal("0")) / count if horizon_values else None
+            sum(horizon_values, Decimal("0")) / horizon_count if horizon_values else None
         )
         summary[f"median_{field}"] = (
             Decimal(str(selections_router.median(horizon_values))) if horizon_values else None
         )
+        summary[f"count_{suffix}"] = horizon_count
         summary[f"positive_return_count_{suffix}"] = positive_count
         summary[f"positive_return_rate_{suffix}"] = (
-            Decimal(str(positive_count / count)) if count else Decimal("0")
+            Decimal(str(positive_count / horizon_count)) if horizon_count else Decimal("0")
         )
         summary[f"outperform_base_count_{suffix}"] = outperform_count
         summary[f"outperform_base_rate_{suffix}"] = (
-            Decimal(str(outperform_count / count)) if count else Decimal("0")
+            Decimal(str(outperform_count / horizon_count)) if horizon_count else Decimal("0")
         )
     return summary
 
@@ -368,6 +411,7 @@ class _Engine:
             _summary_row_for(rows, exchange="B"),
         ]
         self.summary_table_missing = False
+        self.summary_operational_error_number: int | None = None
         self.executed: list[tuple[str, dict[str, Any]]] = []
 
     def connect(self):
@@ -376,6 +420,7 @@ class _Engine:
             self.summary_rows,
             self.executed,
             summary_table_missing=self.summary_table_missing,
+            summary_operational_error_number=self.summary_operational_error_number,
         )
 
 
@@ -480,26 +525,33 @@ def test_stim_select_outcomes_summary_returns_metrics(client):
 
     outcomes = body["outcomes"]
     assert outcomes["horizon"] == "13w"
-    assert outcomes["count"] == 4
+    assert outcomes["count"] == 5
     assert outcomes["first_weekdate"] == "2024-01-05"
     assert outcomes["latest_weekdate"] == "2024-01-19"
-    assert outcomes["average_fpr_chg13"] == pytest.approx(4.0475)
-    assert outcomes["median_fpr_chg13"] == pytest.approx(3.595)
-    assert outcomes["positive_return_count"] == 3
-    assert outcomes["positive_return_rate"] == pytest.approx(0.75)
-    assert outcomes["outperform_base_count"] == 2
-    assert outcomes["outperform_base_rate"] == pytest.approx(0.5)
+    assert outcomes["average_fpr_chg13"] == pytest.approx(4.038)
+    assert outcomes["median_fpr_chg13"] == pytest.approx(4.0)
+    assert outcomes["positive_return_count"] == 4
+    assert outcomes["positive_return_rate"] == pytest.approx(0.8)
+    assert outcomes["outperform_base_count"] == 3
+    assert outcomes["outperform_base_rate"] == pytest.approx(0.6)
     assert outcomes["base_period_mean_13wk"] == 2.19
     assert body["outcomes_by_horizon"]["4w"]["realized_return_field"] == "fpr_chg4"
-    assert body["outcomes_by_horizon"]["4w"]["average_fpr_chg"] == pytest.approx(0.75)
-    assert body["outcomes_by_horizon"]["4w"]["median_fpr_chg"] == pytest.approx(0.5)
-    assert body["outcomes_by_horizon"]["4w"]["positive_return_count"] == 2
+    assert body["outcomes_by_horizon"]["4w"]["count"] == 5
+    assert body["outcomes_by_horizon"]["4w"]["average_fpr_chg"] == pytest.approx(1.0)
+    assert body["outcomes_by_horizon"]["4w"]["median_fpr_chg"] == pytest.approx(1.0)
+    assert body["outcomes_by_horizon"]["4w"]["positive_return_count"] == 3
+    assert body["outcomes_by_horizon"]["4w"]["positive_return_rate"] == pytest.approx(0.6)
     assert body["outcomes_by_horizon"]["13w"]["realized_return_field"] == "fpr_chg13"
-    assert body["outcomes_by_horizon"]["13w"]["average_fpr_chg"] == pytest.approx(4.0475)
+    assert body["outcomes_by_horizon"]["13w"]["count"] == 5
+    assert body["outcomes_by_horizon"]["13w"]["average_fpr_chg"] == pytest.approx(4.038)
     assert body["outcomes_by_horizon"]["40w"]["realized_return_field"] == "fpr_chg40"
+    assert body["outcomes_by_horizon"]["40w"]["count"] == 4
     assert body["outcomes_by_horizon"]["40w"]["average_fpr_chg"] == pytest.approx(12.8625)
     assert body["outcomes_by_horizon"]["40w"]["median_fpr_chg"] == pytest.approx(13.225)
+    assert body["outcomes_by_horizon"]["40w"]["positive_return_count"] == 3
+    assert body["outcomes_by_horizon"]["40w"]["positive_return_rate"] == pytest.approx(0.75)
     assert body["outcomes_by_horizon"]["40w"]["outperform_base_count"] == 2
+    assert body["outcomes_by_horizon"]["40w"]["outperform_base_rate"] == pytest.approx(0.5)
     assert body["provenance"]["summary_table"]["served_from_summary_table"] is True
     assert body["provenance"]["summary_table"]["table"] == "stweekly.stim_select_outcome_summary"
     assert body["provenance"]["summary_table"]["summary_key"] == build_default_summary_key(
@@ -541,8 +593,42 @@ def test_stim_select_outcomes_summary_missing_summary_row_returns_503(client, ou
         "error": "outcome_summary_not_available",
         "message": "Historical summary table has not been populated.",
         "refresh_required": True,
+        "supported_default_combinations": [
+            {"exchange": None, "limit_rank": None},
+            {"exchange": None, "limit_rank": 10},
+        ],
+        "custom_refresh_note": (
+            "When start_date and end_date are omitted, the default refresh seeds "
+            "all-exchange rows for limit_rank omitted/null and limit_rank=10. "
+            "Other no-date exchange or limit_rank combinations require explicit "
+            "date filters or a custom summary refresh."
+        ),
     }
     assert any("summary_key" in params for _sql, params in outcome_engine.executed)
+    assert not any("base_4wk" in params for _sql, params in outcome_engine.executed)
+
+
+def test_stim_select_outcomes_summary_unseeded_no_date_limit_rank_returns_503(
+    client,
+    outcome_engine,
+):
+    response = client.get("/v1/selections/stim-select/outcomes/summary?limit_rank=9")
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["error"] == "outcome_summary_not_available"
+    assert {"exchange": None, "limit_rank": None} in detail["supported_default_combinations"]
+    assert {"exchange": None, "limit_rank": 10} in detail["supported_default_combinations"]
+    assert "custom summary refresh" in detail["custom_refresh_note"]
+    cache_params = next(
+        params
+        for _sql, params in outcome_engine.executed
+        if "summary_key" in params
+    )
+    assert cache_params["summary_key"] == build_default_summary_key(
+        exchange=None,
+        limit_rank=9,
+    )
     assert not any("base_4wk" in params for _sql, params in outcome_engine.executed)
 
 
@@ -556,16 +642,43 @@ def test_stim_select_outcomes_summary_missing_table_returns_503(client, outcome_
         "error": "outcome_summary_not_available",
         "message": "Historical summary table has not been created.",
         "refresh_required": True,
+        "supported_default_combinations": [
+            {"exchange": None, "limit_rank": None},
+            {"exchange": None, "limit_rank": 10},
+        ],
+        "custom_refresh_note": (
+            "When start_date and end_date are omitted, the default refresh seeds "
+            "all-exchange rows for limit_rank omitted/null and limit_rank=10. "
+            "Other no-date exchange or limit_rank combinations require explicit "
+            "date filters or a custom summary refresh."
+        ),
     }
     assert any("summary_key" in params for _sql, params in outcome_engine.executed)
     assert not any("base_4wk" in params for _sql, params in outcome_engine.executed)
+
+
+def test_stim_select_outcomes_summary_non_missing_table_operational_error_is_not_503(
+    client,
+    outcome_engine,
+):
+    outcome_engine.summary_operational_error_number = 2003
+
+    response = client.get("/v1/selections/stim-select/outcomes/summary?limit_rank=10")
+
+    assert response.status_code == 500
+    assert response.json()["detail"]["error"] == "db_query_failed"
+
+
+def test_stim_select_outcome_summary_mysql_table_missing_detection_is_narrow():
+    assert outcome_summary_service.is_mysql_no_such_table_error(_operational_error(1146))
+    assert not outcome_summary_service.is_mysql_no_such_table_error(_operational_error(2003))
 
 
 def test_stim_select_outcomes_summary_uses_mature_fpr_chg13_only(client):
     response = client.get("/v1/selections/stim-select/outcomes/summary")
 
     body_text = response.text
-    assert response.json()["outcomes"]["count"] == 4
+    assert response.json()["outcomes"]["count"] == 5
     assert "NULL13" not in body_text
     assert "fpr_chg13" in body_text
 
@@ -617,9 +730,14 @@ def test_stim_select_outcome_summary_generation_uses_stweekly_sources(monkeypatc
     assert "stdata.st_data" not in executed_sql
     assert "ROW_NUMBER() OVER" in executed_sql
     assert record["summary_key"] == build_default_summary_key(exchange=None, limit_rank=10)
-    assert record["average_fpr_chg4"] == pytest.approx(Decimal("0.75"))
-    assert record["average_fpr_chg13"] == pytest.approx(Decimal("4.0475"))
+    assert record["count_4wk"] == 5
+    assert record["count_13wk"] == 5
+    assert record["count_40wk"] == 4
+    assert record["average_fpr_chg4"] == pytest.approx(Decimal("1.0"))
+    assert record["average_fpr_chg13"] == pytest.approx(Decimal("4.038"))
     assert record["average_fpr_chg40"] == pytest.approx(Decimal("12.8625"))
+    assert record["positive_return_rate_40wk"] == pytest.approx(0.75)
+    assert record["outperform_base_rate_40wk"] == pytest.approx(0.5)
 
 
 def test_stim_select_outcomes_summary_filters_start_date(client):
@@ -630,7 +748,7 @@ def test_stim_select_outcomes_summary_filters_start_date(client):
     assert filters["end_date"] is None
     assert filters["default_window_applied"] is False
     outcomes = response.json()["outcomes"]
-    assert outcomes["count"] == 2
+    assert outcomes["count"] == 3
     assert outcomes["first_weekdate"] == "2024-01-12"
     assert outcomes["latest_weekdate"] == "2024-01-19"
 
@@ -842,5 +960,7 @@ def test_stim_select_outcomes_summary_openapi_documents_filters_and_boundary(cli
     assert _schema_has_date_format(parameters["start_date"]["schema"])
     assert _schema_has_date_format(parameters["end_date"]["schema"])
     assert _schema_has_key_value(parameters["limit_rank"]["schema"], "minimum", 1)
+    assert "limit_rank=10" in parameters["limit_rank"]["description"]
+    assert "custom summary refresh" in parameters["limit_rank"]["description"]
     assert _schema_has_property(schema, "default_window_applied")
     assert _schema_has_property(schema, "outcomes_by_horizon")

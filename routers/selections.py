@@ -44,7 +44,13 @@ class StimSelectOutcomeFilters(BaseModel):
         description="Applied inclusive signal weekdate upper bound.",
     )
     exchange: str | None = Field(default=None, description="Applied Stock Trends exchange filter.")
-    limit_rank: int | None = Field(default=None, description="Applied per-week rank cutoff.")
+    limit_rank: int | None = Field(
+        default=None,
+        description=(
+            "Applied per-week rank cutoff. Default no-date cache rows are seeded "
+            "for omitted/null and limit_rank=10 unless additional rows are refreshed."
+        ),
+    )
     default_window_applied: bool = Field(
         ...,
         description=(
@@ -378,6 +384,15 @@ def _summary_unavailable_detail(*, message: str) -> dict[str, Any]:
         "error": "outcome_summary_not_available",
         "message": message,
         "refresh_required": True,
+        "supported_default_combinations": list(
+            outcome_summary_service.STIM_SELECT_SUPPORTED_DEFAULT_SUMMARY_COMBINATIONS
+        ),
+        "custom_refresh_note": (
+            "When start_date and end_date are omitted, the default refresh seeds "
+            "all-exchange rows for limit_rank omitted/null and limit_rank=10. "
+            "Other no-date exchange or limit_rank combinations require explicit "
+            "date filters or a custom summary refresh."
+        ),
     }
 
 
@@ -390,7 +405,9 @@ def _horizon_metrics_from_summary_record(
     field = definition["field"]
     suffix = definition["suffix"]
     base_column = definition["base_column"]
-    count = _to_int_or_zero(record.get("outcome_count", record.get("count")))
+    count = _to_int_or_zero(
+        record.get(f"count_{suffix}", record.get("outcome_count", record.get("count")))
+    )
     positive_count = _to_int_or_zero(record.get(f"positive_return_count_{suffix}"))
     outperform_count = _to_int_or_zero(record.get(f"outperform_base_count_{suffix}"))
     return {
@@ -456,7 +473,10 @@ def _mast_join(include_mast: bool) -> str:
         "individual symbols. "
         "limit_rank applies a per-week rank cutoff ordered by the 13-week "
         "outperformance probability implied by the ST-IM normal-distribution "
-        "model."
+        "model. When start_date and end_date are omitted, the default persistent "
+        "summary refresh seeds all-exchange rows for limit_rank omitted/null and "
+        "limit_rank=10; other no-date limit_rank values require explicit date "
+        "filters or a custom summary refresh."
     ),
 )
 def stim_select_outcomes_summary(
@@ -479,7 +499,11 @@ def stim_select_outcomes_summary(
         le=5000,
         description=(
             "Optional per-week rank cutoff. Ranking is by prob13wk descending; "
-            "for example, 10 includes only the top 10 qualifying observations per week."
+            "for example, 10 includes only the top 10 qualifying observations per week. "
+            "When start_date and end_date are omitted, the persistent summary table "
+            "currently supports the seeded default combinations limit_rank omitted/null "
+            "and limit_rank=10. Other no-date limit_rank values require explicit date "
+            "filters or a custom summary refresh."
         ),
     ),
 ):

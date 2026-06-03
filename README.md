@@ -214,10 +214,11 @@ summary is served from the persistent historical summary table
 table during request handling. The response provenance includes `generated_at`
 and `source_latest_mature_weekdate` so clients can judge freshness.
 
-Supported default summary combinations are the all-exchange summary with no
-rank cutoff and the all-exchange summary with `limit_rank=10`; additional
-exchange or rank combinations can be refreshed on demand. Refresh can run
-manually, monthly, weekly, or after major data updates:
+Supported seeded no-date summary combinations are the all-exchange summary with
+`limit_rank` omitted/null and the all-exchange summary with `limit_rank=10`.
+Other no-date `limit_rank` or exchange combinations require explicit date
+filters or a custom summary refresh. Refresh can run manually, monthly, weekly,
+or after major data updates:
 
 ```text
 python -m maintenance.refresh_stim_select_outcome_summary_cache

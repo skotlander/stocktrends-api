@@ -231,13 +231,14 @@ The table creation SQL is documented in:
 docs/operations/stim_select_outcome_summary_table.sql
 ```
 
-Supported default rows should include at least:
+Supported seeded no-date rows are:
 
 * `exchange = NULL`, `limit_rank = NULL`
 * `exchange = NULL`, `limit_rank = 10`
 
-Additional exchange or `limit_rank` rows can be generated as needed. Default
-responses expose `generated_at` and `source_latest_mature_weekdate` in
+Other no-date `limit_rank` or exchange combinations require explicit date
+filters or a custom summary refresh. Default responses expose `generated_at`
+and `source_latest_mature_weekdate` in
 provenance. `generated_at` is when the summary row was produced.
 `source_latest_mature_weekdate` is the latest historical signal weekdate
 included by the mature-outcome source query.

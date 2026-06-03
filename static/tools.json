@@ -736,7 +736,7 @@
       "name": "stim_select_outcomes_summary",
       "analytical_role": "probabilistic_signal_outcome_evidence",
       "title": "ST-IM Select Outcomes Summary",
-      "description": "Public aggregate historical outcome summary for observations meeting Stock Trends Inference Model Select criteria. The legacy outcomes block uses mature realized 13-week forward returns from fpr_chg13. When start_date and end_date are omitted, reads the persistent stweekly.stim_select_outcome_summary table, returns filters.default_window_applied=true, and exposes generated_at plus source_latest_mature_weekdate provenance. Default no-date responses also include fpr_chg4, fpr_chg13, and fpr_chg40 metrics. Does not expose current selections or individual symbols.",
+      "description": "Public aggregate historical outcome summary for observations meeting Stock Trends Inference Model Select criteria. The legacy outcomes block uses mature realized 13-week forward returns from fpr_chg13. When start_date and end_date are omitted, reads the persistent stweekly.stim_select_outcome_summary table, returns filters.default_window_applied=true, and exposes generated_at plus source_latest_mature_weekdate provenance. Seeded no-date summary rows support limit_rank omitted/null and limit_rank=10; other no-date limit_rank values require explicit date filters or a custom summary refresh. Default no-date responses also include fpr_chg4, fpr_chg13, and fpr_chg40 metrics. Does not expose current selections or individual symbols.",
       "method": "GET",
       "path": "/selections/stim-select/outcomes/summary",
       "auth_required": false,
@@ -787,7 +787,7 @@
           "required": false,
           "minimum": 1,
           "maximum": 5000,
-          "description": "Optional per-week rank cutoff by prob13wk descending."
+          "description": "Optional per-week rank cutoff by prob13wk descending. When start_date and end_date are omitted, seeded default summary rows support limit_rank omitted/null and limit_rank=10; other no-date limit_rank values require explicit date filters or a custom summary refresh."
         }
       ],
       "safe_example_request": {
@@ -821,6 +821,7 @@
             {"exchange": null, "limit_rank": null},
             {"exchange": null, "limit_rank": 10}
           ],
+          "custom_refresh_note": "Other no-date exchange or limit_rank combinations require explicit date filters or a custom summary refresh.",
           "generated_at": "Timestamp when the summary row was produced.",
           "source_latest_mature_weekdate": "Latest mature historical signal weekdate included by the source query.",
           "explicit_date_windows_may_compute_live": true,
