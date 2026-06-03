@@ -205,6 +205,10 @@ average/median return, positive-return rate, and 13-week base-period
 outperformance rate. It does not expose current selections, current matching
 symbols, or individual historical symbols.
 
+When both `start_date` and `end_date` are omitted, the endpoint applies a
+trailing 10-year window ending at the latest mature outcome date and returns
+`filters.default_window_applied: true` with the applied dates.
+
 ### Cognition Metadata
 
 ```text

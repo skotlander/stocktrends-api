@@ -736,7 +736,7 @@
       "name": "stim_select_outcomes_summary",
       "analytical_role": "probabilistic_signal_outcome_evidence",
       "title": "ST-IM Select Outcomes Summary",
-      "description": "Public aggregate historical outcome summary for observations meeting Stock Trends Inference Model Select criteria. Uses mature realized 13-week forward returns from fpr_chg13. Does not expose current selections or individual symbols.",
+      "description": "Public aggregate historical outcome summary for observations meeting Stock Trends Inference Model Select criteria. Uses mature realized 13-week forward returns from fpr_chg13. When start_date and end_date are omitted, applies a trailing 10-year default window ending at the latest mature outcome date and returns filters.default_window_applied=true. Does not expose current selections or individual symbols.",
       "method": "GET",
       "path": "/selections/stim-select/outcomes/summary",
       "auth_required": false,
@@ -756,7 +756,7 @@
           "type": "string",
           "format": "date",
           "required": false,
-          "description": "Inclusive signal weekdate filter in YYYY-MM-DD format."
+          "description": "Inclusive signal weekdate filter in YYYY-MM-DD format. If both date filters are omitted, a trailing 10-year default window is applied."
         },
         {
           "name": "end_date",
@@ -766,7 +766,7 @@
           "type": "string",
           "format": "date",
           "required": false,
-          "description": "Inclusive signal weekdate filter in YYYY-MM-DD format."
+          "description": "Inclusive signal weekdate filter in YYYY-MM-DD format. If both date filters are omitted, the window ends at the latest mature outcome date."
         },
         {
           "name": "exchange",
