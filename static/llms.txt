@@ -245,7 +245,7 @@ Securities are ranked by prob13wk descending — the probability of exceeding th
 **Public STIM Select outcome evidence**:
 
 * `GET /selections/stim-select/outcomes/summary`
-  Public aggregate historical outcome summary for observations meeting STIM Select criteria. Uses mature realized 13-week forward returns from `fpr_chg13`; does not expose current selections, current matching symbols, or individual symbols.
+  Public aggregate historical outcome summary for observations meeting STIM Select criteria. Uses mature realized 13-week forward returns from `fpr_chg13`; if both date filters are omitted, applies a trailing 10-year window ending at the latest mature outcome date and returns `filters.default_window_applied`; does not expose current selections, current matching symbols, or individual symbols.
 
 ### Workflows
 

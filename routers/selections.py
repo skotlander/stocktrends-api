@@ -9,6 +9,7 @@ from statistics import median
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from db import get_engine
@@ -23,6 +24,49 @@ STIM_SELECT_BASE_40WK = 6.45
 STIM_SELECT_MIN_PRICE = 2.0
 STIM_SELECT_MIN_VOLUME = 1000
 STIM_SELECT_OUTCOME_EXCHANGES = {"N", "Q", "A", "B", "T"}
+STIM_SELECT_OUTCOME_DEFAULT_WINDOW_YEARS = 10
+
+
+class StimSelectOutcomeFilters(BaseModel):
+    start_date: date | None = Field(
+        default=None,
+        description="Applied inclusive signal weekdate lower bound.",
+    )
+    end_date: date | None = Field(
+        default=None,
+        description="Applied inclusive signal weekdate upper bound.",
+    )
+    exchange: str | None = Field(default=None, description="Applied Stock Trends exchange filter.")
+    limit_rank: int | None = Field(default=None, description="Applied per-week rank cutoff.")
+    default_window_applied: bool = Field(
+        ...,
+        description=(
+            "True when the endpoint applied its trailing 10-year default window "
+            "because both start_date and end_date were omitted."
+        ),
+    )
+
+
+class StimSelectOutcomeMetrics(BaseModel):
+    horizon: str
+    count: int
+    first_weekdate: date | None
+    latest_weekdate: date | None
+    average_fpr_chg13: float | None
+    median_fpr_chg13: float | None
+    positive_return_count: int
+    positive_return_rate: float
+    outperform_base_count: int
+    outperform_base_rate: float
+    base_period_mean_13wk: float
+
+
+class StimSelectOutcomesSummaryResponse(BaseModel):
+    request_id: str
+    signal: dict[str, Any]
+    filters: StimSelectOutcomeFilters
+    outcomes: StimSelectOutcomeMetrics
+    provenance: dict[str, Any]
 
 
 def _norm_symbol(s: str) -> str:
@@ -69,6 +113,17 @@ def _to_date_string(value: Any) -> str | None:
     return str(value)
 
 
+def _to_date(value: Any) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, date):
+        return value
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
 def _to_decimal(value: Any) -> Decimal | None:
     if value is None:
         return None
@@ -84,6 +139,13 @@ def _rate(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return numerator / denominator
+
+
+def _subtract_years(value: date, years: int) -> date:
+    try:
+        return value.replace(year=value.year - years)
+    except ValueError:
+        return value.replace(year=value.year - years, month=2, day=28)
 
 
 def _stim_select_outcomes_base_where(
@@ -133,6 +195,13 @@ def _stim_select_outcomes_source_sql(where: str) -> str:
          AND a.symbol = b.symbol
         {where}
     """
+
+
+def _stim_select_outcomes_latest_mature_date_sql(where: str):
+    return text(f"""
+        SELECT MAX(a.weekdate) AS latest_mature_outcome_date
+        {_stim_select_outcomes_source_sql(where)}
+    """)
 
 
 def _stim_select_outcomes_ranked_cte(where: str) -> str:
@@ -201,6 +270,21 @@ def _stim_select_outcomes_values_sql(*, where: str, limit_rank: int | None):
         FROM qualifying
         WHERE rank_13wk_probability <= :limit_rank
     """)
+
+
+def _latest_stim_select_mature_outcome_date(conn) -> date | None:
+    params: dict[str, Any] = {}
+    where = _stim_select_outcomes_base_where(
+        ex=None,
+        start_date=None,
+        end_date=None,
+        params=params,
+    )
+    row = conn.execute(
+        _stim_select_outcomes_latest_mature_date_sql(where),
+        params,
+    ).mappings().first()
+    return _to_date((row or {}).get("latest_mature_outcome_date"))
 
 
 def _stim_select_signal_metadata() -> dict[str, Any]:
@@ -272,13 +356,16 @@ def _mast_join(include_mast: bool) -> str:
 
 @router.get(
     "/stim-select/outcomes/summary",
+    response_model=StimSelectOutcomesSummaryResponse,
     summary="Public ST-IM Select signal outcome summary",
     description=(
         "Public aggregate historical outcome summary for observations meeting "
         "Stock Trends Inference Model Select criteria. Uses mature realized "
         "13-week forward returns from fpr_chg13. Does not expose current "
         "selections, current matching stocks, or individual symbols. Optional "
-        "start_date and end_date filters apply to the signal weekdate. "
+        "start_date and end_date filters apply to the signal weekdate. If both "
+        "dates are omitted, the endpoint applies a trailing 10-year default "
+        "window ending at the latest mature outcome date. "
         "limit_rank applies a per-week rank cutoff ordered by the 13-week "
         "outperformance probability implied by the ST-IM normal-distribution "
         "model."
@@ -325,24 +412,39 @@ def stim_select_outcomes_summary(
         )
 
     ex = _norm_outcome_exchange(exchange) if exchange else None
-    params: dict[str, Any] = {}
-    where = _stim_select_outcomes_base_where(
-        ex=ex,
-        start_date=start_date,
-        end_date=end_date,
-        params=params,
-    )
-    if limit_rank is not None:
-        params["limit_rank"] = int(limit_rank)
-
-    aggregate_sql = _stim_select_outcomes_aggregate_sql(where=where, limit_rank=limit_rank)
-    values_sql = _stim_select_outcomes_values_sql(where=where, limit_rank=limit_rank)
+    default_window_applied = start_date is None and end_date is None
+    applied_start_date = start_date
+    applied_end_date = end_date
 
     engine = get_engine()
     try:
         with engine.connect() as conn:
-            aggregate_row = conn.execute(aggregate_sql, params).mappings().first()
-            value_rows = conn.execute(values_sql, params).mappings().all()
+            if default_window_applied:
+                applied_end_date = _latest_stim_select_mature_outcome_date(conn)
+                if applied_end_date is not None:
+                    applied_start_date = _subtract_years(
+                        applied_end_date,
+                        STIM_SELECT_OUTCOME_DEFAULT_WINDOW_YEARS,
+                    )
+
+            params: dict[str, Any] = {}
+            where = _stim_select_outcomes_base_where(
+                ex=ex,
+                start_date=applied_start_date,
+                end_date=applied_end_date,
+                params=params,
+            )
+            if limit_rank is not None:
+                params["limit_rank"] = int(limit_rank)
+
+            if default_window_applied and applied_end_date is None:
+                aggregate_row = {}
+                value_rows = []
+            else:
+                aggregate_sql = _stim_select_outcomes_aggregate_sql(where=where, limit_rank=limit_rank)
+                values_sql = _stim_select_outcomes_values_sql(where=where, limit_rank=limit_rank)
+                aggregate_row = conn.execute(aggregate_sql, params).mappings().first()
+                value_rows = conn.execute(values_sql, params).mappings().all()
     except Exception as exc:
         logger.exception(
             "ST-IM Select outcome summary query failed; request_id=%s",
@@ -373,10 +475,11 @@ def stim_select_outcomes_summary(
         "request_id": request.state.request_id,
         "signal": _stim_select_signal_metadata(),
         "filters": {
-            "start_date": start_date.isoformat() if start_date else None,
-            "end_date": end_date.isoformat() if end_date else None,
+            "start_date": applied_start_date.isoformat() if applied_start_date else None,
+            "end_date": applied_end_date.isoformat() if applied_end_date else None,
             "exchange": ex,
             "limit_rank": limit_rank,
+            "default_window_applied": default_window_applied,
         },
         "outcomes": {
             "horizon": "13w",

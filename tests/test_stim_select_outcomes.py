@@ -196,6 +196,18 @@ class _Connection:
         rows = self._qualifying_rows(params)
         values = [row["fpr_chg13"] for row in rows]
 
+        if "latest_mature_outcome_date" in sql:
+            return _Result(
+                [
+                    {
+                        "latest_mature_outcome_date": max(
+                            (row["weekdate"] for row in rows),
+                            default=None,
+                        )
+                    }
+                ]
+            )
+
         if "outcome_count" in sql:
             return _Result(
                 [
@@ -260,6 +272,17 @@ def _schema_has_key_value(schema: Any, key: str, value: Any) -> bool:
     return False
 
 
+def _schema_has_property(schema: Any, property_name: str) -> bool:
+    if isinstance(schema, dict):
+        properties = schema.get("properties")
+        if isinstance(properties, dict) and property_name in properties:
+            return True
+        return any(_schema_has_property(item, property_name) for item in schema.values())
+    if isinstance(schema, list):
+        return any(_schema_has_property(item, property_name) for item in schema)
+    return False
+
+
 @pytest.fixture
 def outcome_engine(monkeypatch):
     engine = _Engine(list(_OUTCOME_ROWS))
@@ -303,10 +326,11 @@ def test_stim_select_outcomes_summary_returns_metrics(client):
     assert "avgmean_formula" not in body["signal"]["criteria"]
     assert body["signal"]["base_period_mean_13wk"] == 2.19
     assert body["filters"] == {
-        "start_date": None,
-        "end_date": None,
+        "start_date": "2014-01-19",
+        "end_date": "2024-01-19",
         "exchange": None,
         "limit_rank": None,
+        "default_window_applied": True,
     }
 
     outcomes = body["outcomes"]
@@ -321,6 +345,24 @@ def test_stim_select_outcomes_summary_returns_metrics(client):
     assert outcomes["outperform_base_count"] == 2
     assert outcomes["outperform_base_rate"] == pytest.approx(0.5)
     assert outcomes["base_period_mean_13wk"] == 2.19
+
+
+def test_stim_select_outcomes_summary_unbounded_binds_default_window(client, outcome_engine):
+    response = client.get("/v1/selections/stim-select/outcomes/summary")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["filters"]["default_window_applied"] is True
+    assert body["filters"]["start_date"] == "2014-01-19"
+    assert body["filters"]["end_date"] == "2024-01-19"
+
+    aggregate_params = next(
+        params
+        for sql, params in outcome_engine.executed
+        if "outcome_count" in sql
+    )
+    assert aggregate_params["start_date"] == date(2014, 1, 19)
+    assert aggregate_params["end_date"] == date(2024, 1, 19)
 
 
 def test_stim_select_outcomes_summary_uses_mature_fpr_chg13_only(client):
@@ -361,6 +403,10 @@ def test_stim_select_outcomes_summary_sql_uses_stweekly_market_schema(client, ou
 def test_stim_select_outcomes_summary_filters_start_date(client):
     response = client.get("/v1/selections/stim-select/outcomes/summary?start_date=2024-01-12")
 
+    filters = response.json()["filters"]
+    assert filters["start_date"] == "2024-01-12"
+    assert filters["end_date"] is None
+    assert filters["default_window_applied"] is False
     outcomes = response.json()["outcomes"]
     assert outcomes["count"] == 2
     assert outcomes["first_weekdate"] == "2024-01-12"
@@ -370,10 +416,31 @@ def test_stim_select_outcomes_summary_filters_start_date(client):
 def test_stim_select_outcomes_summary_filters_end_date(client):
     response = client.get("/v1/selections/stim-select/outcomes/summary?end_date=2024-01-12")
 
+    filters = response.json()["filters"]
+    assert filters["start_date"] is None
+    assert filters["end_date"] == "2024-01-12"
+    assert filters["default_window_applied"] is False
     outcomes = response.json()["outcomes"]
     assert outcomes["count"] == 3
     assert outcomes["first_weekdate"] == "2024-01-05"
     assert outcomes["latest_weekdate"] == "2024-01-12"
+
+
+def test_stim_select_outcomes_summary_explicit_date_range_does_not_apply_default(client, outcome_engine):
+    response = client.get(
+        "/v1/selections/stim-select/outcomes/summary"
+        "?start_date=2024-01-05&end_date=2024-01-12"
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["filters"]["start_date"] == "2024-01-05"
+    assert body["filters"]["end_date"] == "2024-01-12"
+    assert body["filters"]["default_window_applied"] is False
+    assert body["outcomes"]["count"] == 3
+
+    executed_sql = "\n".join(sql for sql, _params in outcome_engine.executed)
+    assert "latest_mature_outcome_date" not in executed_sql
 
 
 def test_stim_select_outcomes_summary_rejects_inverted_date_range(client):
@@ -401,6 +468,7 @@ def test_stim_select_outcomes_summary_combined_dates_and_exchange_filter(client)
 
     body = response.json()
     assert body["filters"]["exchange"] == "Q"
+    assert body["filters"]["default_window_applied"] is False
     outcomes = body["outcomes"]
     assert outcomes["count"] == 1
     assert outcomes["average_fpr_chg13"] == pytest.approx(10.0)
@@ -412,6 +480,7 @@ def test_stim_select_outcomes_summary_limit_rank_is_per_week(client, outcome_eng
 
     body = response.json()
     assert body["filters"]["limit_rank"] == 1
+    assert body["filters"]["default_window_applied"] is True
     assert body["outcomes"]["count"] == 3
     assert body["outcomes"]["average_fpr_chg13"] == pytest.approx((5 + 10 + 2.19) / 3)
     executed_sql = "\n".join(sql for sql, _params in outcome_engine.executed)
@@ -523,3 +592,4 @@ def test_stim_select_outcomes_summary_openapi_documents_filters_and_boundary(cli
     assert _schema_has_date_format(parameters["start_date"]["schema"])
     assert _schema_has_date_format(parameters["end_date"]["schema"])
     assert _schema_has_key_value(parameters["limit_rank"]["schema"], "minimum", 1)
+    assert _schema_has_property(schema, "default_window_applied")

@@ -203,6 +203,12 @@ does not reconstruct forward returns from future price joins. It is not limited
 to published reports and does not return current selections, current matching
 symbols, current candidates, or individual historical symbols.
 
+When `start_date` and `end_date` are both omitted, the endpoint applies a
+trailing 10-year window ending at the latest mature outcome date and returns
+`filters.default_window_applied: true` with the applied dates. If either date is
+supplied, the endpoint preserves the caller's date range and returns
+`filters.default_window_applied: false`.
+
 Only this exact path is public/free:
 
 * `/v1/selections/stim-select/outcomes/summary`

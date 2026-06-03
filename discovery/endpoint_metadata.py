@@ -792,14 +792,20 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
                 "required": False,
                 "format": "date",
                 "example": "2020-01-03",
-                "description": "Inclusive signal weekdate filter in YYYY-MM-DD format.",
+                "description": (
+                    "Inclusive signal weekdate filter in YYYY-MM-DD format. If both date "
+                    "filters are omitted, a trailing 10-year default window is applied."
+                ),
             },
             "end_date": {
                 "type": "string",
                 "required": False,
                 "format": "date",
                 "example": "2024-12-27",
-                "description": "Inclusive signal weekdate filter in YYYY-MM-DD format.",
+                "description": (
+                    "Inclusive signal weekdate filter in YYYY-MM-DD format. If both date "
+                    "filters are omitted, the window ends at the latest mature outcome date."
+                ),
             },
             "exchange": {
                 "type": "string",
@@ -830,6 +836,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "filters.end_date",
             "filters.exchange",
             "filters.limit_rank",
+            "filters.default_window_applied",
             "outcomes.horizon",
             "outcomes.count",
             "outcomes.first_weekdate",
@@ -853,7 +860,13 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
                 "name": "ST-IM Select",
                 "base_period_mean_13wk": 2.19,
             },
-            "filters": {"start_date": None, "end_date": None, "exchange": None, "limit_rank": 10},
+            "filters": {
+                "start_date": None,
+                "end_date": None,
+                "exchange": None,
+                "limit_rank": 10,
+                "default_window_applied": False,
+            },
             "outcomes": {
                 "horizon": "13w",
                 "count": 12345,
@@ -881,6 +894,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         analytical_role=ROLE_PROBABILISTIC_SIGNAL_OUTCOME_EVIDENCE,
         notes=[
             "Uses mature observations only: st_data.fpr_chg13 IS NOT NULL.",
+            "If start_date and end_date are both omitted, applies a trailing 10-year default window ending at the latest mature outcome date.",
             "This is signal-rule evidence, not a published-report-membership endpoint.",
             "No current selections, current matching stocks, or individual symbols are returned.",
         ],
