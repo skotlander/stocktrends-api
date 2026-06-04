@@ -15,6 +15,7 @@ from sqlalchemy import text
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
 from services import stim_select_outcome_summary as outcome_summary_service
+from utils.volume import volume_to_actual_shares
 from services.stim_select_outcome_summary import (
     StimSelectOutcomeSummaryTableMissing,
     fetch_default_stim_select_outcome_summary,
@@ -332,7 +333,7 @@ def _stim_select_signal_metadata() -> dict[str, Any]:
             "x13wk1_gt": STIM_SELECT_BASE_13WK,
             "x40wk1_gt": STIM_SELECT_BASE_40WK,
             "price_gte": STIM_SELECT_MIN_PRICE,
-            "volume_gt": STIM_SELECT_MIN_VOLUME,
+            "volume_gt": volume_to_actual_shares(STIM_SELECT_MIN_VOLUME),  # 100000 actual shares (DB stores hundreds)
             "prob4wk_formula": "1 - normal_cdf((0 - x4wk) / x4wksd)",
             "prob13wk_formula": "1 - normal_cdf((2.19 - x13wk) / x13wksd)",
             "prob40wk_formula": "1 - normal_cdf((6.45 - x40wk) / x40wksd)",
