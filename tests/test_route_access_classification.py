@@ -177,6 +177,10 @@ def agent_pay_client(monkeypatch):
         ("/v1/breadth/sector/latest", "breadth_sector_latest_paid"),
         ("/v1/leadership/summary/latest", "leadership_summary_latest_paid"),
         ("/v1/leadership/rotation/history", "leadership_rotation_history_paid"),
+        ("/v1/intelligence/guidance/latest", "intelligence_guidance_latest"),
+        ("/v1/intelligence/guidance/example-artifact", "intelligence_guidance_by_id"),
+        ("/v1/intelligence/research/latest", "intelligence_research_latest"),
+        ("/v1/intelligence/research/example-artifact", "intelligence_research_by_id"),
     ],
 )
 def test_paid_agent_pay_endpoints_return_402_without_api_key_or_payment(

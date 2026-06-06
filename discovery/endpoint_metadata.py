@@ -1764,7 +1764,7 @@ def _fallback_bazaar_output(path: str) -> dict[str, Any]:
 
 
 def get_endpoint_metadata(path: str, method: str | None = None) -> dict[str, Any] | None:
-    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    entry = _lookup_endpoint_metadata(path)
     if entry is None:
         return None
     if method is not None and entry.get("method") != method.upper():
@@ -1772,19 +1772,329 @@ def get_endpoint_metadata(path: str, method: str | None = None) -> dict[str, Any
     return copy.deepcopy(entry)
 
 
+_ENDPOINT_METADATA_BY_PATH.update(
+    {
+        "/v1/intelligence/guidance/latest": _metadata(
+            path="/v1/intelligence/guidance/latest",
+            method="GET",
+            tool_name="intelligence_guidance_latest",
+            title="Intelligence Guidance Latest",
+            category="intelligence",
+            pricing_rule_id="intelligence_guidance_latest",
+            analytical_role="published_intelligence_artifact",
+            resource_description=(
+                "Latest paid Stock Trends market guidance artifact served from exported "
+                "PublicArtifactEnvelope.v1 files. The API validates schema, content hash, "
+                "and publication status before serving and does not call Agent internals."
+            ),
+            bazaar_output_description=(
+                "Returns the latest serveable market_guidance PublicArtifactEnvelope.v1 "
+                "with provider, lineage, validated payload, revision, and content_hash."
+            ),
+            purpose="Retrieve the latest paid market guidance artifact.",
+            investment_agent_value=(
+                "Gives agents a curated, validated guidance product for market reasoning "
+                "without exposing private Agent runtime state."
+            ),
+            workflow_role="Published guidance artifact retrieval.",
+            output_summary="Validated PublicArtifactEnvelope.v1 for the latest market guidance artifact.",
+            response_shape=[
+                "schema_version",
+                "artifact_id",
+                "artifact_type",
+                "publication_status",
+                "validation_status",
+                "generated_at",
+                "published_at",
+                "weekdate",
+                "exchange",
+                "provider",
+                "lineage",
+                "payload",
+                "revision",
+                "content_hash",
+            ],
+            example_object={
+                "schema_version": "1",
+                "artifact_id": "market_guidance:N:YYYY-MM-DD:guidance:example",
+                "artifact_type": "market_guidance",
+                "publication_status": "product_grade",
+                "validation_status": "validated",
+                "weekdate": "YYYY-MM-DD",
+                "exchange": "N",
+                "payload": {"summary": "Paid guidance payload is returned after access is authorized."},
+                "content_hash": "sha256:<64 lowercase hex chars>",
+            },
+            safe_example_request={
+                "method": "GET",
+                "path": "/v1/intelligence/guidance/latest",
+                "query": {},
+            },
+            notes=[
+                "Paid guidance routes allow publication_status published or product_grade only.",
+                "The API reads exported envelopes only; it does not call Agent graph nodes or generation services.",
+                "Discovery metadata and editorial preview remain public/free.",
+            ],
+            related_endpoints=[
+                "/v1/intelligence/discovery",
+                "/v1/intelligence/guidance/{artifact_id}",
+                "/v1/intelligence/editorial/latest/preview",
+            ],
+            tags=["intelligence", "published-artifacts", "market-guidance"],
+        ),
+        "/v1/intelligence/guidance/{artifact_id}": _metadata(
+            path="/v1/intelligence/guidance/{artifact_id}",
+            method="GET",
+            tool_name="intelligence_guidance_by_id",
+            title="Intelligence Guidance By ID",
+            category="intelligence",
+            pricing_rule_id="intelligence_guidance_by_id",
+            analytical_role="published_intelligence_artifact",
+            resource_description=(
+                "Paid Stock Trends market guidance artifact lookup by manifest artifact_id. "
+                "Only same-type, serveable, hash-verified PublicArtifactEnvelope.v1 exports are returned."
+            ),
+            bazaar_output_description=(
+                "Returns a serveable market_guidance PublicArtifactEnvelope.v1 matching the artifact_id path segment."
+            ),
+            purpose="Retrieve a paid market guidance artifact by manifest artifact_id.",
+            investment_agent_value=(
+                "Lets agents fetch an exact published guidance artifact after discovering its id, "
+                "while preserving the API boundary around exported public envelopes."
+            ),
+            workflow_role="Exact guidance artifact retrieval.",
+            input_rule="artifact_id is supplied as the final path segment, not as a query parameter.",
+            required_inputs={
+                "artifact_id": {
+                    "type": "string",
+                    "required": True,
+                    "input_location": "path",
+                    "parameter_source": "path",
+                    "example": "market_guidance:N:YYYY-MM-DD:guidance:example",
+                    "description": "Manifest artifact identifier for a market_guidance envelope.",
+                }
+            },
+            output_summary="Validated PublicArtifactEnvelope.v1 for the requested market guidance artifact.",
+            response_shape=[
+                "schema_version",
+                "artifact_id",
+                "artifact_type",
+                "publication_status",
+                "validation_status",
+                "generated_at",
+                "published_at",
+                "weekdate",
+                "exchange",
+                "provider",
+                "lineage",
+                "payload",
+                "revision",
+                "content_hash",
+            ],
+            example_object={
+                "schema_version": "1",
+                "artifact_id": "market_guidance:N:YYYY-MM-DD:guidance:example",
+                "artifact_type": "market_guidance",
+                "publication_status": "product_grade",
+                "validation_status": "validated",
+                "payload": {"summary": "Paid guidance payload is returned after access is authorized."},
+            },
+            safe_example_request={
+                "method": "GET",
+                "path": "/v1/intelligence/guidance/market_guidance:N:YYYY-MM-DD:guidance:example",
+                "query": {},
+            },
+            notes=[
+                "A manifest id for another artifact type returns 404.",
+                "Paid guidance routes allow publication_status published or product_grade only.",
+            ],
+            related_endpoints=[
+                "/v1/intelligence/discovery",
+                "/v1/intelligence/guidance/latest",
+            ],
+            tags=["intelligence", "published-artifacts", "market-guidance"],
+        ),
+        "/v1/intelligence/research/latest": _metadata(
+            path="/v1/intelligence/research/latest",
+            method="GET",
+            tool_name="intelligence_research_latest",
+            title="Intelligence Research Latest",
+            category="intelligence",
+            pricing_rule_id="intelligence_research_latest",
+            analytical_role="published_intelligence_artifact",
+            resource_description=(
+                "Latest paid Stock Trends market research artifact served from exported "
+                "PublicArtifactEnvelope.v1 files. The API validates schema, content hash, "
+                "and publication status before serving and does not call Agent internals."
+            ),
+            bazaar_output_description=(
+                "Returns the latest serveable market_research_report PublicArtifactEnvelope.v1 "
+                "with provider, lineage, validated payload, revision, and content_hash."
+            ),
+            purpose="Retrieve the latest paid market research report artifact.",
+            investment_agent_value=(
+                "Gives agents a curated, validated research product for deeper market analysis "
+                "without exposing private Agent runtime state."
+            ),
+            workflow_role="Published research artifact retrieval.",
+            output_summary="Validated PublicArtifactEnvelope.v1 for the latest market research artifact.",
+            response_shape=[
+                "schema_version",
+                "artifact_id",
+                "artifact_type",
+                "publication_status",
+                "validation_status",
+                "generated_at",
+                "published_at",
+                "weekdate",
+                "exchange",
+                "provider",
+                "lineage",
+                "payload",
+                "revision",
+                "content_hash",
+            ],
+            example_object={
+                "schema_version": "1",
+                "artifact_id": "market_research_report:N:YYYY-MM-DD:research:example",
+                "artifact_type": "market_research_report",
+                "publication_status": "product_grade",
+                "validation_status": "validated",
+                "weekdate": "YYYY-MM-DD",
+                "exchange": "N",
+                "payload": {"summary": "Paid research payload is returned after access is authorized."},
+                "content_hash": "sha256:<64 lowercase hex chars>",
+            },
+            safe_example_request={
+                "method": "GET",
+                "path": "/v1/intelligence/research/latest",
+                "query": {},
+            },
+            notes=[
+                "Paid research routes allow publication_status published or product_grade only.",
+                "The API reads exported envelopes only; it does not call Agent graph nodes or generation services.",
+                "Discovery metadata and editorial preview remain public/free.",
+            ],
+            related_endpoints=[
+                "/v1/intelligence/discovery",
+                "/v1/intelligence/research/{artifact_id}",
+                "/v1/intelligence/editorial/latest/preview",
+            ],
+            tags=["intelligence", "published-artifacts", "market-research"],
+        ),
+        "/v1/intelligence/research/{artifact_id}": _metadata(
+            path="/v1/intelligence/research/{artifact_id}",
+            method="GET",
+            tool_name="intelligence_research_by_id",
+            title="Intelligence Research By ID",
+            category="intelligence",
+            pricing_rule_id="intelligence_research_by_id",
+            analytical_role="published_intelligence_artifact",
+            resource_description=(
+                "Paid Stock Trends market research artifact lookup by manifest artifact_id. "
+                "Only same-type, serveable, hash-verified PublicArtifactEnvelope.v1 exports are returned."
+            ),
+            bazaar_output_description=(
+                "Returns a serveable market_research_report PublicArtifactEnvelope.v1 matching the artifact_id path segment."
+            ),
+            purpose="Retrieve a paid market research artifact by manifest artifact_id.",
+            investment_agent_value=(
+                "Lets agents fetch an exact published research artifact after discovering its id, "
+                "while preserving the API boundary around exported public envelopes."
+            ),
+            workflow_role="Exact research artifact retrieval.",
+            input_rule="artifact_id is supplied as the final path segment, not as a query parameter.",
+            required_inputs={
+                "artifact_id": {
+                    "type": "string",
+                    "required": True,
+                    "input_location": "path",
+                    "parameter_source": "path",
+                    "example": "market_research_report:N:YYYY-MM-DD:research:example",
+                    "description": "Manifest artifact identifier for a market_research_report envelope.",
+                }
+            },
+            output_summary="Validated PublicArtifactEnvelope.v1 for the requested market research artifact.",
+            response_shape=[
+                "schema_version",
+                "artifact_id",
+                "artifact_type",
+                "publication_status",
+                "validation_status",
+                "generated_at",
+                "published_at",
+                "weekdate",
+                "exchange",
+                "provider",
+                "lineage",
+                "payload",
+                "revision",
+                "content_hash",
+            ],
+            example_object={
+                "schema_version": "1",
+                "artifact_id": "market_research_report:N:YYYY-MM-DD:research:example",
+                "artifact_type": "market_research_report",
+                "publication_status": "product_grade",
+                "validation_status": "validated",
+                "payload": {"summary": "Paid research payload is returned after access is authorized."},
+            },
+            safe_example_request={
+                "method": "GET",
+                "path": "/v1/intelligence/research/market_research_report:N:YYYY-MM-DD:research:example",
+                "query": {},
+            },
+            notes=[
+                "A manifest id for another artifact type returns 404.",
+                "Paid research routes allow publication_status published or product_grade only.",
+            ],
+            related_endpoints=[
+                "/v1/intelligence/discovery",
+                "/v1/intelligence/research/latest",
+            ],
+            tags=["intelligence", "published-artifacts", "market-research"],
+        ),
+    }
+)
+
+_INTELLIGENCE_GUIDANCE_BY_ID_TEMPLATE = "/v1/intelligence/guidance/{artifact_id}"
+_INTELLIGENCE_RESEARCH_BY_ID_TEMPLATE = "/v1/intelligence/research/{artifact_id}"
+
+
+def _is_single_child_path(path: str, prefix: str) -> bool:
+    if not path.startswith(prefix):
+        return False
+    suffix = path[len(prefix):]
+    return bool(suffix) and "/" not in suffix
+
+
+def _lookup_endpoint_metadata(path: str) -> dict[str, Any] | None:
+    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    if entry is not None:
+        return entry
+
+    if _is_single_child_path(path, "/v1/intelligence/guidance/"):
+        return _ENDPOINT_METADATA_BY_PATH.get(_INTELLIGENCE_GUIDANCE_BY_ID_TEMPLATE)
+
+    if _is_single_child_path(path, "/v1/intelligence/research/"):
+        return _ENDPOINT_METADATA_BY_PATH.get(_INTELLIGENCE_RESEARCH_BY_ID_TEMPLATE)
+
+    return None
+
+
 def iter_endpoint_metadata() -> list[dict[str, Any]]:
     return [copy.deepcopy(entry) for entry in _ENDPOINT_METADATA_BY_PATH.values()]
 
 
 def get_resource_description(path: str) -> str:
-    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    entry = _lookup_endpoint_metadata(path)
     if not entry:
         return _fallback_resource_description(path)
     return str(entry.get("resource_description") or _fallback_resource_description(path))
 
 
 def get_bazaar_output(path: str) -> dict[str, Any]:
-    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    entry = _lookup_endpoint_metadata(path)
     if not entry:
         return _fallback_bazaar_output(path)
     output = entry.get("bazaar_output")
@@ -1800,7 +2110,7 @@ def build_endpoint_preview(
     stc_cost: str | None = None,
     effective_price_usd: str | None = None,
 ) -> dict[str, Any] | None:
-    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    entry = _lookup_endpoint_metadata(path)
     if entry is None:
         return None
 
@@ -1860,7 +2170,7 @@ def build_compact_endpoint_preview(
     stc_cost: str | None = None,
     effective_price_usd: str | None = None,
 ) -> dict[str, Any] | None:
-    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    entry = _lookup_endpoint_metadata(path)
     if entry is None:
         return None
 
@@ -2006,7 +2316,7 @@ def _inputs_with_parameter_source(inputs: dict[str, Any], location: str) -> dict
 
 
 def build_input_schema(path: str) -> dict[str, Any] | None:
-    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    entry = _lookup_endpoint_metadata(path)
     if entry is None:
         return None
 
@@ -2014,7 +2324,7 @@ def build_input_schema(path: str) -> dict[str, Any] | None:
 
 
 def build_tool_parameters(path: str) -> list[dict[str, Any]] | None:
-    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    entry = _lookup_endpoint_metadata(path)
     if entry is None:
         return None
 
@@ -2044,7 +2354,7 @@ def build_tool_parameters(path: str) -> list[dict[str, Any]] | None:
 
 
 def build_tool_template(path: str) -> dict[str, Any] | None:
-    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    entry = _lookup_endpoint_metadata(path)
     if entry is None:
         return None
 
@@ -2312,7 +2622,7 @@ def build_bazaar_extension(path: str, method: str | None = None) -> dict[str, An
     registry and never resolves prices, verifies payments, or changes endpoint
     execution behavior.
     """
-    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    entry = _lookup_endpoint_metadata(path)
     http_method = (method or (entry or {}).get("method") or "GET").upper()
     location = input_location_for_method(http_method)
     input_schema = (
@@ -2419,7 +2729,7 @@ def build_compact_bazaar_extension(path: str, method: str | None = None) -> dict
     Rich Stock Trends semantics live in stocktrends_preview and discovery
     manifests.
     """
-    entry = _ENDPOINT_METADATA_BY_PATH.get(path)
+    entry = _lookup_endpoint_metadata(path)
     http_method = (method or (entry or {}).get("method") or "GET").upper()
     location = input_location_for_method(http_method)
     category = (entry or {}).get("category")

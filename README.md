@@ -247,9 +247,21 @@ does not call Agent graph nodes, Agent services, generation code, or raw Agent
 filesystem internals. Invalid manifests return unavailable responses and
 invalid, unpublished, expired, or hash-mismatched artifacts fail closed.
 
-PR 2 classifies these bridge routes as public/free and non-metered so the
-read-only contract can ship without partial pricing rules. PR 3 will add the
-intelligence pricing and payment policy for guidance and research routes.
+Access classification:
+
+* public/free:
+  * `GET /v1/intelligence/discovery`
+  * `GET /v1/intelligence/editorial/latest/preview`
+* paid/metered through subscription, x402, or MPP:
+  * `GET /v1/intelligence/guidance/latest` -> `intelligence_guidance_latest` (0.25 STC)
+  * `GET /v1/intelligence/guidance/{artifact_id}` -> `intelligence_guidance_by_id` (0.25 STC)
+  * `GET /v1/intelligence/research/latest` -> `intelligence_research_latest` (0.50 STC)
+  * `GET /v1/intelligence/research/{artifact_id}` -> `intelligence_research_by_id` (0.50 STC)
+
+Discovery metadata and editorial preview may serve `published` or
+`publish_ready` exports. Paid guidance and research routes serve only
+`published` or `product_grade` exports. Initial pricing-rule seed SQL is in
+`docs/operations/intelligence_pricing_rules.sql`.
 
 ### Cognition Metadata
 

@@ -65,8 +65,6 @@ NON_METERED_PATHS = {
     "/v1/leadership/definitions",
     "/v1/selections/stim-select/outcomes/summary",
     "/v1/intelligence/discovery",
-    "/v1/intelligence/guidance/latest",
-    "/v1/intelligence/research/latest",
     "/v1/intelligence/editorial/latest/preview",
     # MCP tools manifest: public discovery surface, no metering.
     "/v1/ai/tools",

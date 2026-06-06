@@ -1260,6 +1260,92 @@
       "estimated_usd_cost": null,
       "supported_rails": ["subscription", "x402", "mpp"],
       "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
+    },
+    {
+      "name": "intelligence_guidance_latest",
+      "analytical_role": "published_intelligence_artifact",
+      "title": "Intelligence Guidance Latest",
+      "description": "Paid/metered. Returns the latest published or product-grade market guidance PublicArtifactEnvelope.v1 from exported artifacts. The API validates schema, content_hash, and publication status and does not call Agent internals. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/intelligence/guidance/latest",
+      "auth_required": true,
+      "category": "intelligence",
+      "access_type": "paid",
+      "requires_payment": true,
+      "pricing_rule_id": "intelligence_guidance_latest",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "Launch placeholder price is 0.25 STC in docs/operations/intelligence_pricing_rules.sql; fetch /v1/pricing/catalog for the live source of truth."
+    },
+    {
+      "name": "intelligence_guidance_by_id",
+      "analytical_role": "published_intelligence_artifact",
+      "title": "Intelligence Guidance By ID",
+      "description": "Paid/metered. Returns a published or product-grade market guidance PublicArtifactEnvelope.v1 by manifest artifact_id. The API validates schema, content_hash, and artifact type before serving and does not call Agent internals. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/intelligence/guidance/{artifact_id}",
+      "auth_required": true,
+      "category": "intelligence",
+      "access_type": "paid",
+      "requires_payment": true,
+      "pricing_rule_id": "intelligence_guidance_by_id",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "Launch placeholder price is 0.25 STC in docs/operations/intelligence_pricing_rules.sql; fetch /v1/pricing/catalog for the live source of truth.",
+      "parameters": [
+        {
+          "name": "artifact_id",
+          "in": "path",
+          "required": true,
+          "type": "string",
+          "description": "Manifest artifact identifier for a market_guidance envelope."
+        }
+      ]
+    },
+    {
+      "name": "intelligence_research_latest",
+      "analytical_role": "published_intelligence_artifact",
+      "title": "Intelligence Research Latest",
+      "description": "Paid/metered. Returns the latest published or product-grade market research report PublicArtifactEnvelope.v1 from exported artifacts. The API validates schema, content_hash, and publication status and does not call Agent internals. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/intelligence/research/latest",
+      "auth_required": true,
+      "category": "intelligence",
+      "access_type": "paid",
+      "requires_payment": true,
+      "pricing_rule_id": "intelligence_research_latest",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "Launch placeholder price is 0.50 STC in docs/operations/intelligence_pricing_rules.sql; fetch /v1/pricing/catalog for the live source of truth."
+    },
+    {
+      "name": "intelligence_research_by_id",
+      "analytical_role": "published_intelligence_artifact",
+      "title": "Intelligence Research By ID",
+      "description": "Paid/metered. Returns a published or product-grade market research report PublicArtifactEnvelope.v1 by manifest artifact_id. The API validates schema, content_hash, and artifact type before serving and does not call Agent internals. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/intelligence/research/{artifact_id}",
+      "auth_required": true,
+      "category": "intelligence",
+      "access_type": "paid",
+      "requires_payment": true,
+      "pricing_rule_id": "intelligence_research_by_id",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "Launch placeholder price is 0.50 STC in docs/operations/intelligence_pricing_rules.sql; fetch /v1/pricing/catalog for the live source of truth.",
+      "parameters": [
+        {
+          "name": "artifact_id",
+          "in": "path",
+          "required": true,
+          "type": "string",
+          "description": "Manifest artifact identifier for a market_research_report envelope."
+        }
+      ]
     }
   ],
   "usage_guidance": [

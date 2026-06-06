@@ -93,7 +93,8 @@ def _artifact_by_id(
     response_model_exclude_none=True,
     summary="Latest intelligence artifact discovery metadata",
     description=(
-        "Returns the latest valid published discovery_metadata envelope from the "
+        "Public/free. Returns the latest valid published or publish-ready "
+        "discovery_metadata envelope from the "
         "configured public intelligence artifact store. The API reads exported "
         "Agent envelopes only and does not generate artifacts on request."
     ),
@@ -108,8 +109,9 @@ def intelligence_discovery(request: Request) -> PublicArtifactEnvelope:
     response_model_exclude_none=True,
     summary="Latest published market guidance artifact",
     description=(
-        "Returns the latest valid published market_guidance envelope from the "
-        "configured public intelligence artifact store. No Agent runtime code is called."
+        "Paid intelligence product. Returns the latest valid published or product-grade "
+        "market_guidance envelope from the configured public intelligence artifact store. "
+        "No Agent runtime code is called."
     ),
 )
 def intelligence_guidance_latest(request: Request) -> PublicArtifactEnvelope:
@@ -122,8 +124,9 @@ def intelligence_guidance_latest(request: Request) -> PublicArtifactEnvelope:
     response_model_exclude_none=True,
     summary="Published market guidance artifact by id",
     description=(
-        "Returns a valid published market_guidance envelope by artifact_id. "
-        "A manifest id for another artifact type returns 404."
+        "Paid intelligence product. Returns a valid published or product-grade "
+        "market_guidance envelope by artifact_id. A manifest id for another artifact "
+        "type returns 404."
     ),
 )
 def intelligence_guidance_by_id(
@@ -143,8 +146,9 @@ def intelligence_guidance_by_id(
     response_model_exclude_none=True,
     summary="Latest published market research artifact",
     description=(
-        "Returns the latest valid published market_research_report envelope from the "
-        "configured public intelligence artifact store. No Agent runtime code is called."
+        "Paid intelligence product. Returns the latest valid published or product-grade "
+        "market_research_report envelope from the configured public intelligence "
+        "artifact store. No Agent runtime code is called."
     ),
 )
 def intelligence_research_latest(request: Request) -> PublicArtifactEnvelope:
@@ -157,8 +161,9 @@ def intelligence_research_latest(request: Request) -> PublicArtifactEnvelope:
     response_model_exclude_none=True,
     summary="Published market research artifact by id",
     description=(
-        "Returns a valid published market_research_report envelope by artifact_id. "
-        "A manifest id for another artifact type returns 404."
+        "Paid intelligence product. Returns a valid published or product-grade "
+        "market_research_report envelope by artifact_id. A manifest id for another "
+        "artifact type returns 404."
     ),
 )
 def intelligence_research_by_id(
@@ -178,9 +183,9 @@ def intelligence_research_by_id(
     response_model_exclude_none=True,
     summary="Latest public editorial preview artifact",
     description=(
-        "Returns the latest valid published editorial_preview envelope from the "
-        "configured public intelligence artifact store. Preview routes never generate "
-        "editorial content on request."
+        "Public/free. Returns the latest valid published or publish-ready "
+        "editorial_preview envelope from the configured public intelligence artifact "
+        "store. Preview routes never generate editorial content on request."
     ),
 )
 def intelligence_editorial_latest_preview(request: Request) -> PublicArtifactEnvelope:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 import shutil
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -13,6 +14,8 @@ from fastapi.testclient import TestClient
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+import pricing.classifier as classifier_module
+from payments.enforcement import PaymentEnforcementResult
 from payments.policy_provider import is_public_intelligence_path
 from services.intelligence_artifact_store import (
     CONTRACT_SCHEMA_PATH,
@@ -76,15 +79,42 @@ def _rewrite_artifact(root: Path, artifact_type: str, updates: dict) -> dict:
     return artifact
 
 
-def _stub_runtime_side_effects(monkeypatch):
+def _stub_runtime_side_effects(monkeypatch, *, cost: Decimal = Decimal("0")):
     monkeypatch.setattr(metering_module, "log_api_request_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *args, **kwargs: None)
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *args, **kwargs: (Decimal("0"), Decimal("0"), Decimal("0")),
+        lambda *args, **kwargs: (cost, cost, cost),
     )
+
+
+def _stub_paid_api_key(monkeypatch):
+    def _authenticate_api_key(self, path: str, raw_key: str) -> tuple[bool, dict]:
+        return True, {
+            "api_key_id": "key_test",
+            "customer_id": "cus_test",
+            "subscription_id": "sub_test",
+            "plan_code": "pro",
+            "actor_type": "external_customer",
+            "monthly_quota": 1000,
+        }
+
+    monkeypatch.setattr(
+        api_key_module.ApiKeyMiddleware,
+        "_authenticate_api_key",
+        _authenticate_api_key,
+    )
+
+
+def _enable_agent_pay(monkeypatch):
+    monkeypatch.setattr(api_key_module, "_ENABLE_AGENT_PAY", True)
+    monkeypatch.setattr(metering_module, "ENABLE_AGENT_PAY", True)
+    monkeypatch.setattr(metering_module, "ENFORCE_AGENT_PAY", True)
+    monkeypatch.setattr(metering_module, "VALIDATE_AGENT_PAY_HEADERS", False)
+    monkeypatch.setattr(classifier_module, "ENABLE_AGENT_PAY", True)
+    monkeypatch.setattr(classifier_module, "ENFORCE_AGENT_PAY", True)
 
 
 @pytest.fixture
@@ -98,6 +128,68 @@ def intelligence_client(monkeypatch, artifact_root):
     monkeypatch.setenv(STORE_ENV_VAR, str(artifact_root))
     with TestClient(main.app) as client:
         yield client
+
+
+@pytest.fixture
+def paid_subscription_client(monkeypatch, artifact_root):
+    economics_rows: list[dict] = []
+    cost_by_rule = {
+        "intelligence_guidance_latest": Decimal("0.25"),
+        "intelligence_guidance_by_id": Decimal("0.25"),
+        "intelligence_research_latest": Decimal("0.50"),
+        "intelligence_research_by_id": Decimal("0.50"),
+    }
+
+    _stub_runtime_side_effects(monkeypatch)
+    _stub_paid_api_key(monkeypatch)
+    monkeypatch.setenv(STORE_ENV_VAR, str(artifact_root))
+    monkeypatch.setattr(
+        metering_module,
+        "resolve_economic_amounts",
+        lambda rule_name: (
+            cost_by_rule.get(rule_name, Decimal("0")),
+            cost_by_rule.get(rule_name, Decimal("0")),
+            cost_by_rule.get(rule_name, Decimal("0")),
+        ),
+    )
+    monkeypatch.setattr(
+        metering_module,
+        "log_api_request_economics",
+        lambda econ: economics_rows.append(dict(econ)),
+    )
+
+    with TestClient(main.app) as client:
+        yield client, economics_rows
+
+
+@pytest.fixture
+def paid_machine_client(monkeypatch, artifact_root):
+    economics_rows: list[dict] = []
+
+    _stub_runtime_side_effects(monkeypatch, cost=Decimal("0.25"))
+    _enable_agent_pay(monkeypatch)
+    monkeypatch.setenv(STORE_ENV_VAR, str(artifact_root))
+    monkeypatch.setattr(
+        metering_module,
+        "log_api_request_economics",
+        lambda econ: economics_rows.append(dict(econ)),
+    )
+
+    def _fake_enforce_payment_rail(**kwargs):
+        payment_rail = kwargs["payment_rail"]
+        return PaymentEnforcementResult(
+            outcome="proceed",
+            payment_reference=f"{payment_rail}-paid-ref",
+            payment_network="eip155:8453",
+            payment_token="USDC",
+            payment_amount_native=Decimal("250000"),
+            payment_response={"success": True, "rail": payment_rail} if payment_rail == "x402" else None,
+        )
+
+    monkeypatch.setattr(metering_module, "enforce_payment_rail", _fake_enforce_payment_rail)
+
+    with TestClient(main.app) as client:
+        yield client, economics_rows
 
 
 def test_api_loads_vendored_agent_fixtures(artifact_root):
@@ -184,8 +276,13 @@ def test_files_not_referenced_by_manifest_are_ignored(artifact_root):
     assert artifact.artifact_id == GUIDANCE_ID
 
 
-def test_wrong_artifact_type_for_route_returns_404(intelligence_client):
-    response = intelligence_client.get(f"/v1/intelligence/guidance/{RESEARCH_ID}")
+def test_wrong_artifact_type_for_route_returns_404(paid_subscription_client):
+    client, _economics_rows = paid_subscription_client
+
+    response = client.get(
+        f"/v1/intelligence/guidance/{RESEARCH_ID}",
+        headers={"Authorization": "Bearer paid_test_key"},
+    )
 
     assert response.status_code == 404
     assert response.json()["detail"]["error"] == "intelligence_artifact_not_found"
@@ -262,6 +359,105 @@ def test_expired_artifacts_fail_closed(artifact_root):
     assert store.get_latest("market_guidance") is None
 
 
+def test_store_cache_avoids_repeated_full_reload_on_unchanged_manifest(monkeypatch, artifact_root):
+    store = IntelligenceArtifactStore(artifact_root)
+    calls = 0
+    original = store._load_valid_manifest_entry
+
+    def _counting_load(entry):
+        nonlocal calls
+        calls += 1
+        return original(entry)
+
+    monkeypatch.setattr(store, "_load_valid_manifest_entry", _counting_load)
+
+    assert store.get_latest("market_guidance") is not None
+    first_call_count = calls
+    assert first_call_count == 4
+
+    assert store.get_latest("market_research_report") is not None
+    assert calls == first_call_count
+
+
+def test_store_cache_invalidates_when_manifest_changes(artifact_root):
+    store = IntelligenceArtifactStore(artifact_root)
+    assert store.get_latest("market_guidance").artifact_id == GUIDANCE_ID
+
+    manifest = _load_manifest(artifact_root)
+    entry = _entry_for(manifest, "market_guidance")
+    source_artifact = _read_json(_artifact_path(artifact_root, entry))
+    newer = copy.deepcopy(source_artifact)
+    newer.update(
+        {
+            "artifact_id": "market_guidance:N:2026-04-18:guidance:cache-newer",
+            "weekdate": "2026-04-18",
+            "generated_at": "2026-04-19T06:00:00+00:00",
+            "published_at": "2026-04-19T06:00:00+00:00",
+        }
+    )
+    newer["content_hash"] = compute_public_artifact_content_hash(newer)
+    newer_path = artifact_root / "artifacts" / "market_guidance" / "market_guidance-cache-newer.json"
+    _write_json(newer_path, newer)
+    manifest["artifacts"].append(
+        {
+            "artifact_id": newer["artifact_id"],
+            "artifact_type": newer["artifact_type"],
+            "content_hash": newer["content_hash"],
+            "exchange": newer["exchange"],
+            "path": "artifacts/market_guidance/market_guidance-cache-newer.json",
+            "published_at": newer["published_at"],
+            "weekdate": newer["weekdate"],
+        }
+    )
+    manifest["artifact_count"] = len(manifest["artifacts"])
+    _save_manifest(artifact_root, manifest)
+    os.utime(artifact_root / "manifest.json", None)
+
+    assert store.get_latest("market_guidance").artifact_id == newer["artifact_id"]
+
+
+def test_store_cache_does_not_bypass_hash_validation_after_artifact_change(artifact_root):
+    store = IntelligenceArtifactStore(artifact_root)
+    assert store.get_latest("market_guidance") is not None
+
+    manifest = _load_manifest(artifact_root)
+    entry = _entry_for(manifest, "market_guidance")
+    artifact_path = _artifact_path(artifact_root, entry)
+    artifact = _read_json(artifact_path)
+    artifact["payload"] = {"tampered": True}
+    _write_json(artifact_path, artifact)
+    os.utime(artifact_path, None)
+
+    assert store.get_latest("market_guidance") is None
+
+
+@pytest.mark.parametrize(
+    ("artifact_type", "status", "expected_available"),
+    [
+        ("discovery_metadata", "publish_ready", True),
+        ("editorial_preview", "publish_ready", True),
+        ("market_guidance", "published", True),
+        ("market_guidance", "product_grade", True),
+        ("market_guidance", "publish_ready", False),
+        ("market_guidance", "agent_actionable", False),
+        ("market_research_report", "published", True),
+        ("market_research_report", "product_grade", True),
+        ("market_research_report", "publish_ready", False),
+    ],
+)
+def test_publication_status_allowlist_by_artifact_type(
+    artifact_root,
+    artifact_type,
+    status,
+    expected_available,
+):
+    _rewrite_artifact(artifact_root, artifact_type, {"publication_status": status})
+
+    artifact = IntelligenceArtifactStore(artifact_root).get_latest(artifact_type)
+
+    assert (artifact is not None) is expected_available
+
+
 def test_no_agent_repo_imports():
     checked_paths = [
         REPO_ROOT / "services" / "intelligence_artifact_store.py",
@@ -296,10 +492,6 @@ def test_openapi_includes_intelligence_routes(intelligence_client):
     "path",
     [
         "/v1/intelligence/discovery",
-        "/v1/intelligence/guidance/latest",
-        f"/v1/intelligence/guidance/{GUIDANCE_ID}",
-        "/v1/intelligence/research/latest",
-        f"/v1/intelligence/research/{RESEARCH_ID}",
         "/v1/intelligence/editorial/latest/preview",
     ],
 )
@@ -309,6 +501,82 @@ def test_public_intelligence_routes_return_200_without_api_key(intelligence_clie
     assert response.status_code == 200
     assert response.headers["x-stocktrends-payment-required"] == "false"
     assert response.headers["x-stocktrends-accepted-payment-methods"] == "none"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/v1/intelligence/guidance/latest",
+        f"/v1/intelligence/guidance/{GUIDANCE_ID}",
+        "/v1/intelligence/research/latest",
+        f"/v1/intelligence/research/{RESEARCH_ID}",
+    ],
+)
+def test_paid_intelligence_routes_are_not_public_without_api_key(intelligence_client, path):
+    response = intelligence_client.get(path)
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Missing API key"
+
+
+@pytest.mark.parametrize(
+    ("path", "pricing_rule_id", "stc_cost"),
+    [
+        ("/v1/intelligence/guidance/latest", "intelligence_guidance_latest", Decimal("0.25")),
+        (f"/v1/intelligence/guidance/{GUIDANCE_ID}", "intelligence_guidance_by_id", Decimal("0.25")),
+        ("/v1/intelligence/research/latest", "intelligence_research_latest", Decimal("0.50")),
+        (f"/v1/intelligence/research/{RESEARCH_ID}", "intelligence_research_by_id", Decimal("0.50")),
+    ],
+)
+def test_paid_intelligence_subscription_access_logs_economics(
+    paid_subscription_client,
+    path,
+    pricing_rule_id,
+    stc_cost,
+):
+    client, economics_rows = paid_subscription_client
+
+    response = client.get(path, headers={"Authorization": "Bearer paid_test_key"})
+
+    assert response.status_code == 200
+    assert response.headers["x-stocktrends-pricing-rule"] == pricing_rule_id
+    assert response.headers["x-stocktrends-payment-required"] == "false"
+    assert response.headers["x-stocktrends-accepted-payment-methods"] == "subscription,x402,mpp"
+    assert response.headers["cache-control"] == "no-store, private"
+
+    row = economics_rows[-1]
+    assert row["request_id"]
+    assert row["pricing_rule_id"] == pricing_rule_id
+    assert row["stc_cost"] == stc_cost
+    assert row["payment_required"] == 0
+    assert row["payment_rail"] == "subscription"
+    assert row["payment_status"] == "not_required"
+
+
+@pytest.mark.parametrize("payment_method", ["x402", "mpp"])
+def test_paid_intelligence_machine_payment_rails_work(paid_machine_client, payment_method):
+    client, economics_rows = paid_machine_client
+    headers = {
+        "X-StockTrends-Agent-Id": "intelligence-agent-test",
+        "X-StockTrends-Payment-Method": payment_method,
+        "X-StockTrends-Payment-Reference": f"{payment_method}-ref",
+        "X-StockTrends-Session-Id": f"{payment_method}-session",
+    }
+
+    response = client.get("/v1/intelligence/guidance/latest", headers=headers)
+
+    assert response.status_code == 200
+    assert response.headers["x-stocktrends-pricing-rule"] == "intelligence_guidance_latest"
+    assert response.headers["x-stocktrends-payment-required"] == "true"
+    assert response.headers["x-stocktrends-accepted-payment-methods"] == "subscription,x402,mpp"
+
+    row = economics_rows[-1]
+    assert row["pricing_rule_id"] == "intelligence_guidance_latest"
+    assert row["stc_cost"] == Decimal("0.25")
+    assert row["payment_required"] == 1
+    assert row["payment_rail"] == payment_method
+    assert row["payment_method"] == payment_method
+    assert row["request_id"]
 
 
 def test_missing_store_returns_503(monkeypatch):
@@ -326,10 +594,11 @@ def test_missing_store_returns_503(monkeypatch):
     ("path", "expected"),
     [
         ("/v1/intelligence/discovery", True),
-        ("/v1/intelligence/guidance/latest", True),
-        ("/v1/intelligence/guidance/example", True),
+        ("/v1/intelligence/guidance/latest", False),
+        ("/v1/intelligence/guidance/example", False),
         ("/v1/intelligence/guidance/example/extra", False),
-        ("/v1/intelligence/research/example", True),
+        ("/v1/intelligence/research/latest", False),
+        ("/v1/intelligence/research/example", False),
         ("/v1/intelligence/research/example/extra", False),
         ("/v1/intelligence/editorial/latest/preview", True),
         ("/v1/intelligence/editorial/latest", False),
