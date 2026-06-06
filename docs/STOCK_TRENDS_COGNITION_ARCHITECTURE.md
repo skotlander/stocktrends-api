@@ -195,6 +195,18 @@ filesystem internals to satisfy these requests. If API-layer canonical URLs or
 pricing metadata are added later, they must be added as API response metadata or
 payment/discovery metadata rather than by mutating the Agent-exported envelope.
 
+Discovery metadata and editorial preview are public/free planning surfaces.
+Guidance and research artifacts are paid intelligence products and must remain
+inside the normal Stock Trends API economic boundary: endpoint payment policy,
+STC pricing catalog, payment enforcement, and request economics logging.
+
+Serveability is explicit by artifact type. Discovery metadata and editorial
+preview may serve `published` or `publish_ready` exports; paid guidance and
+research may serve only `published` or `product_grade` exports. The API store may
+cache validated exported artifacts, but cache invalidation must be tied to the
+manifest and referenced artifact file signatures so schema, hash, expiration,
+and publication-status checks are rerun after store changes.
+
 ### Payment Surfaces
 
 Payment rails are economic transport layers, not cognition layers. x402 and MPP metadata may expose compact reasoning previews, but pricing, payment verification, and metering must remain separate from inference semantics.

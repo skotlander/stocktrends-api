@@ -142,17 +142,19 @@ https://developer.stocktrends.com/mpp
 ### Published Intelligence Artifacts
 
 * `GET /intelligence/discovery`
-  Latest valid published discovery metadata envelope for available Stock Trends intelligence artifacts.
+  Public/free. Latest valid published or publish-ready discovery metadata envelope for available Stock Trends intelligence artifacts.
 * `GET /intelligence/guidance/latest`
-  Latest valid published market guidance envelope. PR 2 serves this bridge route as public/free; PR 3 will add intelligence pricing and payment policy.
+  Paid/metered intelligence product. Latest valid published or product-grade market guidance envelope. Pricing rule: `intelligence_guidance_latest` (0.25 STC). Supports subscription, x402, and MPP.
 * `GET /intelligence/guidance/{artifact_id}`
-  Published market guidance envelope by manifest artifact id. Wrong artifact types return not found.
+  Paid/metered intelligence product. Published or product-grade market guidance envelope by manifest artifact id. Pricing rule: `intelligence_guidance_by_id` (0.25 STC). Wrong artifact types return not found.
 * `GET /intelligence/research/latest`
-  Latest valid published market research report envelope. PR 2 serves this bridge route as public/free; PR 3 will add intelligence pricing and payment policy.
+  Paid/metered intelligence product. Latest valid published or product-grade market research report envelope. Pricing rule: `intelligence_research_latest` (0.50 STC). Supports subscription, x402, and MPP.
 * `GET /intelligence/research/{artifact_id}`
-  Published market research report envelope by manifest artifact id. Wrong artifact types return not found.
+  Paid/metered intelligence product. Published or product-grade market research report envelope by manifest artifact id. Pricing rule: `intelligence_research_by_id` (0.50 STC). Wrong artifact types return not found.
 * `GET /intelligence/editorial/latest/preview`
-  Latest valid published editorial preview envelope. Preview only; no generation occurs on request.
+  Public/free. Latest valid published or publish-ready editorial preview envelope. Preview only; no generation occurs on request.
+
+The API reads only exported `PublicArtifactEnvelope.v1` files from the configured artifact store and does not call Stock Trends Intelligence Agent internals. Invalid manifests and schema/hash/expiration/publication-status failures fail closed.
 
 ### AI Discovery
 
@@ -326,6 +328,8 @@ Publicly accessible resources include:
 * `GET /v1/pricing`
 * `GET /v1/pricing/catalog`
 * `GET /v1/workflows`
+* `GET /v1/intelligence/discovery`
+* `GET /v1/intelligence/editorial/latest/preview`
 * `GET /v1/stocktrends/portfolios`
 * `GET /v1/stocktrends/portfolios/{port_id}`
 * `GET /v1/stocktrends/portfolios/{port_id}/returns`

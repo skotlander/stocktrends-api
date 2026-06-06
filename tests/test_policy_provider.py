@@ -273,6 +273,56 @@ class TestBreadthSectorLatestDefaultPolicy:
         assert is_free_metered_path("/v1/breadth/sector/latest") is False
 
 
+class TestIntelligenceArtifactPaymentPolicies:
+    def test_only_discovery_and_editorial_preview_are_public(self):
+        import payments.policy_provider as pp
+
+        assert pp.is_public_intelligence_path("/v1/intelligence/discovery") is True
+        assert pp.is_public_intelligence_path("/v1/intelligence/editorial/latest/preview") is True
+        assert pp.is_public_intelligence_path("/v1/intelligence/guidance/latest") is False
+        assert pp.is_public_intelligence_path("/v1/intelligence/guidance/artifact-1") is False
+        assert pp.is_public_intelligence_path("/v1/intelligence/research/latest") is False
+        assert pp.is_public_intelligence_path("/v1/intelligence/research/artifact-1") is False
+        assert pp.is_public_intelligence_path("/v1/intelligence/research/artifact-1/extra") is False
+
+    @pytest.mark.parametrize(
+        ("path", "rule_id"),
+        [
+            ("/v1/intelligence/guidance/latest", "intelligence_guidance_latest"),
+            ("/v1/intelligence/guidance/artifact-1", "intelligence_guidance_by_id"),
+            ("/v1/intelligence/research/latest", "intelligence_research_latest"),
+            ("/v1/intelligence/research/artifact-1", "intelligence_research_by_id"),
+        ],
+    )
+    def test_paid_intelligence_routes_have_default_multi_rail_policy(self, monkeypatch, path, rule_id):
+        import payments.policy_provider as pp
+
+        monkeypatch.setattr(pp, "get_runtime_payment_policy_config", lambda **kw: _default_policy_config())
+
+        effective = pp.get_effective_endpoint_payment_policy(path, "GET")
+        accepted = pp.get_accepted_payment_methods_for_path(path, rule_id, method="GET")
+
+        assert effective is not None
+        assert effective.pricing_rule_id == rule_id
+        assert effective.allowed_rails == ("subscription", "x402", "mpp")
+        assert effective.machine_payment_rails == ("x402", "mpp")
+        assert accepted == "subscription,x402,mpp"
+
+    def test_paid_intelligence_route_matching_is_exact_not_prefix_based(self, monkeypatch):
+        import payments.policy_provider as pp
+
+        monkeypatch.setattr(pp, "get_runtime_payment_policy_config", lambda **kw: _default_policy_config())
+
+        assert pp.get_effective_endpoint_payment_policy(
+            "/v1/intelligence/guidance/artifact-1/extra",
+            "GET",
+        ) is None
+        assert pp.get_effective_endpoint_payment_policy(
+            "/v1/intelligence/research/artifact-1/extra",
+            "GET",
+        ) is None
+
+
 # ---------------------------------------------------------------------------
 # machine_payments_enabled respected in effective policy derivation
 # ---------------------------------------------------------------------------
@@ -508,6 +558,10 @@ class TestGetAcceptedPaymentMethodsForPath:
             ("/v1/portfolio/compare", "portfolio_compare", "POST"),
             ("/v1/breadth/sector/latest", "breadth_sector_latest_paid", "GET"),
             ("/v1/breadth/sector/history", "breadth_sector_history_paid", "GET"),
+            ("/v1/intelligence/guidance/latest", "intelligence_guidance_latest", "GET"),
+            ("/v1/intelligence/guidance/artifact-1", "intelligence_guidance_by_id", "GET"),
+            ("/v1/intelligence/research/latest", "intelligence_research_latest", "GET"),
+            ("/v1/intelligence/research/artifact-1", "intelligence_research_by_id", "GET"),
         ]
         for path, rule_id, http_method in paid_paths:
             result = get_accepted_payment_methods_for_path(path, rule_id, method=http_method)

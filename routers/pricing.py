@@ -204,6 +204,14 @@ def get_pricing():
                     "/v1/breadth/sector/latest and /v1/breadth/sector/history support subscription, x402, and MPP.",
                 ],
             },
+            "intelligence": {
+                "pricing_model": "mixed",
+                "notes": [
+                    "/v1/intelligence/discovery and /v1/intelligence/editorial/latest/preview are public/free.",
+                    "/v1/intelligence/guidance/* and /v1/intelligence/research/* are paid intelligence products with endpoint-specific STC rules.",
+                    "Paid intelligence artifact routes support subscription, x402, and MPP.",
+                ],
+            },
             "general_protected_api": {
                 "pricing_model": "subscription",
                 "pricing_rule_default": "default_subscription",

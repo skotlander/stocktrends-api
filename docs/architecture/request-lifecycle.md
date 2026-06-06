@@ -42,20 +42,40 @@ Current public/free Stock Trends portfolio endpoints include:
 * `GET /v1/stocktrends/portfolios/{port_id}/strategy`
 * `GET /v1/selections/stim-select/outcomes/summary`
 * `GET /v1/intelligence/discovery`
+* `GET /v1/intelligence/editorial/latest/preview`
+
+Current paid machine-payment Intelligence Artifact routes include:
+
 * `GET /v1/intelligence/guidance/latest`
 * `GET /v1/intelligence/guidance/{artifact_id}`
 * `GET /v1/intelligence/research/latest`
 * `GET /v1/intelligence/research/{artifact_id}`
-* `GET /v1/intelligence/editorial/latest/preview`
 
 The `/v1/intelligence/*` Public Intelligence Artifact Bridge routes are
 read-only artifact-serving routes. They consume only exported
 `PublicArtifactEnvelope.v1` files referenced by `manifest.json` under
 `ST_INTELLIGENCE_ARTIFACTS_DIR`; they do not call Agent graph nodes, Agent
-services, generation code, or raw Agent filesystem internals. PR 2 classifies
-these exact paths as public/free and non-metered to avoid partial pricing state.
-PR 3 will add the intelligence pricing and payment policy for guidance and
-research routes.
+services, generation code, or raw Agent filesystem internals. Discovery metadata
+and editorial preview remain public/free. Guidance and research artifacts are
+paid intelligence products served through the normal subscription, x402, and MPP
+economic boundary.
+
+Initial active STC rules for paid guidance and research artifacts are documented
+in `docs/operations/intelligence_pricing_rules.sql`:
+
+* `intelligence_guidance_latest` -> 0.25 STC
+* `intelligence_guidance_by_id` -> 0.25 STC
+* `intelligence_research_latest` -> 0.50 STC
+* `intelligence_research_by_id` -> 0.50 STC
+
+The artifact store caches validated manifest snapshots while the manifest and
+referenced artifact file signatures are unchanged, and reloads/revalidates on
+store changes. Serveability is publication-status specific:
+
+* discovery_metadata: `published` or `publish_ready`
+* editorial_preview: `published` or `publish_ready`
+* market_guidance: `published` or `product_grade`
+* market_research_report: `published` or `product_grade`
 
 Official Stock Trends portfolio returns history is sourced from
 `stp_returnslog`, the canonical portfolio performance history. Do not

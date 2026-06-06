@@ -1001,6 +1001,8 @@ def test_mpp_rail_metadata_still_present_for_paid_tools():
         "/v1/agent/screener/top",
         "/v1/leadership/summary/latest",
         "/v1/leadership/rotation/history",
+        "/v1/intelligence/guidance/latest",
+        "/v1/intelligence/research/latest",
     ):
         tool = next(t for t in result["tools"] if t["endpoint"] == endpoint)
         assert "mpp" in tool["supported_rails"]
@@ -1048,6 +1050,40 @@ def test_leadership_paid_tools_are_x402_mpp_enabled():
         assert tool["pricing_rule_id"] == rule_id
         assert tool["supported_rails"] == ["subscription", "x402", "mpp"]
         assert tool["pricing"]["supported_rails"] == ["subscription", "x402", "mpp"]
+
+
+def test_paid_intelligence_tools_are_x402_mpp_enabled(monkeypatch):
+    monkeypatch.setattr(
+        ai_router,
+        "_fetch_pricing_cost_map",
+        lambda: {
+            "intelligence_guidance_latest": Decimal("0.25"),
+            "intelligence_guidance_by_id": Decimal("0.25"),
+            "intelligence_research_latest": Decimal("0.50"),
+            "intelligence_research_by_id": Decimal("0.50"),
+        },
+    )
+
+    result = ai_tools()
+    tools = {tool["endpoint"]: tool for tool in result["tools"]}
+    expected = {
+        "/v1/intelligence/guidance/latest": ("intelligence_guidance_latest", 0.25),
+        "/v1/intelligence/guidance/{artifact_id}": ("intelligence_guidance_by_id", 0.25),
+        "/v1/intelligence/research/latest": ("intelligence_research_latest", 0.5),
+        "/v1/intelligence/research/{artifact_id}": ("intelligence_research_by_id", 0.5),
+    }
+
+    for endpoint, (rule_id, stc_cost) in expected.items():
+        tool = tools[endpoint]
+        assert tool["auth_required"] is True
+        assert tool["metered"] is True
+        assert tool["access_type"] == "paid"
+        assert tool["requires_payment"] is True
+        assert tool["pricing_rule_id"] == rule_id
+        assert tool["supported_rails"] == ["subscription", "x402", "mpp"]
+        assert tool["pricing"]["supported_rails"] == ["subscription", "x402", "mpp"]
+        assert tool["stc_cost"] == stc_cost
+        assert tool["pricing"]["stc_cost"] == stc_cost
 
 
 def test_breadth_sector_latest_tool_is_paid_x402_mpp_enabled(monkeypatch):
@@ -1105,3 +1141,22 @@ def test_breadth_sector_latest_not_in_public_or_free_allowlists():
     assert path.removeprefix("/v1") not in main_module.FREE_METERED_V1_PATHS
     assert f'"{path}"' not in source
     assert is_free_metered_path(path) is False
+
+
+def test_paid_intelligence_not_in_public_or_free_allowlists():
+    import pathlib
+    import main as main_module
+
+    source = pathlib.Path("middleware/api_key.py").read_text(encoding="utf-8")
+    paid_paths = {
+        "/v1/intelligence/guidance/latest",
+        "/v1/intelligence/research/latest",
+    }
+
+    for path in paid_paths:
+        assert path not in _MANIFEST_PUBLIC_PATHS
+        assert path not in NON_METERED_PATHS
+        assert path not in main_module.FREE_METERED_V1_PATHS
+        assert path.removeprefix("/v1") not in main_module.FREE_METERED_V1_PATHS
+        assert f'"{path}"' not in source
+        assert is_free_metered_path(path) is False

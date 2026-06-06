@@ -22,7 +22,7 @@
     {
       "artifact_id": "market_guidance:N:2026-04-11:guidance:aff9aaeee1660a31",
       "artifact_type": "market_guidance",
-      "content_hash": "sha256:d72268b0a7d15ff1966e0a179fb252fcb5da9c0d47decff7c42835e9ced12df0",
+      "content_hash": "sha256:0d6164f1d218b118200b3cdf65c86130268ae04d1a8e014ca3d24d0060fb542f",
       "exchange": "N",
       "path": "artifacts/market_guidance/market_guidance-N-2026-04-11-guidance-aff9aaeee1660a31-d72268b0a7d15ff1.json",
       "published_at": "2026-04-12T06:00:00+00:00",
@@ -31,7 +31,7 @@
     {
       "artifact_id": "market_research_report:N:2026-04-11:research:2a7d870d628448a0",
       "artifact_type": "market_research_report",
-      "content_hash": "sha256:842aa70655ed73f6803ffad268b690a11c7f7d3f4ce0178ca08a96e040bdf115",
+      "content_hash": "sha256:5c2665acc740a1cad6a6c2730eb5211e4f08b6c0a975d0503651c43183ba3870",
       "exchange": "N",
       "path": "artifacts/market_research_report/market_research_report-N-2026-04-11-research-2a7d870d628448a0-842aa70655ed73f6.json",
       "published_at": "2026-04-12T06:00:00+00:00",

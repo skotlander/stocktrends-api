@@ -359,6 +359,26 @@ class TestDiscoveryPreview:
         for field in ("bullish_count", "bearish_count", "avg_rsi", "net_breadth"):
             assert field in shape_str
 
+    @pytest.mark.parametrize(
+        ("path", "pricing_rule_id"),
+        [
+            ("/v1/intelligence/guidance/latest", "intelligence_guidance_latest"),
+            ("/v1/intelligence/guidance/artifact-1", "intelligence_guidance_by_id"),
+            ("/v1/intelligence/research/latest", "intelligence_research_latest"),
+            ("/v1/intelligence/research/artifact-1", "intelligence_research_by_id"),
+        ],
+    )
+    def test_intelligence_paid_previews_are_machine_payable(self, path, pricing_rule_id):
+        preview = get_endpoint_preview(path)
+
+        assert preview is not None
+        assert preview["endpoint"]["access_type"] == "paid"
+        assert preview["endpoint"]["requires_payment"] is True
+        assert preview["pricing"]["pricing_rule_id"] == pricing_rule_id
+        assert preview["pricing"]["cost_source"] == "/v1/pricing/catalog"
+        assert preview["supported_rails"] == ["subscription", "x402", "mpp"]
+        assert "PublicArtifactEnvelope.v1" in preview["output_summary"]
+
 
 # ---------------------------------------------------------------------------
 # Integration tests: x402 challenge with preview for KNOWN path
@@ -529,6 +549,31 @@ def test_stim_latest_no_payment_request_still_returns_402(monkeypatch):
         response = client.get("/v1/stim/latest")
 
     assert response.status_code == 402
+
+
+@pytest.mark.parametrize(
+    ("path", "pricing_rule_id"),
+    [
+        ("/v1/intelligence/guidance/latest", "intelligence_guidance_latest"),
+        ("/v1/intelligence/guidance/artifact-1", "intelligence_guidance_by_id"),
+        ("/v1/intelligence/research/latest", "intelligence_research_latest"),
+        ("/v1/intelligence/research/artifact-1", "intelligence_research_by_id"),
+    ],
+)
+def test_paid_intelligence_routes_return_402_with_preview(monkeypatch, path, pricing_rule_id):
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result(path))
+    with TestClient(main.app) as client:
+        response = client.get(path)
+
+    assert response.status_code == 402
+    assert response.headers["x-stocktrends-pricing-rule"] == pricing_rule_id
+    assert response.headers["x-stocktrends-payment-required"] == "true"
+    assert response.headers["x-stocktrends-accepted-payment-methods"] == "subscription,x402,mpp"
+    body = response.json()
+    assert body["accepted_payment_methods"] == ["subscription", "x402", "mpp"]
+    assert body["stocktrends_preview"]["pricing"]["pricing_rule_id"] == pricing_rule_id
+    assert float(body["stocktrends_preview"]["pricing"]["stc_cost"]) > 0
+    assert body["stocktrends_preview"]["supported_rails"] == ["subscription", "x402", "mpp"]
 
 
 def test_x402_402_response_is_readable_from_developer_portal(monkeypatch):

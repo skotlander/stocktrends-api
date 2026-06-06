@@ -5,6 +5,8 @@ import hashlib
 import json
 import os
 import re
+import threading
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Literal
@@ -39,6 +41,28 @@ ValidationStatus = Literal[
 ]
 
 _SHA256_HASH_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+
+_SERVEABLE_PUBLICATION_STATUSES: dict[PublicArtifactType, frozenset[str]] = {
+    "discovery_metadata": frozenset({"published", "publish_ready"}),
+    "editorial_preview": frozenset({"published", "publish_ready"}),
+    "market_guidance": frozenset({"published", "product_grade"}),
+    "market_research_report": frozenset({"published", "product_grade"}),
+}
+
+
+@dataclass(frozen=True)
+class _FileSignature:
+    mtime_ns: int
+    size: int
+
+
+@dataclass(frozen=True)
+class _ArtifactStoreSnapshot:
+    manifest_signature: _FileSignature
+    manifest_hash: str
+    entry_signatures: dict[str, _FileSignature]
+    artifacts: tuple["PublicArtifactEnvelope", ...]
+    expires_at: datetime | None
 
 
 class IntelligenceArtifactStoreUnavailable(RuntimeError):
@@ -233,6 +257,9 @@ def _artifact_sort_key(envelope: PublicArtifactEnvelope) -> tuple[str, datetime,
 
 
 class IntelligenceArtifactStore:
+    _cache_lock = threading.Lock()
+    _cache: dict[tuple[str, str, str | None], _ArtifactStoreSnapshot] = {}
+
     def __init__(
         self,
         root_dir: str | os.PathLike[str],
@@ -241,6 +268,7 @@ class IntelligenceArtifactStore:
         now: datetime | None = None,
     ):
         self.root_dir = Path(root_dir).resolve()
+        self._schema_path = Path(schema_path).resolve()
         self._schema = _EnvelopeContractSchema(schema_path)
         self._now = now
 
@@ -269,7 +297,29 @@ class IntelligenceArtifactStore:
         return self._load_valid_artifacts()
 
     def _load_valid_artifacts(self) -> list[PublicArtifactEnvelope]:
-        manifest = self._load_manifest()
+        cache_key = self._cache_key()
+        with self._cache_lock:
+            snapshot = self._cache.get(cache_key)
+            if snapshot is not None and self._snapshot_is_current(snapshot):
+                return list(snapshot.artifacts)
+
+            manifest, manifest_signature, manifest_hash = self._load_manifest_with_cache_metadata()
+            entry_signatures = self._manifest_entry_signatures(manifest)
+            artifacts = self._load_valid_manifest_artifacts(manifest)
+            snapshot = _ArtifactStoreSnapshot(
+                manifest_signature=manifest_signature,
+                manifest_hash=manifest_hash,
+                entry_signatures=entry_signatures,
+                artifacts=tuple(artifacts),
+                expires_at=self._earliest_expiration(artifacts),
+            )
+            self._cache[cache_key] = snapshot
+            return list(snapshot.artifacts)
+
+    def _load_valid_manifest_artifacts(
+        self,
+        manifest: ArtifactManifest,
+    ) -> list[PublicArtifactEnvelope]:
         artifacts: list[PublicArtifactEnvelope] = []
         for entry in manifest.artifacts:
             artifact = self._load_valid_manifest_entry(entry)
@@ -278,12 +328,19 @@ class IntelligenceArtifactStore:
         return artifacts
 
     def _load_manifest(self) -> ArtifactManifest:
+        manifest, _signature, _manifest_hash = self._load_manifest_with_cache_metadata()
+        return manifest
+
+    def _load_manifest_with_cache_metadata(self) -> tuple[ArtifactManifest, _FileSignature, str]:
         if not self.root_dir.is_dir():
             raise IntelligenceArtifactStoreUnavailable("Artifact store directory is unavailable.")
 
         manifest_path = self.root_dir / "manifest.json"
         try:
-            raw = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_signature = self._file_signature(manifest_path)
+            raw_bytes = manifest_path.read_bytes()
+            manifest_hash = hashlib.sha256(raw_bytes).hexdigest()
+            raw = json.loads(raw_bytes.decode("utf-8"))
             manifest = ArtifactManifest.model_validate(raw)
         except (OSError, json.JSONDecodeError, ValidationError, ValueError) as exc:
             raise IntelligenceArtifactStoreUnavailable("Artifact manifest is unavailable or invalid.") from exc
@@ -295,7 +352,60 @@ class IntelligenceArtifactStore:
             seen_ids.add(entry.artifact_id)
             self._resolve_manifest_path(entry.path)
 
-        return manifest
+        return manifest, manifest_signature, manifest_hash
+
+    def _cache_key(self) -> tuple[str, str, str | None]:
+        now_key = self._now.isoformat() if self._now is not None else None
+        return (str(self.root_dir), str(self._schema_path), now_key)
+
+    def _file_signature(self, path: Path) -> _FileSignature:
+        stat = path.stat()
+        return _FileSignature(mtime_ns=stat.st_mtime_ns, size=stat.st_size)
+
+    def _snapshot_is_current(self, snapshot: _ArtifactStoreSnapshot) -> bool:
+        manifest_path = self.root_dir / "manifest.json"
+        try:
+            if self._file_signature(manifest_path) != snapshot.manifest_signature:
+                return False
+        except OSError as exc:
+            raise IntelligenceArtifactStoreUnavailable("Artifact manifest is unavailable or invalid.") from exc
+
+        now = (self._now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+        if snapshot.expires_at is not None and snapshot.expires_at <= now:
+            return False
+
+        for path_text, signature in snapshot.entry_signatures.items():
+            try:
+                if self._file_signature(Path(path_text)) != signature:
+                    return False
+            except OSError:
+                return False
+
+        return True
+
+    def _manifest_entry_signatures(
+        self,
+        manifest: ArtifactManifest,
+    ) -> dict[str, _FileSignature]:
+        signatures: dict[str, _FileSignature] = {}
+        for entry in manifest.artifacts:
+            artifact_path = self._resolve_manifest_path(entry.path)
+            try:
+                signatures[str(artifact_path)] = self._file_signature(artifact_path)
+            except OSError:
+                continue
+        return signatures
+
+    def _earliest_expiration(
+        self,
+        artifacts: list[PublicArtifactEnvelope],
+    ) -> datetime | None:
+        expirations = [
+            _parse_datetime(artifact.expires_at, field_name="expires_at")
+            for artifact in artifacts
+            if artifact.expires_at
+        ]
+        return min(expirations) if expirations else None
 
     def _load_valid_manifest_entry(
         self,
@@ -327,6 +437,12 @@ class IntelligenceArtifactStore:
             raise InvalidIntelligenceArtifact("Artifact hash does not match manifest entry.")
         if compute_public_artifact_content_hash(raw) != envelope.content_hash:
             raise InvalidIntelligenceArtifact("Artifact hash does not match envelope content.")
+
+        allowed_statuses = _SERVEABLE_PUBLICATION_STATUSES[envelope.artifact_type]
+        if envelope.publication_status not in allowed_statuses:
+            raise InvalidIntelligenceArtifact(
+                "Artifact publication_status is not serveable for this artifact type."
+            )
 
         if envelope.expires_at:
             expires_at = _parse_datetime(envelope.expires_at, field_name="expires_at")

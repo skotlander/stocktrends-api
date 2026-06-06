@@ -98,10 +98,6 @@ _PUBLIC_STOCKTRENDS_STRATEGY_METADATA_DETAIL_PREFIX = (
 )
 _PUBLIC_STIM_SELECT_OUTCOME_SUMMARY_PATH = "/v1/selections/stim-select/outcomes/summary"
 _PUBLIC_INTELLIGENCE_DISCOVERY_PATH = "/v1/intelligence/discovery"
-_PUBLIC_INTELLIGENCE_GUIDANCE_LATEST_PATH = "/v1/intelligence/guidance/latest"
-_PUBLIC_INTELLIGENCE_GUIDANCE_DETAIL_PREFIX = "/v1/intelligence/guidance/"
-_PUBLIC_INTELLIGENCE_RESEARCH_LATEST_PATH = "/v1/intelligence/research/latest"
-_PUBLIC_INTELLIGENCE_RESEARCH_DETAIL_PREFIX = "/v1/intelligence/research/"
 _PUBLIC_INTELLIGENCE_EDITORIAL_PREVIEW_PATH = "/v1/intelligence/editorial/latest/preview"
 
 
@@ -188,27 +184,15 @@ def is_public_stim_select_outcome_summary_path(path: str) -> bool:
     return path == _PUBLIC_STIM_SELECT_OUTCOME_SUMMARY_PATH
 
 
-def _is_single_child_path(path: str, prefix: str) -> bool:
-    if not path.startswith(prefix):
-        return False
-    suffix = path[len(prefix):]
-    return bool(suffix) and "/" not in suffix
-
-
 def is_public_intelligence_path(path: str) -> bool:
     path = path.split("?", 1)[0]
     if path in {
         _PUBLIC_INTELLIGENCE_DISCOVERY_PATH,
-        _PUBLIC_INTELLIGENCE_GUIDANCE_LATEST_PATH,
-        _PUBLIC_INTELLIGENCE_RESEARCH_LATEST_PATH,
         _PUBLIC_INTELLIGENCE_EDITORIAL_PREVIEW_PATH,
     }:
         return True
 
-    return (
-        _is_single_child_path(path, _PUBLIC_INTELLIGENCE_GUIDANCE_DETAIL_PREFIX)
-        or _is_single_child_path(path, _PUBLIC_INTELLIGENCE_RESEARCH_DETAIL_PREFIX)
-    )
+    return False
 
 
 def is_public_stocktrends_path(path: str) -> bool:
@@ -464,6 +448,35 @@ def _default_policy_config() -> RuntimePaymentPolicyConfig:
                 method="GET",
                 allowed_rails=("subscription", "x402", "mpp"),
                 pricing_rule_id="selections_published_history_paid",
+            ),
+            # --- published intelligence artifacts ---
+            EndpointPaymentPolicy(
+                endpoint_id="intelligence_guidance_latest",
+                path_pattern="/v1/intelligence/guidance/latest",
+                method="GET",
+                allowed_rails=("subscription", "x402", "mpp"),
+                pricing_rule_id="intelligence_guidance_latest",
+            ),
+            EndpointPaymentPolicy(
+                endpoint_id="intelligence_guidance_by_id",
+                path_pattern="/v1/intelligence/guidance/{artifact_id}",
+                method="GET",
+                allowed_rails=("subscription", "x402", "mpp"),
+                pricing_rule_id="intelligence_guidance_by_id",
+            ),
+            EndpointPaymentPolicy(
+                endpoint_id="intelligence_research_latest",
+                path_pattern="/v1/intelligence/research/latest",
+                method="GET",
+                allowed_rails=("subscription", "x402", "mpp"),
+                pricing_rule_id="intelligence_research_latest",
+            ),
+            EndpointPaymentPolicy(
+                endpoint_id="intelligence_research_by_id",
+                path_pattern="/v1/intelligence/research/{artifact_id}",
+                method="GET",
+                allowed_rails=("subscription", "x402", "mpp"),
+                pricing_rule_id="intelligence_research_by_id",
             ),
         ),
         free_metered_paths=(

@@ -1,7 +1,7 @@
 {
   "artifact_id": "market_research_report:N:2026-04-11:research:2a7d870d628448a0",
   "artifact_type": "market_research_report",
-  "content_hash": "sha256:842aa70655ed73f6803ffad268b690a11c7f7d3f4ce0178ca08a96e040bdf115",
+  "content_hash": "sha256:5c2665acc740a1cad6a6c2730eb5211e4f08b6c0a975d0503651c43183ba3870",
   "exchange": "N",
   "generated_at": "2026-04-12T06:00:00+00:00",
   "lineage": {
@@ -62,7 +62,7 @@
       },
       "publication": {
         "access_tier": "public_schema",
-        "publication_status": "publish_ready",
+        "publication_status": "product_grade",
         "schema_version": "1",
         "summary": "Publication state is public-safe and transport-independent."
       },
@@ -123,7 +123,7 @@
     },
     "publication": {
       "access_tier": "public_schema",
-      "publication_status": "publish_ready",
+      "publication_status": "product_grade",
       "schema_version": "1",
       "summary": "Publication state is public-safe and transport-independent."
     },
@@ -242,7 +242,7 @@
     "supports_counterfactuals": false,
     "supports_probability_distributions": true
   },
-  "publication_status": "publish_ready",
+  "publication_status": "product_grade",
   "published_at": "2026-04-12T06:00:00+00:00",
   "revision": 1,
   "schema_version": "1",

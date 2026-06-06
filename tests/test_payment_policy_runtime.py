@@ -453,6 +453,86 @@ class PaymentPolicyRuntimeTests(unittest.TestCase):
                 self.assertEqual(decision.econ_payment_required, 1)
                 self.assertEqual(decision.econ_payment_method, "x402")
 
+    def test_intelligence_public_paths_do_not_receive_endpoint_policy(self):
+        default_config = policy_provider._default_policy_config()
+
+        with patch.object(policy_provider, "get_runtime_payment_policy_config", return_value=default_config):
+            for path in (
+                "/v1/intelligence/discovery",
+                "/v1/intelligence/editorial/latest/preview",
+            ):
+                effective = policy_provider.get_effective_endpoint_payment_policy(path, "GET")
+                accepted = policy_provider.get_accepted_payment_methods_for_path(
+                    path,
+                    "default_free",
+                    method="GET",
+                )
+
+                self.assertIsNone(effective)
+                self.assertTrue(policy_provider.is_public_intelligence_path(path))
+                self.assertEqual(accepted, "none")
+
+    def test_intelligence_paid_paths_use_exact_multi_rail_policy(self):
+        default_config = policy_provider._default_policy_config()
+
+        with patch.object(policy_provider, "get_runtime_payment_policy_config", return_value=default_config), patch.object(
+            classifier, "ENABLE_AGENT_PAY", True
+        ):
+            for path, rule_id in (
+                ("/v1/intelligence/guidance/latest", "intelligence_guidance_latest"),
+                ("/v1/intelligence/guidance/artifact-1", "intelligence_guidance_by_id"),
+                ("/v1/intelligence/research/latest", "intelligence_research_latest"),
+                ("/v1/intelligence/research/artifact-1", "intelligence_research_by_id"),
+            ):
+                effective = policy_provider.get_effective_endpoint_payment_policy(path, "GET")
+                x402_decision = classifier.classify_request(
+                    path=path,
+                    method="GET",
+                    has_paid_auth=False,
+                    payment_method_header=None,
+                    agent_identifier=None,
+                )
+                mpp_decision = classifier.classify_request(
+                    path=path,
+                    method="GET",
+                    has_paid_auth=False,
+                    payment_method_header="mpp",
+                    agent_identifier="agent-123",
+                )
+                subscription_decision = classifier.classify_request(
+                    path=path,
+                    method="GET",
+                    has_paid_auth=True,
+                    plan_code="pro",
+                )
+
+                self.assertFalse(policy_provider.is_public_intelligence_path(path))
+                self.assertIsNotNone(effective)
+                self.assertEqual(effective.pricing_rule_id, rule_id)
+                self.assertEqual(effective.allowed_rails, ("subscription", "x402", "mpp"))
+                self.assertEqual(effective.machine_payment_rails, ("x402", "mpp"))
+                self.assertTrue(x402_decision.access_granted)
+                self.assertEqual(x402_decision.econ_pricing_rule_id, rule_id)
+                self.assertEqual(x402_decision.econ_payment_required, 1)
+                self.assertEqual(x402_decision.econ_payment_method, "x402")
+                self.assertTrue(mpp_decision.access_granted)
+                self.assertEqual(mpp_decision.econ_pricing_rule_id, rule_id)
+                self.assertEqual(mpp_decision.econ_payment_method, "mpp")
+                self.assertTrue(subscription_decision.access_granted)
+                self.assertEqual(subscription_decision.econ_pricing_rule_id, rule_id)
+                self.assertEqual(subscription_decision.econ_payment_method, "subscription")
+
+    def test_intelligence_paid_child_paths_are_not_matched_by_prefix(self):
+        default_config = policy_provider._default_policy_config()
+
+        with patch.object(policy_provider, "get_runtime_payment_policy_config", return_value=default_config):
+            for path in (
+                "/v1/intelligence/guidance/artifact-1/extra",
+                "/v1/intelligence/research/artifact-1/extra",
+            ):
+                self.assertIsNone(policy_provider.get_effective_endpoint_payment_policy(path, "GET"))
+                self.assertFalse(policy_provider.is_public_intelligence_path(path))
+
 
 if __name__ == "__main__":
     unittest.main()
