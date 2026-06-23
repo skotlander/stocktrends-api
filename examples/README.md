@@ -161,6 +161,10 @@ Architecture notes:
 - `POST /v1/decision/evaluate-symbol` — per-symbol composite scoring
 - `GET /v1/stim/latest?symbol_exchange={SYM-EX}` — ST-IM distributions
 
+Both endpoints also accept `symbol` + `exchange` as separate parameters
+(`?symbol=NVDA&exchange=Q` / `{"symbol": "NVDA", "exchange": "Q"}`).
+The `symbol_exchange` combined form is preferred for agent use.
+
 **ST-IM field reference:**
 - `x13wk` — expected 13-week forward return (mean of historical distribution)
 - `x13wksd` — standard deviation of 13-week return distribution

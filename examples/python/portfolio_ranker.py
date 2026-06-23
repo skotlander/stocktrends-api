@@ -158,8 +158,11 @@ def evaluate_symbol(symbol: str, exchange: str) -> dict[str, Any]:
     Symbol-level decision evaluation: combines the symbol's trend context
     with the live market regime to produce bias, confidence, and decision_score.
     decision_score ranges from 0 (weak/divergent) to 1 (strong/aligned).
+
+    The endpoint accepts symbol_exchange (combined) or symbol + exchange (separate).
+    Both forms are equivalent; symbol_exchange is preferred for agent use.
     """
-    return _post("/v1/decision/evaluate-symbol", {"symbol": symbol, "exchange": exchange})
+    return _post("/v1/decision/evaluate-symbol", {"symbol_exchange": f"{symbol}-{exchange}"})
 
 
 def fetch_stim(symbol: str, exchange: str) -> dict[str, Any] | None:
@@ -167,9 +170,12 @@ def fetch_stim(symbol: str, exchange: str) -> dict[str, Any] | None:
     ST-IM (Stock Trends Inference Model) forward return distributions.
     Returns expected returns and standard deviations for 4wk, 13wk, and 40wk horizons.
     Returns None if no ST-IM data is available for this instrument.
+
+    The endpoint accepts symbol_exchange (combined) or symbol + exchange (separate).
+    Both forms are equivalent; symbol_exchange is preferred for agent use.
     """
     try:
-        return _get("/v1/stim/latest", {"symbol": symbol, "exchange": exchange})
+        return _get("/v1/stim/latest", {"symbol_exchange": f"{symbol}-{exchange}"})
     except httpx.HTTPStatusError as exc:
         if exc.response.status_code == 404:
             return None
