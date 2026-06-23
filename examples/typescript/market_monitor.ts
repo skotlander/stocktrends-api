@@ -177,27 +177,37 @@ function classifySectors(data: SectorBreadthEntry[]): BreadthClassification {
   return { improving, deteriorating, neutral };
 }
 
-interface SectorRSI {
+// Represents one sector's share of the leadership constituent list returned by
+// /v1/leadership/summary/latest — NOT a sector-wide RSI aggregate.
+interface SectorLeadershipGroup {
   sector: string;
-  avgRsi: number;
+  count: number;
+  avgConstituentRsi: number;
+  topSymbols: string[];
 }
 
-function rankSectorsByRSI(leaders: LeadershipEntry[]): SectorRSI[] {
-  const sectorRsi = new Map<string, number[]>();
+function groupLeadershipBySector(leaders: LeadershipEntry[]): SectorLeadershipGroup[] {
+  const buckets = new Map<string, { rsis: number[]; symbols: string[] }>();
 
   for (const leader of leaders) {
     const sector = leader.sector_name ?? "Unknown";
-    const list = sectorRsi.get(sector) ?? [];
-    list.push(leader.rsi);
-    sectorRsi.set(sector, list);
+    const bucket = buckets.get(sector) ?? { rsis: [], symbols: [] };
+    bucket.rsis.push(leader.rsi);
+    // overall_leaders is returned sorted by RSI desc, so first symbols per
+    // sector are the strongest constituents in that sector.
+    const symEx = leader.exchange ? `${leader.symbol}-${leader.exchange}` : leader.symbol;
+    bucket.symbols.push(symEx);
+    buckets.set(sector, bucket);
   }
 
-  return Array.from(sectorRsi.entries())
-    .map(([sector, rsis]) => ({
+  return Array.from(buckets.entries())
+    .map(([sector, bucket]) => ({
       sector,
-      avgRsi: rsis.reduce((a, b) => a + b, 0) / rsis.length,
+      count: bucket.rsis.length,
+      avgConstituentRsi: bucket.rsis.reduce((a, b) => a + b, 0) / bucket.rsis.length,
+      topSymbols: bucket.symbols.slice(0, 3),
     }))
-    .sort((a, b) => b.avgRsi - a.avgRsi);
+    .sort((a, b) => b.count - a.count || b.avgConstituentRsi - a.avgConstituentRsi);
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +220,7 @@ function printSummary(
   leadership: LeadershipResponse,
 ): void {
   const breadth = classifySectors(breadthData.data);
-  const sectorRanks = rankSectorsByRSI(leadership.overall_leaders);
+  const sectorGroups = groupLeadershipBySector(leadership.overall_leaders);
 
   console.log();
   console.log("Stock Trends Market Intelligence Summary");
@@ -239,17 +249,18 @@ function printSummary(
 
   // Leadership
   console.log(`\nSector Leadership  (week: ${leadership.weekdate})`);
-  console.log(`  (RSI > 100 = outperforming benchmark; RSI < 100 = underperforming)`);
-  if (sectorRanks.length > 0) {
-    console.log("  Strongest sectors by avg RSI:");
-    for (const { sector, avgRsi } of sectorRanks.slice(0, 4)) {
-      console.log(`    ${sector.padEnd(32)}  RSI ${avgRsi.toFixed(1)}`);
-    }
-    if (sectorRanks.length > 4) {
-      console.log("  Weakest sectors by avg RSI:");
-      for (const { sector, avgRsi } of sectorRanks.slice(-4)) {
-        console.log(`    ${sector.padEnd(32)}  RSI ${avgRsi.toFixed(1)}`);
-      }
+  console.log(`  Source: /v1/leadership/summary/latest — leadership constituents only`);
+  console.log(`  (Filtered: RSI >= 110 and mt_cnt >= 4; not sector-wide RSI averages)`);
+  console.log(`  (RSI = relative strength vs benchmark; 100 = baseline, >100 = outperforming)`);
+  if (sectorGroups.length > 0) {
+    console.log("  Leadership constituents by sector:");
+    for (const { sector, count, avgConstituentRsi, topSymbols } of sectorGroups.slice(0, 6)) {
+      const examples = topSymbols.length > 0 ? topSymbols.join(", ") : "—";
+      console.log(
+        `    ${sector.padEnd(32)}  ${String(count).padStart(3)} leader(s)` +
+        `  avg constituent RSI ${avgConstituentRsi.toFixed(1).padStart(7)}` +
+        `  e.g. ${examples}`
+      );
     }
   }
 

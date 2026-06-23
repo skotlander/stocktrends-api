@@ -98,8 +98,10 @@ class BreadthClassification:
 
 @dataclass
 class SectorLeadershipSummary:
-    strongest: list[tuple[str, float]]   # (sector_name, avg_rsi)
-    weakest: list[tuple[str, float]]
+    # Each entry: (sector_name, constituent_count, avg_constituent_rsi, top_symbols)
+    # These are leadership constituents (instruments meeting RSI ≥ 110, mt_cnt ≥ 4),
+    # NOT sector-wide RSI averages.
+    by_sector: list[tuple[str, int, float, list[str]]]
     weekdate: str
 
 
@@ -148,35 +150,49 @@ def fetch_sector_breadth() -> tuple[str, BreadthClassification]:
 
 def fetch_sector_leadership() -> SectorLeadershipSummary:
     """
-    Sector leadership snapshot — which sectors contain the most instruments
-    with RSI > 100 (outperforming vs. benchmark) and established bullish trends.
+    Leadership constituent snapshot from /v1/leadership/summary/latest.
 
-    RSI interpretation: Stock Trends RSI is a relative-strength measure vs. benchmark.
+    overall_leaders is a filtered list of individual instruments that meet
+    the leadership screen (default: RSI >= 110, mt_cnt >= 4).  It is NOT
+    a sector-wide RSI aggregate — it is the set of leadership constituents
+    currently on the screen.  We group them by sector to show where
+    leadership concentration sits, not to compute sector-wide RSI.
+
+    RSI interpretation: Stock Trends RSI is relative strength vs. benchmark.
     RSI > 100 = outperformance. RSI < 100 = underperformance.
-    This is NOT the oscillator-style RSI from Wilder.
+    This is NOT the Wilder oscillator.
     """
     data = _get("/v1/leadership/summary/latest")
     weekdate: str = data.get("weekdate", "")
     overall: list[dict[str, Any]] = data.get("overall_leaders", [])
 
-    # Aggregate average RSI per sector from leadership constituents
-    sector_rsi: dict[str, list[float]] = {}
+    # Group leadership constituents by sector.
+    # The endpoint returns overall_leaders sorted by RSI desc, so the first
+    # symbols per sector are the strongest in that sector's constituent list.
+    sector_buckets: dict[str, dict[str, Any]] = {}
     for leader in overall:
-        sector = leader.get("sector_name", "Unknown")
+        sector = leader.get("sector_name") or "Unknown"
         rsi = float(leader.get("rsi", 0))
-        sector_rsi.setdefault(sector, []).append(rsi)
+        symbol = leader.get("symbol", "")
+        exchange = leader.get("exchange", "")
+        sym_ex = f"{symbol}-{exchange}" if exchange else symbol
 
-    ranked = sorted(
-        ((sector, sum(rsis) / len(rsis)) for sector, rsis in sector_rsi.items()),
-        key=lambda x: x[1],
-        reverse=True,
-    )
+        if sector not in sector_buckets:
+            sector_buckets[sector] = {"rsis": [], "symbols": []}
+        sector_buckets[sector]["rsis"].append(rsi)
+        sector_buckets[sector]["symbols"].append(sym_ex)
 
-    return SectorLeadershipSummary(
-        strongest=ranked[:4],
-        weakest=ranked[-4:] if len(ranked) > 4 else [],
-        weekdate=weekdate,
-    )
+    # Sort by constituent count desc, break ties by avg constituent RSI desc
+    ranked: list[tuple[str, int, float, list[str]]] = []
+    for sector, bucket in sector_buckets.items():
+        count = len(bucket["rsis"])
+        avg_rsi = sum(bucket["rsis"]) / count
+        top_syms = bucket["symbols"][:3]
+        ranked.append((sector, count, avg_rsi, top_syms))
+
+    ranked.sort(key=lambda x: (x[1], x[2]), reverse=True)
+
+    return SectorLeadershipSummary(by_sector=ranked, weekdate=weekdate)
 
 
 # ---------------------------------------------------------------------------
@@ -214,15 +230,18 @@ def print_market_intelligence_summary(
 
     # --- Leadership ---
     print(f"\nSector Leadership  (week: {leadership.weekdate})")
-    print("  (RSI > 100 = outperforming benchmark; RSI < 100 = underperforming)")
-    if leadership.strongest:
-        print("  Strongest sectors by avg RSI:")
-        for sector, avg_rsi in leadership.strongest:
-            print(f"    {sector:<32}  RSI {avg_rsi:>6.1f}")
-    if leadership.weakest:
-        print("  Weakest sectors by avg RSI:")
-        for sector, avg_rsi in leadership.weakest:
-            print(f"    {sector:<32}  RSI {avg_rsi:>6.1f}")
+    print("  Source: /v1/leadership/summary/latest — leadership constituents only")
+    print("  (Filtered: RSI >= 110 and mt_cnt >= 4; not sector-wide RSI averages)")
+    print("  (RSI = relative strength vs benchmark; 100 = baseline, >100 = outperforming)")
+    if leadership.by_sector:
+        print("  Leadership constituents by sector:")
+        for sector, count, avg_rsi, top_syms in leadership.by_sector[:6]:
+            examples = ", ".join(top_syms) if top_syms else "—"
+            print(
+                f"    {sector:<32}  {count:>3} leader(s)"
+                f"  avg constituent RSI {avg_rsi:>7.1f}"
+                f"  e.g. {examples}"
+            )
 
     print("\n" + "=" * 56)
     print("[Stock Trends market intelligence summary complete]")

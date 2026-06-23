@@ -252,8 +252,37 @@ def print_research_workflow_summary(
 # Main
 # ---------------------------------------------------------------------------
 
+_ARTIFACTS_UNAVAILABLE_MSG = """\
+
+Published intelligence artifacts are not currently available.
+This endpoint will activate when the Stock Trends Intelligence Agent
+publication pipeline is live.
+
+The workflow is included to demonstrate the intended autonomous
+discovery → guidance → research consumption pattern.
+"""
+
+
+def _is_artifact_store_unavailable(exc: httpx.HTTPStatusError) -> bool:
+    if exc.response.status_code != 503:
+        return False
+    try:
+        body = exc.response.json()
+    except Exception:
+        return False
+    detail = body.get("detail", {})
+    error_code = detail.get("error", "") if isinstance(detail, dict) else ""
+    return error_code == "intelligence_artifact_store_unavailable"
+
+
 def run() -> None:
-    discovery = step_discover()
+    try:
+        discovery = step_discover()
+    except httpx.HTTPStatusError as exc:
+        if _is_artifact_store_unavailable(exc):
+            print(_ARTIFACTS_UNAVAILABLE_MSG)
+            return
+        raise
 
     guidance: dict[str, Any] | None = None
     research: dict[str, Any] | None = None

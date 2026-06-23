@@ -284,8 +284,19 @@ def print_rankings(rankings: list[SymbolRanking]) -> None:
     print("=" * 60)
     print(f"  Market Regime:  {regime} (score {regime_score:+.3f})")
     print(f"  Week:           {weekdate}")
-    print(f"  Ranked by:      decision_score (regime alignment + trend strength + RSI)")
+    print(f"  Ranked by:      decision_score (composite trend/regime context score)")
     print()
+
+    if regime in {"MIXED", "NEUTRAL"} or rankings[0].confidence == "low":
+        print(
+            "  Note: In a mixed or low-confidence regime, directional regime alignment\n"
+            "  is weak or neutralized. decision_score reflects composite signal strength\n"
+            "  — trend maturity, RSI level, and internal trend consistency — not a\n"
+            "  bullish/bearish preference. Bullish and bearish symbols may both rank\n"
+            "  highly if their trend context is mature and internally consistent.\n"
+            "  Rankings here represent signal context, not buy/sell recommendations."
+        )
+        print()
 
     for r in rankings:
         trend_info = f"{r.trend}  cnt={r.trend_cnt}  mt={r.mt_cnt}  RSI={r.rsi}"
