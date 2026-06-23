@@ -106,22 +106,23 @@ Sector Breadth  (week: 2026-01-24)
   Neutral:                      Consumer Discretionary, Industrials
 
 Sector Leadership  (week: 2026-01-24)
-  (RSI > 100 = outperforming benchmark; RSI < 100 = underperforming)
-  Strongest sectors by avg RSI:
-    Technology                        RSI  121.4
-    Healthcare                        RSI  114.7
-    Financials                        RSI  109.2
-    Communication Services            RSI  107.8
-  Weakest sectors by avg RSI:
-    Energy                            RSI   88.1
-    Utilities                         RSI   91.4
+  Source: /v1/leadership/summary/latest — leadership constituents only
+  (Filtered: RSI >= 110 and mt_cnt >= 4; not sector-wide RSI averages)
+  (RSI = relative strength vs benchmark; 100 = baseline, >100 = outperforming)
+  Leadership constituents by sector:
+    Technology                          18 leader(s)  avg constituent RSI   124.3  e.g. NVDA-Q, MSFT-Q, AAPL-Q
+    Healthcare                           9 leader(s)  avg constituent RSI   118.7  e.g. LLY-N, UNH-N, ABBV-N
+    Financials                           7 leader(s)  avg constituent RSI   115.2  e.g. JPM-N, BAC-N, GS-N
 ```
 
 Architecture notes:
 - `GET /v1/market/regime/latest` — trend distribution across all common stocks
 - `GET /v1/breadth/sector/latest` — per-sector bullish/bearish counts and percentages
-- `GET /v1/leadership/summary/latest` — instruments with RSI ≥ 110 and mt_cnt ≥ 4,
-  grouped by sector
+- `GET /v1/leadership/summary/latest` — instruments with RSI ≥ 110 and mt_cnt ≥ 4.
+  `overall_leaders` is a filtered list of individual instruments, not sector-wide
+  RSI averages. The example groups them by sector to show where leadership
+  concentration sits; "avg constituent RSI" refers to the average RSI of those
+  leadership constituents, not all instruments in the sector.
 
 ---
 
@@ -138,13 +139,13 @@ Workflow:
    and 40-week horizons
 3. Rank symbols by `decision_score` descending, with ST-IM 13wk as tiebreaker
 
-Expected output:
+Expected output (bullish regime):
 ```
 Stock Trends Portfolio Ranking
 ============================================================
   Market Regime:  BULLISH (score +0.381)
   Week:           2026-01-24
-  Ranked by:      decision_score (regime alignment + trend strength + RSI)
+  Ranked by:      decision_score (composite trend/regime context score)
 
 #1  NVDA-Q        score=0.871  BULLISH / aligned
       Trend:  ^+  cnt=12  mt=28  RSI=134
@@ -156,6 +157,13 @@ Stock Trends Portfolio Ranking
       Trend:  ^+  cnt=6  mt=14  RSI=118
       ST-IM 13wk: +6.1% ± 3.9%  CI [+4.2% → +8.0%]  |  4wk: +2.1%  40wk: +13.4%
 ```
+
+In a **mixed or low-confidence regime**, the example prints an additional context
+note. decision_score in a mixed regime reflects composite signal strength — trend
+maturity, RSI level, and internal trend consistency — not a bullish/bearish
+preference. A bearish symbol with a mature, internally consistent trend can rank
+above a weak bullish one. Rankings represent signal context, not buy or sell
+recommendations.
 
 Architecture notes:
 - `POST /v1/decision/evaluate-symbol` — per-symbol composite scoring
@@ -195,7 +203,7 @@ Workflow:
 4. Summarize artifact metadata: artifact_id, weekdate, published_at, provider,
    payload structure, content_hash
 
-Expected output:
+Expected output (when artifacts are published):
 ```
 Stock Trends Research Workflow
 ========================================================
@@ -217,6 +225,20 @@ Stock Trends Research Workflow
   Payload keys:    title, regime_assessment, sector_outlook, guidance
   Content hash:    sha256:a3f9c2d1b8e4...
 ```
+
+**Pre-launch state:** Until the Stock Trends Intelligence Agent publication pipeline
+is live, `/v1/intelligence/discovery` returns HTTP 503 with
+`intelligence_artifact_store_unavailable`. The example catches this and prints:
+```
+Published intelligence artifacts are not currently available.
+This endpoint will activate when the Stock Trends Intelligence Agent
+publication pipeline is live.
+
+The workflow is included to demonstrate the intended autonomous
+discovery → guidance → research consumption pattern.
+```
+This is the expected pre-launch behavior — it is not an error. The example exits
+with status code 0 in this state.
 
 Architecture notes:
 - `GET /v1/intelligence/discovery` — free; discovery_metadata envelope
