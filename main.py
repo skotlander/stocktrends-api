@@ -118,7 +118,7 @@ def _root_discovery_links() -> dict[str, str]:
         "workflows": _absolute_url("/v1/workflows"),
         "pricing_catalog": _absolute_url("/v1/pricing/catalog"),
         "docs": _absolute_url(DISCOVERY_DOCS),
-        "openapi": _absolute_url(DISCOVERY_OPENAPI),
+        "openapi": _absolute_url("/openapi.json"),
     }
 
 
@@ -318,7 +318,10 @@ app.add_exception_handler(StarletteHTTPException, _discovery_http_exception_hand
 @app.get("/", include_in_schema=False)
 def root():
     return {
-        "message": "Start with the machine-readable tools manifest for agent discovery.",
+        "message": (
+            "Use the canonical OpenAPI contract for machine-readable API discovery; "
+            "use start_here for Stock Trends task and workflow discovery."
+        ),
         "description": APP_DESCRIPTION,
         "provenance_reference": provenance_reference(),
         "planning_helpers": [
