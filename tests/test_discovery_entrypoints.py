@@ -125,6 +125,73 @@ def test_cost_estimate_workflow_id_openapi_parameter_is_valid(client):
     ]
 
 
+def test_openapi_exposes_service_level_agent_guidance(client):
+    main.v1.openapi_schema = None
+    response = client.get("/v1/openapi.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+    assert schema["openapi"].startswith("3.")
+
+    info = schema["info"]
+    assert info["description"] == main.APP_DESCRIPTION
+    assert info["description"].strip()
+    assert info["contact"]["email"] == "api@stocktrends.com"
+    assert schema["externalDocs"]["url"] == "https://developer.stocktrends.com/"
+
+    guidance = info["x-guidance"]
+    assert isinstance(guidance, str)
+    assert 75 <= len(guidance.split()) <= 250
+    assert "ST-IM (Stock Trends Inference Model)" in guidance
+
+    guidance_lower = guidance.lower()
+    for semantic_anchor in (
+        "processed",
+        "raw price data",
+        "probabilistic inference",
+        "forward-return distributions",
+        "provider-agnostic inference contract",
+        "current baseline inference provider",
+        "conditional historical tendencies",
+        "uncertainty",
+        "symbol_exchange",
+        "/v1/ai/tools",
+        "/v1/workflows",
+        "/v1/meta/inference",
+        "/v1/meta/stim",
+        "/v1/pricing/catalog",
+        "/v1/cost-estimate",
+        "accepted payment methods",
+    ):
+        assert semantic_anchor in guidance_lower
+
+
+def test_openapi_preserves_stim_latest_operation_documentation(client):
+    response = client.get("/v1/openapi.json")
+
+    assert response.status_code == 200
+    stim_latest = response.json()["paths"]["/stim/latest"]["get"]
+    summary = stim_latest["summary"]
+    assert summary.strip()
+    assert "ST-IM" in summary
+    assert "return distributions" in summary.lower()
+
+    description = stim_latest["description"]
+    assert description.strip()
+    for semantic_anchor in (
+        "Stock Trends Inference Model (ST-IM)",
+        "4-week",
+        "13-week",
+        "40-week",
+        "uncertainty",
+        "staleness detection",
+        "/v1/meta/inference",
+        "/v1/meta/stim",
+        "/v1/pricing/catalog",
+    ):
+        assert semantic_anchor in description
+
+
 def test_openapi_exposes_inference_cognition_extensions(client):
     response = client.get("/v1/openapi.json")
 
@@ -142,10 +209,52 @@ def test_openapi_exposes_inference_cognition_extensions(client):
     assert stim_latest["x-stocktrends-inference-contract"] == "/v1/meta/inference"
 
 
-def test_v1_docs_loads(client):
-    response = client.get("/v1/docs")
+def test_root_openapi_aliases_canonical_v1_contract(client):
+    main.v1.openapi_schema = None
+
+    root_response = client.get("/openapi.json")
+    v1_response = client.get("/v1/openapi.json")
+
+    assert root_response.status_code == 200
+    assert v1_response.status_code == 200
+
+    root_schema = root_response.json()
+    v1_schema = v1_response.json()
+    assert root_schema == v1_schema
+
+    info = root_schema["info"]
+    assert info["description"] == main.APP_DESCRIPTION
+    assert info["x-guidance"].strip()
+    assert info["contact"]["email"] == "api@stocktrends.com"
+    assert root_schema["externalDocs"]["url"] == "https://developer.stocktrends.com/"
+    assert root_schema["servers"][0]["url"] == "/v1"
+
+    paths = root_schema["paths"]
+    for expected_path in (
+        "/stim/latest",
+        "/ai/tools",
+        "/workflows",
+        "/decision/evaluate-symbol",
+        "/portfolio/construct",
+    ):
+        assert expected_path in paths
+
+    assert "/health" not in paths
+    assert len(paths) > 1
+
+
+@pytest.mark.parametrize(
+    ("docs_path", "openapi_path"),
+    [
+        ("/docs", "/openapi.json"),
+        ("/v1/docs", "/v1/openapi.json"),
+    ],
+)
+def test_docs_load_and_reference_expected_canonical_schema(client, docs_path, openapi_path):
+    response = client.get(docs_path)
 
     assert response.status_code == 200
+    assert f"url: '{openapi_path}'" in response.text
 
 
 def test_openapi_and_ai_tools_agree_on_target_get_parameter_locations(client):
