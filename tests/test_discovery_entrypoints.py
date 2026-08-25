@@ -38,12 +38,15 @@ def client(monkeypatch):
         yield test_client
 
 
-def test_root_guides_to_ai_tools_first(client):
+def test_root_guides_to_canonical_openapi_and_task_discovery(client):
     response = client.get("/")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["message"] == "Start with the machine-readable tools manifest for agent discovery."
+    assert body["message"] == (
+        "Use the canonical OpenAPI contract for machine-readable API discovery; "
+        "use start_here for Stock Trends task and workflow discovery."
+    )
     assert "Autonomous portfolio intelligence API for AI agents" in body["description"]
     assert body["developer_portal"] == "https://developer.stocktrends.com/"
     assert body["start_here"] == "https://api.stocktrends.com/v1/ai/tools"
@@ -52,7 +55,7 @@ def test_root_guides_to_ai_tools_first(client):
     assert body["workflows"] == "https://api.stocktrends.com/v1/workflows"
     assert body["pricing_catalog"] == "https://api.stocktrends.com/v1/pricing/catalog"
     assert body["docs"] == "https://api.stocktrends.com/v1/docs"
-    assert body["openapi"] == "https://api.stocktrends.com/v1/openapi.json"
+    assert body["openapi"] == "https://api.stocktrends.com/openapi.json"
     assert "https://api.stocktrends.com/v1/workflows" in body["planning_helpers"]
 
 
