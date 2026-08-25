@@ -10,7 +10,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from discovery.inference_semantics import openapi_inference_extension
 from discovery.provenance import AI_CONTEXT_PROVENANCE_TEXT, data_provenance, provenance_reference
-from discovery.service_meta import SERVICE_POSITIONING
+from discovery.service_meta import (
+    SERVICE_CONTACT_EMAIL,
+    SERVICE_DEVELOPER_DOCS_URL,
+    SERVICE_OPENAPI_GUIDANCE,
+    SERVICE_POSITIONING,
+)
 from middleware.request_id import RequestIdMiddleware
 from middleware.api_key import ApiKeyMiddleware
 from middleware.request_logger import RequestLoggerMiddleware
@@ -55,7 +60,6 @@ DISCOVERY_SECONDARY = "/v1/ai/context"
 DISCOVERY_DOCS = "/v1/docs"
 DISCOVERY_OPENAPI = "/v1/openapi.json"
 PUBLIC_API_BASE_URL = "https://api.stocktrends.com"
-DEVELOPER_PORTAL_URL = "https://developer.stocktrends.com/"
 X402_BROWSER_ALLOWED_ORIGINS = ["https://developer.stocktrends.com"]
 X402_BROWSER_ALLOWED_HEADERS = [
     "Authorization",
@@ -106,7 +110,7 @@ def _absolute_url(path: str) -> str:
 
 def _root_discovery_links() -> dict[str, str]:
     return {
-        "developer_portal": DEVELOPER_PORTAL_URL,
+        "developer_portal": SERVICE_DEVELOPER_DOCS_URL,
         "start_here": _absolute_url(DISCOVERY_START_HERE),
         # Backward-compatible alias for clients that consumed the original root shape.
         "secondary": _absolute_url(DISCOVERY_SECONDARY),
@@ -166,6 +170,9 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
         routes=v1_app.routes,
     )
 
+    openapi_schema["info"]["x-guidance"] = SERVICE_OPENAPI_GUIDANCE
+    openapi_schema["info"]["contact"] = {"email": SERVICE_CONTACT_EMAIL}
+    openapi_schema["externalDocs"] = {"url": SERVICE_DEVELOPER_DOCS_URL}
     openapi_schema["servers"] = [
         {"url": "/v1", "description": "Stock Trends API v1"},
     ]
@@ -363,7 +370,7 @@ def ai_plugin():
                 "is_user_authenticated": True,
             },
             "logo_url": "https://stocktrends.com/images/ST-logo2.gif",
-            "contact_email": "api@stocktrends.com",
+            "contact_email": SERVICE_CONTACT_EMAIL,
             "legal_info_url": "https://stocktrends.com/stock-trends-data-license",
         }
     )
@@ -421,6 +428,12 @@ v1.include_router(observability_router)
 
 v1.openapi = lambda: apply_api_key_security_to_openapi(v1)
 
+
+def canonical_openapi() -> dict:
+    return v1.openapi()
+
+
+app.openapi = canonical_openapi
 app.mount("/v1", v1)
 
 
