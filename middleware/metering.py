@@ -435,18 +435,37 @@ def x402_settled_amount_usd(
 
     The native amount is the atomic token value the artifact authorized and the
     facilitator settled, so it converts with the same token-decimal semantics
-    used for `payment_amount_usd` elsewhere in this module.  Where enforcement
-    surfaced no native amount, successful settlement still guarantees the quoted
-    requirement was satisfied, so the quoted unit price is the correct fallback
-    — never a larger list price and never the STC cost.
+    used for `payment_amount_usd` elsewhere in this module.
+
+    Three cases, stated explicitly rather than left to a coercion helper:
+
+      None                -> the quoted unit price
+      Decimal             -> converted from atomic units
+      anything else       -> the quoted unit price
+
+    Enforcement types this value `Decimal | None`, so the third case is a
+    contract violation rather than an expected input.  It falls back to the
+    quoted price for the same reason the `None` case does: settlement succeeded,
+    so the quoted requirement was satisfied, and the quote is the best-supported
+    figure available.  Routing it through `safe_decimal` instead would coerce an
+    unreadable value to its "0" default and record a settled payment as having
+    collected nothing — understating revenue on a request that did move money.
+    Never a larger list price, and never the STC cost.
     """
     if payment_amount_native is None:
         return unit_price_usd
 
-    try:
-        return safe_decimal(payment_amount_native) / Decimal(
-            10 ** X402_DEFAULT_TOKEN_DECIMALS
+    if not isinstance(payment_amount_native, Decimal):
+        logger.warning(
+            "x402 settled amount was %s, expected Decimal or None; falling back "
+            "to the quoted unit price %s",
+            type(payment_amount_native).__name__,
+            unit_price_usd,
         )
+        return unit_price_usd
+
+    try:
+        return payment_amount_native / Decimal(10 ** X402_DEFAULT_TOKEN_DECIMALS)
     except (InvalidOperation, TypeError, ValueError, ZeroDivisionError):
         return unit_price_usd
 

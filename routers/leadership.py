@@ -7,6 +7,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
 
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
 
@@ -23,6 +24,23 @@ def _norm_exchange(ex: str) -> str:
             detail=f"Invalid exchange '{ex}'. Must be one of {sorted(VALID_EXCHANGES)}",
         )
     return ex
+
+
+def _validate_exchange_values(request: Request, values: dict) -> None:
+    """
+    Pre-payment adapter over `_norm_exchange`.
+
+    The optional exchange filter is a fixed vocabulary decided by the query
+    string alone, so an exchange code that does not exist is refused before any
+    payment rail is touched.  Whether the leadership rankings for the requested week exist is a data question and stays
+    behind the payment gate.
+
+    Calls the same `_norm_exchange` the endpoint calls, so the 400 is unchanged.
+    """
+    exchange = values.get("exchange")
+    if exchange:
+        _norm_exchange(exchange)
+
 
 
 def _latest_weekdate(engine, exchange: str | None, type_: str) -> Any | None:
@@ -155,6 +173,7 @@ def leadership_definitions():
 
 
 @router.get("/summary/latest")
+@pre_payment_semantic_validator(_validate_exchange_values)
 def leadership_summary_latest(
     request: Request,
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
@@ -324,6 +343,7 @@ def leadership_summary_latest(
 
 
 @router.get("/rotation/history")
+@pre_payment_semantic_validator(_validate_exchange_values)
 def leadership_rotation_history(
     request: Request,
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),

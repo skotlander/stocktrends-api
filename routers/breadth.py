@@ -20,6 +20,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
 
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
 
@@ -38,6 +39,23 @@ def _norm_exchange(ex: str) -> str:
             detail=f"Invalid exchange '{ex}'. Must be one of {sorted(VALID_EXCHANGES)}",
         )
     return ex
+
+
+def _validate_exchange_values(request: Request, values: dict) -> None:
+    """
+    Pre-payment adapter over `_norm_exchange`.
+
+    The optional exchange filter is a fixed vocabulary decided by the query
+    string alone, so an exchange code that does not exist is refused before any
+    payment rail is touched.  Whether sector breadth aggregates for the requested week exist is a data question and stays
+    behind the payment gate.
+
+    Calls the same `_norm_exchange` the endpoint calls, so the 400 is unchanged.
+    """
+    exchange = values.get("exchange")
+    if exchange:
+        _norm_exchange(exchange)
+
 
 
 def _latest_weekdate(engine, exchange: str | None) -> Any:
@@ -302,6 +320,7 @@ def _sort_key_for_level(level: GroupLevel) -> str:
 # --- Endpoints --------------------------------------------------------------
 
 @router.get("/sector/latest")
+@pre_payment_semantic_validator(_validate_exchange_values)
 def breadth_sector_latest(
     request: Request,
     group_level: GroupLevel = Query(default="sector", description="Group by: sector | industry_group | industry"),
@@ -369,6 +388,7 @@ def breadth_sector_latest(
 
 
 @router.get("/sector/history")
+@pre_payment_semantic_validator(_validate_exchange_values)
 def breadth_sector_history(
     request: Request,
     group_level: GroupLevel = Query(default="sector", description="Group by: sector | industry_group | industry"),

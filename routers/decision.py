@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES, parse_symbol_exchange
 from services import decision_service, regime_service
@@ -28,6 +29,79 @@ class EvaluateSymbolRequest(BaseModel):
     symbol_exchange: str | None = None
     symbol: str | None = None
     exchange: str | None = None
+
+
+def resolve_instrument_identity(
+    body: EvaluateSymbolRequest,
+    request_id: object,
+) -> tuple[str, str]:
+    """
+    The instrument this request is about, or the existing rejection.
+
+    `EvaluateSymbolRequest` is structurally valid with `{}` — every field is
+    optional — but the endpoint cannot evaluate an instrument nobody named.  That
+    gap between schema-valid and answerable is decided entirely by the body, so
+    it is this endpoint's registered pre-payment validation.
+
+    Returns the normalized `(symbol, exchange)` the endpoint queries with.  All
+    four existing outcomes are preserved exactly, including their differing
+    status codes:
+
+      symbol_exchange                  -> parsed
+      symbol + exchange                -> normalized, exchange domain-checked
+      symbol without exchange          -> 400 missing_exchange
+      neither                          -> 422 missing_symbol
+      malformed / invalid exchange     -> 400 invalid_input
+
+    Deliberately NOT here: whether Stock Trends weekdates exist, whether the
+    symbol is in the database, and whether the regime computes.  Those are
+    answers only paid execution can give, and they stay behind the gate.
+    """
+    try:
+        if body.symbol_exchange:
+            s, ex = parse_symbol_exchange(body.symbol_exchange)
+        elif body.symbol and body.exchange:
+            s = body.symbol.strip().upper()
+            ex = body.exchange.strip().upper()
+            if ex not in VALID_EXCHANGES:
+                raise ValueError(
+                    f"Invalid exchange '{ex}'. Must be one of {sorted(VALID_EXCHANGES)}"
+                )
+            if not s:
+                raise ValueError("symbol is empty")
+        elif body.symbol:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "request_id": request_id,
+                    "error": "missing_exchange",
+                    "message": "Provide exchange alongside symbol, or use symbol_exchange (e.g. 'AAPL-Q').",
+                },
+            )
+        else:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "request_id": request_id,
+                    "error": "missing_symbol",
+                    "message": "Provide symbol_exchange (e.g. 'AAPL-Q') or symbol + exchange.",
+                },
+            )
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=400,
+            detail={"request_id": request_id, "error": "invalid_input", "message": str(ve)},
+        )
+
+    return s, ex
+
+
+def _validate_evaluate_symbol_values(request: Request, values: dict) -> None:
+    """Pre-payment adapter: the shared resolver over the solved body."""
+    resolve_instrument_identity(
+        values["body"],
+        getattr(request.state, "request_id", None),
+    )
 
 
 def _signal_notes(
@@ -68,45 +142,14 @@ def _signal_notes(
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
+@pre_payment_semantic_validator(_validate_evaluate_symbol_values)
 def evaluate_symbol(body: EvaluateSymbolRequest, request: Request):
     request_id = getattr(request.state, "request_id", None)
 
     # --- Resolve symbol + exchange ---
-    try:
-        if body.symbol_exchange:
-            s, ex = parse_symbol_exchange(body.symbol_exchange)
-        elif body.symbol and body.exchange:
-            s = body.symbol.strip().upper()
-            ex = body.exchange.strip().upper()
-            if ex not in VALID_EXCHANGES:
-                raise ValueError(
-                    f"Invalid exchange '{ex}'. Must be one of {sorted(VALID_EXCHANGES)}"
-                )
-            if not s:
-                raise ValueError("symbol is empty")
-        elif body.symbol:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "request_id": request_id,
-                    "error": "missing_exchange",
-                    "message": "Provide exchange alongside symbol, or use symbol_exchange (e.g. 'AAPL-Q').",
-                },
-            )
-        else:
-            raise HTTPException(
-                status_code=422,
-                detail={
-                    "request_id": request_id,
-                    "error": "missing_symbol",
-                    "message": "Provide symbol_exchange (e.g. 'AAPL-Q') or symbol + exchange.",
-                },
-            )
-    except ValueError as ve:
-        raise HTTPException(
-            status_code=400,
-            detail={"request_id": request_id, "error": "invalid_input", "message": str(ve)},
-        )
+    # Shared with the pre-payment validator registered on this endpoint, which
+    # has already rejected an unnameable instrument before any rail was touched.
+    s, ex = resolve_instrument_identity(body, request_id)
 
     engine = get_engine()
 

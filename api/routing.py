@@ -28,6 +28,33 @@ system of our own.
 assumptions, so an upgrade that moves the seam fails loudly rather than
 silently returning to settle-before-validate.
 
+Request-only semantic validation
+--------------------------------
+FastAPI's own validation establishes that each value is *structurally* valid.
+It cannot establish that the combination of values is *semantically* answerable
+— `symbol_exchange=IBM` is a well-formed string, and an empty
+`EvaluateSymbolRequest` body is a valid model.  Those rejections are knowable
+from the request alone, so they must not cost money either.
+
+An endpoint may therefore register a pre-payment semantic validator with
+`@pre_payment_semantic_validator(...)`.  The installer reads the marker off the
+endpoint callable it is already wrapping and carries it into the wrapper, which
+invokes it on the values FastAPI has already solved, immediately before the
+payment gate:
+
+    already-solved FastAPI values
+        -> registered route semantic validator, if any
+        -> deferred payment gate
+        -> original endpoint
+
+Registration is endpoint-local by design.  A central `path -> validator` table
+would be a second definition of which routes validate what, free to drift away
+from the endpoints it describes; a marker on the callable cannot.
+
+The validator must be synchronous and side-effect free: no database, no
+service, no network, no mutable application state.  It exists to reject what is
+already knowable, not to do a cheap piece of the paid work early.
+
 Coverage
 --------
 The wrapper is installed on *every* v1 `APIRoute`, not only on routes a static
@@ -65,6 +92,10 @@ BOUNDARY_REQUEST_VALUE_KEY = "__stocktrends_boundary_request"
 # own fail-closed path, so operators see one code for one condition.
 BOUNDARY_NOT_CONSULTED_ERROR = "payment_execution_boundary_not_consulted"
 
+# Marker carrying an endpoint's registered pre-payment semantic validator.
+# Read off the endpoint callable at install time; see `pre_payment_semantic_validator`.
+SEMANTIC_VALIDATOR_ATTR = "__stocktrends_pre_payment_semantic_validator__"
+
 
 class PaymentExecutionBoundaryError(RuntimeError):
     """
@@ -90,6 +121,72 @@ def is_payment_wrapped(target: Any) -> bool:
     return bool(getattr(call, PAYMENT_WRAPPER_ATTR, False))
 
 
+def pre_payment_semantic_validator(
+    validator: Callable[[Any, dict[str, Any]], Any]
+) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+    """
+    Register `validator` as the endpoint's request-only semantic validation.
+
+    Applied to the endpoint callable itself so that the rule and the route it
+    guards cannot be separated.  The installer reads the marker while wrapping
+    the finished `APIRoute`; nothing else consults it, and there is deliberately
+    no central registry to keep in step.
+
+    `validator(request, values)` receives the recovered `Request` (for
+    `request.state.request_id`) and the endpoint values FastAPI has already
+    solved — the same mapping the endpoint is about to be called with.  It
+    returns nothing and signals rejection by raising the endpoint's existing
+    `HTTPException`, so the client-visible contract is unchanged by the move.
+
+    It must be synchronous and side-effect free.  It runs before payment, so
+    any database read, service call or billable work placed here would execute
+    unpaid on every probe of a paid endpoint.
+    """
+
+    def decorate(endpoint: Callable[..., Any]) -> Callable[..., Any]:
+        setattr(endpoint, SEMANTIC_VALIDATOR_ATTR, validator)
+        return endpoint
+
+    return decorate
+
+
+def get_pre_payment_semantic_validator(target: Any) -> Optional[Callable[..., Any]]:
+    """
+    The semantic validator registered for `target`, or `None`.
+
+    Accepts an `APIRoute` or an endpoint callable, mirroring `is_payment_wrapped`,
+    so the audit tests can ask the question at whichever level they hold.  On a
+    wrapped route the marker is still readable: `functools.wraps` copies the
+    wrapped function's `__dict__` onto the wrapper.
+    """
+    dependant = getattr(target, "dependant", None)
+    call = getattr(dependant, "call", None) if dependant is not None else None
+    if call is None:
+        call = target
+
+    return getattr(call, SEMANTIC_VALIDATOR_ATTR, None)
+
+
+def _require_request(request: Any) -> Any:
+    """
+    The `Request` the boundary needs, or a fail-closed error.
+
+    An installed wrapper with no request in hand cannot read `request.state`, so
+    it can neither tell a free endpoint from a paid one with a gate waiting, nor
+    give a semantic validator the request context its error payloads carry.
+    Returning `None` there would let a paid endpoint execute unpaid, so this
+    raises instead.
+    """
+    if request is None:
+        raise PaymentExecutionBoundaryError(
+            f"{BOUNDARY_NOT_CONSULTED_ERROR}: the payment execution boundary "
+            "could not recover the Request from the solved endpoint values, so "
+            "it cannot determine whether a payment gate is pending. Refusing to "
+            "execute the endpoint."
+        )
+    return request
+
+
 def _gate_rejection(request: Any) -> Optional[Response]:
     """
     Invoke the deferred payment gate, if one was published for this request.
@@ -99,18 +196,9 @@ def _gate_rejection(request: Any) -> Optional[Response]:
     own one-shot semantics and for recording its result on `request.state`;
     this module deliberately knows nothing about pricing or payment rails.
 
-    Fails closed when the `Request` cannot be recovered.  An installed wrapper
-    with no request in hand cannot read `request.state`, so it cannot tell a
-    free endpoint from a paid one that has a gate waiting.  Returning `None`
-    there would let a paid endpoint execute unpaid, so this raises instead.
+    Fails closed when the `Request` cannot be recovered — see `_require_request`.
     """
-    if request is None:
-        raise PaymentExecutionBoundaryError(
-            f"{BOUNDARY_NOT_CONSULTED_ERROR}: the payment execution boundary "
-            "could not recover the Request from the solved endpoint values, so "
-            "it cannot determine whether a payment gate is pending. Refusing to "
-            "execute the endpoint."
-        )
+    request = _require_request(request)
 
     state = getattr(request, "state", None)
     if state is None:
@@ -131,6 +219,7 @@ def _build_wrapper(
     endpoint: Callable[..., Any],
     request_value_key: str,
     injected_request: bool,
+    semantic_validator: Optional[Callable[..., Any]] = None,
 ) -> Callable[..., Any]:
     """
     Build a payment-aware wrapper whose coroutine kind matches `endpoint`.
@@ -141,6 +230,11 @@ def _build_wrapper(
     silently change execution semantics, so the two branches below are not
     interchangeable.  Every current endpoint is sync; the async branch keeps
     the seam correct if one is added.
+
+    `semantic_validator`, when the endpoint registered one, runs on the solved
+    values before the gate.  It raises to reject, so a rejection propagates as
+    the endpoint's own `HTTPException` and the gate is never invoked — nothing
+    is verified, settled or authorized for a request that could not be served.
     """
 
     def _take_request(values: dict[str, Any]) -> Any:
@@ -151,11 +245,24 @@ def _build_wrapper(
             return values.pop(request_value_key, None)
         return values.get(request_value_key)
 
+    def _validate_then_gate(request: Any, values: dict[str, Any]) -> Optional[Response]:
+        """
+        Semantic validation, then payment — in that order, always.
+
+        The request is recovered before either step: a validator whose error
+        payload carries `request_id` needs it, and a missing request must fail
+        closed rather than skip the gate.
+        """
+        request = _require_request(request)
+        if semantic_validator is not None:
+            semantic_validator(request, values)
+        return _gate_rejection(request)
+
     if asyncio.iscoroutinefunction(endpoint):
 
         @functools.wraps(endpoint)
         async def wrapper(**values: Any) -> Any:
-            rejection = _gate_rejection(_take_request(values))
+            rejection = _validate_then_gate(_take_request(values), values)
             if rejection is not None:
                 return rejection
             return await endpoint(**values)
@@ -164,7 +271,7 @@ def _build_wrapper(
 
         @functools.wraps(endpoint)
         def wrapper(**values: Any) -> Any:
-            rejection = _gate_rejection(_take_request(values))
+            rejection = _validate_then_gate(_take_request(values), values)
             if rejection is not None:
                 return rejection
             return endpoint(**values)
@@ -212,6 +319,7 @@ def install_payment_execution_boundary(app: Any) -> int:
             endpoint_call,
             request_value_key,
             injected_request,
+            get_pre_payment_semantic_validator(endpoint_call),
         )
 
         # Rebuild the handler so it closes over the wrapped call and re-derives

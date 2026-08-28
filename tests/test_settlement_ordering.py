@@ -17,10 +17,15 @@ you nothing about whether money moved.
 
 Markers
 -------
-`pytest.mark.xfail(strict=True)` marks the cases the defect currently breaks.
-Strict mode means PR 2 and PR 3 cannot land silently: the moment behaviour is
-fixed, the xfail becomes an unexpected pass and the suite goes red until the
-marker is removed.  That is the intended handshake between the PRs.
+`pytest.mark.xfail(strict=True)` marked the cases the defect broke.  Strict mode
+meant PR 2 and PR 3 could not land silently: the moment behaviour was fixed, each
+xfail became an unexpected pass and the suite went red until the marker was
+removed.  That handshake is complete — PR 2 moved the payment gate behind
+FastAPI's own validation, PR 3 put request-only semantic validation in front of
+that gate, and all eight markers have been removed against the new ordering.
+No marker remains in this file, and none should be added without justification:
+an xfail here is an admission that money can still move for a request that could
+never have been served.
 """
 
 from __future__ import annotations
@@ -46,9 +51,6 @@ from support.payment_harness import (
     unpaid_headers,
     x402_headers,
 )
-
-PRE_GATE = "PR2/PR3: deterministic input failure still settles before validation"
-BILLED = "PR2: billed_amount_usd still carries list price on non-collected states"
 
 # ---------------------------------------------------------------------------
 # Fixture data
@@ -86,7 +88,6 @@ def _assert_no_settlement(harness, *, verify_expected: int = 0) -> None:
 # 1-4 — invalid GET input presented with a valid payment proof
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_01_malformed_symbol_exchange_does_not_settle(payment_harness, monkeypatch):
     """
     The representative case, asserted on all four axes at once.
@@ -95,11 +96,10 @@ def test_01_malformed_symbol_exchange_does_not_settle(payment_harness, monkeypat
     inferred from the status code: a 400 is equally consistent with "the endpoint
     never ran" and "the endpoint ran, queried, and then rejected the input".
 
-    Assertion order is deliberate.  The query-count assertion passes today and
-    must therefore be reached and exercised, so it is placed ahead of the
-    facilitator assertions that raise the expected failure.  Putting the
-    facilitator checks first would short-circuit the test at the xfail and leave
-    the endpoint-nonexecution measurement permanently unevaluated.
+    Assertion order is preserved from when this case was a strict xfail: the
+    query-count assertion is deliberately ahead of the facilitator assertions, so
+    the endpoint-nonexecution measurement is reached and exercised rather than
+    short-circuited by the failure the marker expected.
     """
     engine, queries = counting_engine([_PRICE_ROW])
     monkeypatch.setattr(prices_router, "get_engine", lambda: engine)
@@ -112,13 +112,13 @@ def test_01_malformed_symbol_exchange_does_not_settle(payment_harness, monkeypat
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "invalid_symbol_exchange"
 
-    # 2. The paid service did not execute.  Passes today; actively exercised.
+    # 2. The paid service did not execute.
     assert len(queries) == 0, (
         f"the paid service executed {len(queries)} quer(ies) for a request that "
         "must be rejected before payment"
     )
 
-    # 3-4. No money moved.  These are what fail today.
+    # 3-4. No money moved.
     assert payment_harness.verify_count == 0, "facilitator verify must not run"
     assert payment_harness.settle_count == 0, "facilitator settle must not run"
 
@@ -132,7 +132,6 @@ def test_02_constraint_violation_does_not_settle(payment_harness, priced_engines
     _assert_no_settlement(payment_harness)
 
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_03_invalid_enum_does_not_settle(payment_harness, priced_engines):
     response = payment_harness.client.get(
         "/v1/agent/screener/top?sort=bogus", headers=x402_headers()
@@ -143,7 +142,6 @@ def test_03_invalid_enum_does_not_settle(payment_harness, priced_engines):
     _assert_no_settlement(payment_harness)
 
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_04_invalid_exchange_domain_does_not_settle(payment_harness, priced_engines):
     response = payment_harness.client.get(
         "/v1/stim/latest?symbol_exchange=IBM-Z", headers=x402_headers()
@@ -178,10 +176,16 @@ def test_06_schema_invalid_body_does_not_settle(payment_harness):
     _assert_no_settlement(payment_harness)
 
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_07_semantic_invalid_body_does_not_settle(payment_harness):
-    """An empty body is schema-valid but semantically incomplete — today a 422
-    raised from inside the endpoint, after settlement."""
+    """
+    An empty body is schema-valid but semantically incomplete.
+
+    Every field of `EvaluateSymbolRequest` is optional, so FastAPI accepts `{}`
+    and the endpoint used to raise its 422 from inside the body, after
+    settlement.  The rejection is decided entirely by the request, so it now
+    comes from the registered semantic validator ahead of the gate — same status,
+    same detail, no money moved.
+    """
     response = payment_harness.client.post(
         "/v1/decision/evaluate-symbol", headers=x402_headers(), json={}
     )
@@ -190,7 +194,6 @@ def test_07_semantic_invalid_body_does_not_settle(payment_harness):
     _assert_no_settlement(payment_harness)
 
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_07b_semantic_invalid_enum_body_does_not_settle(payment_harness):
     response = payment_harness.client.post(
         "/v1/portfolio/construct", headers=x402_headers(), json={"bias": "sideways"}
@@ -205,7 +208,6 @@ def test_07b_semantic_invalid_enum_body_does_not_settle(payment_harness):
 # 8-9 — discovery precedence: invalid input beats the payment challenge
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_08_invalid_unpaid_request_returns_input_error_not_challenge(
     payment_harness, priced_engines
 ):
@@ -214,6 +216,10 @@ def test_08_invalid_unpaid_request_returns_input_error_not_challenge(
     been served returns the deterministic client-input error rather than a
     payment challenge.  Pricing context headers stay present so an agent can
     still discover the price after correcting its request.
+
+    This precedence is why `tests/test_402_preview.py` names a real instrument
+    in the requests it uses to inspect challenge shape — a paid instrument
+    endpoint called with no instrument is now answered before payment.
     """
     response = payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM", headers=unpaid_headers()
@@ -394,18 +400,19 @@ def test_16_valid_mpp_request_authorizes_and_captures(payment_harness, priced_en
 
 def test_17_invalid_mpp_request_never_captures(payment_harness, priced_engines):
     """
-    Pins today's compensating behaviour for a structurally invalid MPP request.
+    No MPP control-plane traffic at all for a structurally invalid request.
 
-    MPP is already economically safe on invalid input, but only because the
-    finaliser compensates: it authorizes, the endpoint then rejects the input,
-    and the authorization is voided.  All three counts are asserted so that PR2
-    cannot lose the compensation while moving the gate.
+    This case previously pinned a compensating behaviour: MPP authorized, the
+    endpoint then rejected the input, and the finaliser voided the
+    authorization.  That was economically safe but still opened and closed a
+    reservation against a session for a request that could never be served.
 
-    NOTE FOR PR2 — this test is expected to change.  Once validation runs before
-    MPP authorization the target state is authorize 0 / capture 0 / void 0, which
-    is what test_17b asserts.  When test_17b stops xfailing, the authorize and
-    void assertions here must be updated to 0.  A failure here after PR2 is that
-    handover, not a regression.
+    Semantic validation now runs before the gate, so the correct state is no
+    control-plane round trip in either direction.  All three counts are still
+    asserted together — a later change that reintroduced authorize-then-void
+    would be a regression, not a return to a tolerable equilibrium — and the
+    obsolete authorize=1 / void=1 expectation is deliberately not retained
+    anywhere in this suite.
     """
     response = payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM", headers=mpp_headers()
@@ -415,23 +422,23 @@ def test_17_invalid_mpp_request_never_captures(payment_harness, priced_engines):
     assert payment_harness.mpp.capture_count == 0, (
         "economic capture must never occur for a request that was never servable"
     )
-    assert payment_harness.mpp.authorize_count == 1, (
-        "current behaviour: the control plane is asked to authorize before the "
-        "endpoint rejects the input"
+    assert payment_harness.mpp.authorize_count == 0, (
+        "the control plane must not be asked to reserve funds for a request "
+        "rejected before the payment gate"
     )
-    assert payment_harness.mpp.void_count == 1, (
-        "current behaviour: the authorization is compensated by a void once the "
-        "endpoint returns 4xx. PR2 must not drop this until authorize is no "
-        "longer reached at all"
+    assert payment_harness.mpp.void_count == 0, (
+        "nothing was authorized, so there is nothing to compensate; a void here "
+        "would mean authorize was reached after all"
     )
 
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_17b_invalid_mpp_request_never_authorizes(payment_harness, priced_engines):
     """
-    Stronger than 17.  MPP is already economically safe on invalid input because
-    the finalizer voids the authorization, but the control-plane round trip is
-    still made for a request that could never be served.
+    The same claim as test_17, stated as the invariant rather than as counts.
+
+    Kept separate because it is the case that originally carried the strict
+    xfail: it is the one that had to flip when validation moved ahead of MPP
+    authorization, and it stays as the named regression guard for that ordering.
     """
     response = payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM", headers=mpp_headers()
@@ -518,7 +525,6 @@ def test_23d_replay_rejection_records_zero_billed_amount(
     assert row["billed_amount_usd"] == 0
 
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_23e_pre_gate_rejection_records_zero_billed_amount(
     payment_harness, priced_engines
 ):
@@ -572,16 +578,25 @@ def test_24b_economics_fields_are_not_swapped(payment_harness, priced_engines):
     assert row["billed_amount_usd"] != SENTINEL_STC_COST
 
 
-def test_24c_settled_amount_follows_the_artifact_not_the_quote(
+def test_24c_billed_amount_is_read_from_enforcement_not_price_lookup(
     payment_harness, priced_engines, monkeypatch
 ):
     """
-    Billed is derived from what settled, not from price lookup.
+    Provenance test: `billed_amount_usd` is sourced from the enforcement result.
 
-    The quoted price is held at the sentinel while the enforcement layer reports
-    a different settled native amount.  A billed amount sourced from the
-    catalogue would still read 0.15; one sourced from the settlement reads the
-    settled value.
+    NOT a sanctioned-underpayment case.  Real x402 enforcement cannot reach
+    `outcome="proceed"` with less than the quoted amount — an artifact below the
+    requirement is rejected before the facilitator by
+    `x402_insufficient_amount_detail`, whatever `VALIDATE_AGENT_PAY_HEADERS`
+    says, which is what `test_31_*` asserts.
+
+    `enforce_payment_rail` is therefore stubbed wholesale, deliberately
+    bypassing that validation, purely to make the two candidate sources of the
+    billed amount produce different numbers.  The quoted price stays at the
+    0.15 sentinel while the stub reports a settled native amount of 0.09.  A
+    billed amount read from the price catalogue would still say 0.15; one read
+    from the settlement says 0.09.  The 0.09 is a probe value, not a payment
+    the system would ever accept.
     """
     import middleware.metering as metering_module
     from payments.enforcement import PaymentEnforcementResult
@@ -594,7 +609,8 @@ def test_24c_settled_amount_follows_the_artifact_not_the_quote(
             payment_reference="x402-partial-ref",
             payment_network="eip155:8453",
             payment_token="0xtoken",
-            # 0.09 USDC at 6 decimals — deliberately not the quoted 0.15.
+            # 0.09 USDC at 6 decimals — deliberately not the quoted 0.15, so the
+            # two possible provenances of billed_amount_usd are distinguishable.
             payment_amount_native=Decimal("90000"),
             payment_response={"success": True, "transaction": "0xdeadbeef"},
         ),
@@ -973,3 +989,197 @@ def test_30c_gate_proceed_result_is_cached_as_proceed():
     assert gate() is None
     assert gate() is None
     assert len(attempts) == 1
+
+
+# ===========================================================================
+# 31 — the minimum charge is not switchable
+#
+# `VALIDATE_AGENT_PAY_HEADERS` used to be the only thing comparing the presented
+# amount to the quoted price.  With it off, an underpaid artifact went straight
+# to the facilitator and settled for less than the quote.  Production runs with
+# validation on, but an economic minimum must not depend on an optional
+# validation flag, so the enforcement path applies the same shared rule itself.
+#
+# The matrix below is the point: the flag changes nothing about the outcome.
+# ===========================================================================
+
+@pytest.fixture
+def validation_flag_off(payment_harness, monkeypatch):
+    """The hazardous configuration: enforcement on, optional validation off."""
+    import middleware.metering as metering_module
+
+    monkeypatch.setattr(metering_module, "VALIDATE_AGENT_PAY_HEADERS", False)
+    return payment_harness
+
+
+def _assert_underpayment_rejected(harness, response) -> None:
+    assert response.status_code == 402
+    assert response.json()["error"] == "insufficient_payment_amount"
+    assert harness.verify_count == 0, (
+        "an underpaid artifact reached the facilitator's verify endpoint"
+    )
+    assert harness.settle_count == 0, (
+        "an underpaid artifact was settled"
+    )
+    assert harness.logs.only_economics_row()["billed_amount_usd"] == 0
+
+
+def test_31_underpaid_artifact_rejected_with_validation_flag_on(
+    payment_harness, priced_engines
+):
+    """The configuration production runs. Rejected before the facilitator."""
+    response = payment_harness.client.get(
+        _VALID_PRICES_QUERY, headers=x402_headers(amount="1")
+    )
+    _assert_underpayment_rejected(payment_harness, response)
+
+
+def test_31b_underpaid_artifact_rejected_with_validation_flag_off(
+    validation_flag_off, priced_engines
+):
+    """
+    The hazard, closed.
+
+    Identical assertions to test_31 with `VALIDATE_AGENT_PAY_HEADERS=False`.
+    Before this change the same request verified and settled 0.000001 USDC
+    against a 0.15 quote; enforcement now applies the shared amount rule itself,
+    so the flag governs optional validation behaviour and nothing economic.
+    """
+    response = validation_flag_off.client.get(
+        _VALID_PRICES_QUERY, headers=x402_headers(amount="1")
+    )
+    _assert_underpayment_rejected(validation_flag_off, response)
+
+
+def test_31c_exact_amount_settles_normally_with_validation_flag_off(
+    validation_flag_off, priced_engines
+):
+    """
+    Positive control.  The backstop must reject underpayment, not payment.
+
+    Without this, test_31b would pass just as well if the new check rejected
+    every artifact it saw.
+    """
+    response = validation_flag_off.client.get(
+        _VALID_PRICES_QUERY, headers=x402_headers()
+    )
+
+    assert response.status_code == 200
+    assert validation_flag_off.verify_count == 1
+    assert validation_flag_off.settle_count == 1
+    assert validation_flag_off.logs.only_economics_row()["payment_status"] == "settled"
+
+
+def test_31d_overpaid_artifact_still_accepted_with_validation_flag_off(
+    validation_flag_off, priced_engines
+):
+    """
+    An amount above the requirement keeps its existing accepted behaviour.
+
+    The rule is a minimum, not an equality: x402 doctrine does not treat paying
+    more than asked as a protocol error, and this PR does not change facilitator
+    protocol semantics beyond making the minimum non-optional.
+    """
+    response = validation_flag_off.client.get(
+        _VALID_PRICES_QUERY, headers=x402_headers(amount="900000")
+    )
+
+    assert response.status_code == 200
+    assert validation_flag_off.settle_count == 1
+
+
+def test_31e_malformed_artifact_keeps_its_existing_rejection(
+    payment_harness, priced_engines
+):
+    """
+    An undecodable artifact keeps its existing pre-facilitator rejection.
+
+    Scope note.  This PR made the *amount* minimum non-optional; it deliberately
+    did not change which layer decides anything else.  Whether an artifact
+    decodes at all remains validation-governed, exactly as before: with
+    `VALIDATE_AGENT_PAY_HEADERS` on it is refused here, and with it off the
+    payload is passed to the facilitator, which is the authority on whether a
+    payload actually pays and rejects a garbage one.
+
+    That asymmetry is intentional rather than an oversight.  Underpayment is
+    decidable locally against a price we quoted, so leaving it to a flag was a
+    real economic hazard.  Decodability is the facilitator's judgement, and
+    pre-empting it would change protocol semantics this PR is not chartered to
+    touch.  The new amount rule therefore abstains on an artifact whose amount
+    cannot be read — an unreadable amount is not evidence of underpayment.
+    """
+    response = payment_harness.client.get(
+        _VALID_PRICES_QUERY, headers=malformed_x402_headers()
+    )
+
+    assert response.status_code == 402
+    _assert_no_settlement(payment_harness, verify_expected=0)
+
+
+def test_31f_amount_rule_has_a_single_definition():
+    """
+    Both call sites resolve the same helper.
+
+    Two independent amount comparisons could disagree about the boundary — one
+    strict, one inclusive — and the disagreement would only ever be visible as
+    money.  Asserted structurally so a re-inlined copy is caught.
+    """
+    import inspect
+
+    import payments.enforcement as enforcement_module
+    import payments.x402 as x402_module
+
+    for source, where in (
+        (inspect.getsource(x402_module.validate_x402_payment), "validate_x402_payment"),
+        (inspect.getsource(enforcement_module.enforce_x402_payment), "enforce_x402_payment"),
+    ):
+        assert "x402_insufficient_amount_detail(" in source, (
+            f"{where} no longer uses the shared amount-sufficiency helper; the "
+            "minimum-charge rule now has more than one definition"
+        )
+
+
+def test_31g_amount_rule_boundary_is_inclusive():
+    """The quoted amount exactly is payment, not underpayment."""
+    from payments.x402 import x402_insufficient_amount_detail
+
+    quote = Decimal("0.15")
+
+    assert x402_insufficient_amount_detail(Decimal("150000"), quote) is None
+    assert x402_insufficient_amount_detail(Decimal("150001"), quote) is None
+    assert x402_insufficient_amount_detail(Decimal("149999"), quote) is not None
+    assert x402_insufficient_amount_detail(None, quote) is None, (
+        "an unreadable amount is not evidence of underpayment"
+    )
+
+
+# ===========================================================================
+# 32 — x402_settled_amount_usd fallback is explicit in all three cases
+# ===========================================================================
+
+def test_32_settled_amount_conversions_and_fallbacks():
+    """
+    None and unexpected types both fall back to the quote, never to zero.
+
+    Enforcement types this value `Decimal | None`.  The third case is a contract
+    violation, and the tempting handling — coercing through `safe_decimal` —
+    would record a settled payment as having collected 0, understating revenue
+    on a request that did move money.
+    """
+    from middleware.metering import x402_settled_amount_usd
+
+    quote = Decimal("0.15")
+
+    # Expected Decimal: converted from atomic units.
+    assert x402_settled_amount_usd(Decimal("150000"), quote) == Decimal("0.15")
+    assert x402_settled_amount_usd(Decimal("90000"), quote) == Decimal("0.09")
+
+    # None: settlement succeeded, so the quote was satisfied.
+    assert x402_settled_amount_usd(None, quote) == quote
+
+    # Unexpected types: the quote, emphatically not zero.
+    for unexpected in ("not-a-number", object(), [], {}, float("nan")):
+        assert x402_settled_amount_usd(unexpected, quote) == quote, (
+            f"{unexpected!r} must fall back to the quoted price"
+        )
+        assert x402_settled_amount_usd(unexpected, quote) != Decimal("0")

@@ -8,6 +8,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
 
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
 from utils.volume import volume_to_actual_shares
@@ -808,7 +809,47 @@ def stwr_reports_catalog():
     }
 
 
+def resolve_report_request(
+    request: Request,
+    *,
+    rpt: str,
+    exchange: str,
+) -> tuple[str, str]:
+    """
+    The STWR report request's request-only validity, in one place.
+
+    Returns the normalized `(rpt, exchange)` the report builder is selected
+    with.  Both are fixed vocabularies decided by the query string alone — a
+    report code outside `REPORTS`, an exchange code outside the Stock Trends
+    set — so both are refused before any payment rail is touched.
+
+    Deliberately NOT here: resolving the latest report week and whether the
+    report has rows.  Those are the paid answers.
+
+    The endpoint consumes this result rather than re-deriving it, so the
+    pre-payment check and the executed report cannot disagree.
+    """
+    rpt = rpt.strip().lower()
+    if rpt not in REPORTS:
+        raise HTTPException(
+            status_code=400,
+            detail={"request_id": request.state.request_id, "error": "unknown_report", "rpt": rpt, "allowed": sorted(REPORTS.keys())},
+        )
+
+    return rpt, _norm_exchange(exchange)
+
+
+def _validate_report_values(request: Request, values: dict) -> None:
+    """Pre-payment adapter: the shared resolver over the solved query values."""
+    resolve_report_request(
+        request,
+        rpt=values.get("rpt"),
+        exchange=values.get("exchange"),
+    )
+
+
 @router.get("/reports/latest")
+@pre_payment_semantic_validator(_validate_report_values)
 def stwr_reports_latest(
     request: Request,
     rpt: str = Query(..., description="Report code: e.g. pw, bullcross, toptrend, ..."),
@@ -837,14 +878,9 @@ def stwr_reports_latest(
     tt_min_13wk_ma_chg: float = Query(default=10.0),
     tt_min_range_pct: float = Query(default=1.0),
 ):
-    rpt = rpt.strip().lower()
-    if rpt not in REPORTS:
-        raise HTTPException(
-            status_code=400,
-            detail={"request_id": request.state.request_id, "error": "unknown_report", "rpt": rpt, "allowed": sorted(REPORTS.keys())},
-        )
-
-    ex = _norm_exchange(exchange)
+    # Shared with the pre-payment validator registered on this endpoint; the
+    # normalized values below are the ones it already checked.
+    rpt, ex = resolve_report_request(request, rpt=rpt, exchange=exchange)
     engine = get_engine()
 
     wd = weekdate
@@ -919,6 +955,7 @@ def stwr_reports_latest(
 
 
 @router.get("/reports/history")
+@pre_payment_semantic_validator(_validate_report_values)
 def stwr_reports_history(
     request: Request,
     rpt: str = Query(..., description="Report code: e.g. pw, bullcross, toptrend, ..."),
@@ -949,14 +986,9 @@ def stwr_reports_history(
     tt_min_13wk_ma_chg: float = Query(default=10.0),
     tt_min_range_pct: float = Query(default=1.0),
 ):
-    rpt = rpt.strip().lower()
-    if rpt not in REPORTS:
-        raise HTTPException(
-            status_code=400,
-            detail={"request_id": request.state.request_id, "error": "unknown_report", "rpt": rpt, "allowed": sorted(REPORTS.keys())},
-        )
-
-    ex = _norm_exchange(exchange)
+    # Shared with the pre-payment validator registered on this endpoint; the
+    # normalized values below are the ones it already checked.
+    rpt, ex = resolve_report_request(request, rpt=rpt, exchange=exchange)
     engine = get_engine()
     rep = REPORTS[rpt]
 

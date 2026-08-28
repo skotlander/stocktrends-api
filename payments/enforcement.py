@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Callable, Optional
 
 from payments.x402 import (
+    INSUFFICIENT_PAYMENT_AMOUNT_ERROR,
     X402_CHALLENGE_MODE_HEADER,
     build_x402_challenge,
     build_x402_requirements,
@@ -12,6 +13,7 @@ from payments.x402 import (
     has_payment_signature,
     settle_with_facilitator,
     verify_with_facilitator,
+    x402_insufficient_amount_detail,
 )
 from payments.mpp import enforce_mpp_payment
 
@@ -111,6 +113,34 @@ def enforce_x402_payment(
             outcome="validation_failed",
             error_code=validation_error,
             error_detail=validation_detail,
+            payment_reference=normalized_payment_reference,
+            payment_network=normalized_payment_network or required_network,
+            payment_token=normalized_payment_token or required_token,
+            payment_amount_native=normalized_payment_amount_native,
+        )
+
+    # Minimum charge, enforced by the enforcement path itself.
+    #
+    # `validate_x402_payment` applies the same rule, but only when
+    # `VALIDATE_AGENT_PAY_HEADERS` is on.  Economic safety must not depend on an
+    # optional validation flag, so the check is repeated here from the same
+    # shared helper: whenever enforcement is active, an artifact presenting less
+    # than the quoted amount is rejected before the facilitator is contacted, so
+    # it can neither verify nor settle.
+    #
+    # The flag still governs optional validation behaviour; it simply cannot
+    # switch off the economic minimum.  With validation on, the identical
+    # rejection has already been produced above, so this is a backstop rather
+    # than a second rule — one definition, applied at both points.
+    insufficient_detail = x402_insufficient_amount_detail(
+        normalized_payment_amount_native,
+        amount_usd,
+    )
+    if insufficient_detail is not None:
+        return PaymentEnforcementResult(
+            outcome="validation_failed",
+            error_code=INSUFFICIENT_PAYMENT_AMOUNT_ERROR,
+            error_detail=insufficient_detail,
             payment_reference=normalized_payment_reference,
             payment_network=normalized_payment_network or required_network,
             payment_token=normalized_payment_token or required_token,
