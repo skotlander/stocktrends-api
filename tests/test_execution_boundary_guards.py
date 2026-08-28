@@ -18,7 +18,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 
-import pytest
 from fastapi.routing import APIRoute
 
 from support.payment_harness import (
@@ -29,8 +28,6 @@ from support.payment_harness import (
     v1_path,
 )
 
-WRAPPER_PENDING = "PR2: universal v1 endpoint wrapper not yet installed"
-
 
 # ---------------------------------------------------------------------------
 # 0 — spy integrity
@@ -38,10 +35,11 @@ WRAPPER_PENDING = "PR2: universal v1 endpoint wrapper not yet installed"
 # These run unmarked and standalone.  Both guards are also invoked from their
 # respective fixtures, but a fixture-raised failure inside an xfail-marked test
 # is swallowed as an expected failure: xfail masks setup errors, not just
-# assertion errors.  With 16 strict xfails in the acceptance suite, a broken
-# attach point could therefore leave the suite green while real settlements went
-# unobserved.  Calling the guards directly from unmarked tests removes that
-# dependence on collateral failures elsewhere.
+# assertion errors.  While strict xfails remain in the acceptance suite (the
+# semantic cases deferred to PR 3), a broken attach point could therefore leave
+# the suite green while real settlements went unobserved.  Calling the guards
+# directly from unmarked tests removes that dependence on collateral failures
+# elsewhere.
 # ---------------------------------------------------------------------------
 
 def test_facilitator_spy_attach_points_are_intact():
@@ -72,7 +70,6 @@ def test_v1_exposes_api_routes_to_guard():
     assert len(routes) > 20, f"expected the full v1 surface, found {len(routes)}"
 
 
-@pytest.mark.xfail(strict=True, reason=WRAPPER_PENDING)
 def test_21_every_v1_api_route_carries_the_payment_wrapper():
     """
     The wrapper is installed on every v1 APIRoute, not only on routes currently
@@ -98,7 +95,6 @@ def test_21_every_v1_api_route_carries_the_payment_wrapper():
     )
 
 
-@pytest.mark.xfail(strict=True, reason=WRAPPER_PENDING)
 def test_21b_wrapper_preserves_endpoint_coroutine_kind():
     """
     FastAPI derives threadpool-vs-await from `iscoroutinefunction(dependant.call)`

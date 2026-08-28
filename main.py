@@ -16,6 +16,7 @@ from discovery.service_meta import (
     SERVICE_OPENAPI_GUIDANCE,
     SERVICE_POSITIONING,
 )
+from api.routing import install_payment_execution_boundary
 from middleware.request_id import RequestIdMiddleware
 from middleware.api_key import ApiKeyMiddleware
 from middleware.request_logger import RequestLoggerMiddleware
@@ -428,6 +429,12 @@ v1.include_router(stocktrends_strategies_router)
 v1.include_router(intelligence_router)
 v1.include_router(workflows_router)
 v1.include_router(observability_router)
+
+# Payment execution boundary — must be installed after every router is included.
+# Each APIRoute builds its parameter model and request handler at construction,
+# so the seam is applied to the finished routes rather than to a route class.
+# The wrapper is inert unless MeteringMiddleware publishes a payment gate.
+install_payment_execution_boundary(v1)
 
 v1.openapi = lambda: apply_api_key_security_to_openapi(v1)
 

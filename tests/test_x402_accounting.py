@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 import middleware.metering as metering_module
 import pricing.classifier as classifier_module
+from api.routing import install_payment_execution_boundary
 from middleware.metering import MeteringMiddleware
 from middleware.request_id import RequestIdMiddleware
 from payments.enforcement import PaymentEnforcementResult
@@ -55,6 +56,13 @@ def _build_metered_app() -> FastAPI:
 
     app.add_middleware(MeteringMiddleware)
     app.add_middleware(RequestIdMiddleware)
+
+    # Mirror production wiring: MeteringMiddleware defers enforcement to the
+    # payment gate, which is invoked at the endpoint execution seam.  Without
+    # the boundary this app would serve the paid route without ever consulting
+    # the gate, so the accounting under test would not be exercised at all.
+    # Installed last, after the route is registered.
+    install_payment_execution_boundary(app)
     return app
 
 

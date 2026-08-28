@@ -121,7 +121,6 @@ def test_01_malformed_symbol_exchange_does_not_settle(payment_harness, monkeypat
     assert payment_harness.settle_count == 0, "facilitator settle must not run"
 
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_02_constraint_violation_does_not_settle(payment_harness, priced_engines):
     response = payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM-N&limit=0", headers=x402_headers()
@@ -156,7 +155,6 @@ def test_04_invalid_exchange_domain_does_not_settle(payment_harness, priced_engi
 # 5-7 — invalid POST bodies presented with a valid payment proof
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_05_malformed_json_body_does_not_settle(payment_harness):
     headers = x402_headers()
     headers["Content-Type"] = "application/json"
@@ -169,7 +167,6 @@ def test_05_malformed_json_body_does_not_settle(payment_harness):
     _assert_no_settlement(payment_harness)
 
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_06_schema_invalid_body_does_not_settle(payment_harness):
     response = payment_harness.client.post(
         "/v1/portfolio/construct", headers=x402_headers(), json={"count": 99}
@@ -447,7 +444,6 @@ def test_17b_invalid_mpp_request_never_authorizes(payment_harness, priced_engine
 # 18-19 — route and method misses
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_18_route_miss_under_paid_prefix_does_not_settle(payment_harness):
     """`/v1/stim` is a prefix enforcement scope, so a typo settles today and
     then 404s for a route that does not exist."""
@@ -470,7 +466,6 @@ def test_19_method_miss_does_not_settle(payment_harness):
 # 23-24 — accounting: billed_amount_usd is what was collected
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason=BILLED)
 def test_23a_challenge_records_zero_billed_amount(payment_harness, priced_engines):
     payment_harness.client.get(_VALID_PRICES_QUERY, headers=unpaid_headers())
 
@@ -488,7 +483,6 @@ def test_23a_challenge_records_zero_billed_amount(payment_harness, priced_engine
     )
 
 
-@pytest.mark.xfail(strict=True, reason=BILLED)
 def test_23b_verification_failure_records_zero_billed_amount(
     payment_harness, priced_engines
 ):
@@ -499,7 +493,6 @@ def test_23b_verification_failure_records_zero_billed_amount(
     assert row["billed_amount_usd"] == 0
 
 
-@pytest.mark.xfail(strict=True, reason=BILLED)
 def test_23c_settlement_failure_records_zero_billed_amount(
     payment_harness, priced_engines
 ):
@@ -511,7 +504,6 @@ def test_23c_settlement_failure_records_zero_billed_amount(
     assert row["billed_amount_usd"] == 0
 
 
-@pytest.mark.xfail(strict=True, reason=BILLED)
 def test_23d_replay_rejection_records_zero_billed_amount(
     payment_harness, priced_engines
 ):

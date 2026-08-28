@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+from api.routing import install_payment_execution_boundary
 
 
 def _stub_runtime_side_effects(monkeypatch):
@@ -98,13 +99,23 @@ def test_route_level_404_keeps_existing_detail_schema(client, monkeypatch):
 
     monkeypatch.setattr(api_key_module.ApiKeyMiddleware, "_authenticate_api_key", fake_authenticate)
 
-    @main.v1.get("/_test-route-level-404")
-    def route_level_404():
-        from fastapi import HTTPException
+    # The probe route is registered on the shared v1 application, so it has to
+    # be withdrawn again: leaving it behind gives every later test module a
+    # route that was never put through the payment execution boundary, which
+    # the universal-coverage guard correctly reports as a hole.
+    original_routes = list(main.v1.routes)
+    try:
+        @main.v1.get("/_test-route-level-404")
+        def route_level_404():
+            from fastapi import HTTPException
 
-        raise HTTPException(status_code=404, detail="Route-level missing resource")
+            raise HTTPException(status_code=404, detail="Route-level missing resource")
 
-    response = client.get("/v1/_test-route-level-404", headers={"X-API-Key": "test-key"})
+        install_payment_execution_boundary(main.v1)
+
+        response = client.get("/v1/_test-route-level-404", headers={"X-API-Key": "test-key"})
+    finally:
+        main.v1.router.routes[:] = original_routes
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Route-level missing resource"}
