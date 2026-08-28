@@ -297,7 +297,14 @@ Recommended order for discovery and integration:
 7. `GET /cost-estimate`
    Estimate workflow cost before execution where appropriate
 
-8. Start with a high-value premium endpoint:
+8. Construct a serviceable request
+
+   Use the input schema from step 1 (or the canonical OpenAPI document) to
+   build a request the endpoint can actually answer. Deterministically invalid
+   input is rejected with a `400`/`422` input error before any payment
+   challenge is issued, so a 402 is only reachable with a serviceable request.
+
+9. Start with a high-value premium endpoint:
    * `GET /agent/screener/top`
 
 9. Expand into decision and portfolio workflows:
@@ -370,10 +377,23 @@ Use x402 when:
 
 Typical pattern:
 
-1. Call a premium endpoint
-2. Receive HTTP 402 with payment requirements
-3. Submit the required payment
-4. Retry with payment proof headers
+1. Read the endpoint's input schema from `/ai/tools` or the canonical OpenAPI
+   document, and its current cost from `/pricing/catalog`
+2. Call the premium endpoint with an otherwise-serviceable request
+3. Receive HTTP 402 with payment requirements
+4. Submit the required payment
+5. Retry the same request with payment proof headers
+
+Important: the 402 challenge is the final pre-payment surface for a request the
+endpoint could actually serve. It is not how you discover which parameters an
+endpoint accepts.
+
+A request with deterministically invalid input — a malformed `symbol_exchange`,
+a missing required parameter combination, an unsupported sort or exchange code,
+a semantically incomplete body — returns its input error (`400` or `422`)
+instead of a 402, because the API will not quote a price for a request it could
+never serve. The response still carries pricing context headers, so the price
+remains discoverable once the request is corrected.
 
 Relevant headers include:
 

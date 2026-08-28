@@ -1749,6 +1749,40 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 and not is_payment_wrapped(matched_route)
             )
 
+            # ------------------------------------------------------------------
+            # Pre-gate rejection.
+            #
+            # The complement of the breach above.  A gate was published for this
+            # request and the wrapper never called it, but the route surface was
+            # intact — so the request was denied on the way in, before payment
+            # and before the endpoint.  Route miss, framework validation error,
+            # or a registered semantic validator raising: in every case nothing
+            # was verified, settled, authorized or executed.
+            #
+            # This has to be recorded as a terminal non-consumption status.  The
+            # MPP branch below otherwise fell through to "presented", which the
+            # billing runbook counts as billable usage — so a malformed request
+            # that never reached the control plane entered reported request
+            # counts and SUM(stc_cost) totals.  No money moved, but the usage
+            # reporting was wrong, and it was wrong in the direction of
+            # overstating what customers consumed.
+            #
+            # Read from the gate rather than from the status code: `invoked` is
+            # False only when the wrapper never reached enforcement.  A valid
+            # unpaid request *does* invoke the gate — the gate is what issues its
+            # 402 — so a genuine challenge stays `pending` and is untouched here,
+            # as are every facilitator-side failure and every post-payment
+            # outcome, all of which run with the gate invoked.
+            # ------------------------------------------------------------------
+            pre_gate_rejection = (
+                payment_gate is not None
+                and not payment_gate.invoked
+                and not boundary_breached
+                and decision.econ_payment_required == 1
+                and response is not None
+                and response.status_code >= 400
+            )
+
             if boundary_breached:
                 logger.critical(
                     "%s — a payment-governed endpoint executed without consulting "
@@ -1985,7 +2019,15 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 payment_status = decision.econ_payment_status
 
                 if decision.econ_payment_required:
-                    if payment_rail == "x402" or is_x402_payment_method(normalized_payment_method):
+                    if pre_gate_rejection:
+                        # Denied before the payment gate: rail-independent, and
+                        # terminal.  `rejected` is the canonical status for a
+                        # request that was denied without payment execution, and
+                        # is already excluded from the runbook's billable
+                        # (`presented`/`covered`) queries and included in its
+                        # failed-payment diagnostics.
+                        payment_status = "rejected"
+                    elif payment_rail == "x402" or is_x402_payment_method(normalized_payment_method):
                         if gate_state.collected and payment_reference_header:
                             payment_status = "settled"
                         elif payment_reference_header and not validation_valid:
@@ -2005,7 +2047,15 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                                 # Logged as void_failed for ops visibility and remediation.
                                 payment_status = "void_failed"
                             else:
-                                # Enforcement disabled or pre-control-plane path.
+                                # An authorization was opened and the request ran,
+                                # but the finaliser recorded no capture outcome —
+                                # enforcement disabled mid-flight, or a control-plane
+                                # path that reserved without resolving.  The payment
+                                # was presented, so it stays billable usage.
+                                #
+                                # This branch no longer absorbs pre-gate rejections:
+                                # those are classified `rejected` above, before any
+                                # rail-specific derivation runs.
                                 payment_status = "presented"
                         elif not validation_valid:
                             payment_status = "failed_validation" if should_enforce_agent_pay else "pending"

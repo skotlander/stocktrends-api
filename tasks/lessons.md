@@ -73,3 +73,97 @@ than a 402 challenge. That is intended and contract-visible. It broke
 vehicle for inspecting challenge shape; those requests now name a real
 instrument. A test that reaches a paid endpoint incidentally must send a request
 that endpoint could actually serve.
+
+---
+
+## 2026-08-28 — A pre-gate rejection was reported as billable usage
+
+**Problem.** A semantically invalid MPP request recorded
+`payment_status = "presented"`. No authorization was opened, nothing was
+captured, and `billed_amount_usd` was 0 — but the billing runbook's usage
+queries select `payment_status IN ('presented', 'covered')` and aggregate
+`COUNT(*)` and `SUM(stc_cost)` over the result. A request that never reached
+the control plane therefore entered reported customer usage and STC
+consumption.
+
+**Root cause.** The finaliser derived `payment_status` per rail. The MPP branch
+fell through to `presented` whenever no capture outcome had been recorded, a
+branch commented "Enforcement disabled or pre-control-plane path" — which
+silently absorbed a state it was never written for. Once PR 2 and PR 3 moved
+rejections ahead of the gate, that state became common rather than exotic. The
+same defect applied to framework-invalid requests and to route misses under a
+paid prefix.
+
+**Fix.** The finaliser now derives a `pre_gate_rejection` state from the gate
+itself — published, never invoked, boundary intact, error response — and
+records the canonical `rejected` status for it on every rail, ahead of any
+rail-specific derivation.
+
+**Prevention rule.** A payment status is not a label; it is a predicate that
+billing and usage reporting select on. Before adding or defaulting one, check
+which runbook queries would now match. A fall-through `else` in status
+derivation is where this goes wrong, because it inherits every state nobody
+thought about.
+
+**Prevention rule (corollary).** Fix the status at the point it is written, not
+by narrowing the query that reads it. A query edited to exclude a wrong status
+leaves the wrong value in the table for every other consumer.
+
+**Prevention mechanism.** `test_33_*` asserts pre-gate rejections against the
+runbook's predicate itself, transcribed into the test, rather than against a
+hand-written status list — so the two cannot drift apart silently.
+
+---
+
+## 2026-08-28 — A purity guard that could not fail
+
+**Problem.** `test_44e` asserted that semantic validators do no data or service
+work by scanning each validator's source for forbidden tokens. Two independently
+authored mutations — `get_engine()` inside the shared screener helper, and
+`configured_intelligence_artifact_store()` inside a registered validator — both
+performed unpaid data access, and both passed the entire suite including that
+test.
+
+**Root cause.** The scan read only the validator function's own text. Every
+validator is deliberately a thin adapter that delegates to a shared helper, so
+anything one call away was invisible; and the token list could never be complete.
+The test asserted a property of the source, while the architectural claim is
+about behaviour.
+
+**Fix.** `test_46` poisons the data and service entry points on the governed
+router surface and drives a representative Class 1 invalid request at every
+route in set A through the real HTTP boundary, asserting no sentinel is touched.
+The textual scan is retained, renamed, and documented as a secondary net.
+
+**Prevention rule.** When a test asserts an absence, ask what would have to be
+true for it to fail, and then make that happen on purpose. A guard that has
+never been shown to fail has not been shown to work. Pair every absence
+assertion with a positive control — `test_46c` proves the poison is on the path
+the paid work actually uses, so an absence cannot be produced by patching the
+wrong names.
+
+---
+
+## Non-blocking follow-ups (recorded, not actioned)
+
+Raised by the independent review of PR #97 and deliberately left out of the
+amendment to keep it narrow. None affects settlement ordering or accounting
+correctness.
+
+* **Validator receives a mutable `values` mapping.** A registered validator
+  could in principle mutate the values the endpoint is then called with. No
+  validator does. Introducing `MappingProxyType` here would change the seam for
+  a hazard nothing currently exercises.
+* **Duplicated identifier/exchange helpers across router modules.**
+  `_norm_exchange` and the symbol/exchange resolver are near-identical in
+  several routers. Consolidating them is a cross-router refactor with its own
+  regression surface, unrelated to payment ordering.
+* **Ungoverned ST-IM Select outcome validation.** Those routes are not currently
+  payment-governed, so they fall outside the audited surface. If they are ever
+  priced, `test_44` fails until they are classified.
+* **PR 2 runtime-backstop behavioural-test polish.** The fail-closed backstop is
+  covered; the review suggested stronger behavioural assertions around it.
+* **MPP capture-failure uncertain reservation.** Known and explicitly out of
+  scope: `authorize = 1`, capture attempted and failed, `void = 0`,
+  `billed = 0`. Needs idempotency/uncertain-outcome design; do not blindly void
+  after a failed capture.

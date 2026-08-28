@@ -568,3 +568,120 @@ def test_no_hardcoded_stc_costs_in_tool_descriptions(manifest):
         "use 'Fetch /v1/pricing/catalog for current STC cost.' instead:\n"
         + "\n".join(violations)
     )
+
+
+# ===========================================================================
+# Agent discovery guidance must not be circular
+#
+# PR 3 moved request-only semantic validation ahead of the payment gate, which
+# changed a contract-visible precedence: an unpaid but deterministically
+# invalid request now returns its input error rather than a 402 challenge.
+#
+# That makes "call the endpoint and read the 402 preview to learn its inputs"
+# circular for any endpoint requiring parameters — the request has to be
+# serviceable before a 402 is emitted at all.  These tests pin the corrected
+# guidance on every surface that carries it, including the live /v1/ai/tools
+# manifest, which is the entrypoint agents are told to fetch first.
+# ===========================================================================
+
+_SCHEMA_SOURCES = ("/v1/ai/tools", "/v1/openapi.json")
+
+
+def _live_guidance_strings() -> list[str]:
+    """
+    Every guidance string the live discovery endpoints serve.
+
+    Deliberately gathers from all of them rather than one: the circular claim
+    appeared in three separate lists — `/v1/ai/tools` `agent_onboarding_notes`
+    and `notes`, and `/v1/ai/context` `usage_guidance` — and fixing only the one
+    a test happened to read would leave the entrypoint agents fetch first still
+    telling them the wrong thing.
+    """
+    import routers.ai as ai_router
+
+    collected: list[str] = []
+    for payload in (ai_router.ai_tools(), ai_router.ai_context()):
+        for value in payload.values():
+            if isinstance(value, list):
+                collected.extend(v for v in value if isinstance(v, str))
+    return collected
+
+
+@pytest.mark.parametrize(
+    "guidance_source",
+    ["static", "live"],
+)
+def test_x402_preview_is_not_presented_as_input_discovery(manifest, guidance_source):
+    """
+    The 402 preview keeps its value, but not its former job.
+
+    It is the final pre-payment surface for a serviceable request; it is not how
+    an agent learns which parameters an endpoint accepts.
+    """
+    guidance = (
+        manifest["usage_guidance"] if guidance_source == "static"
+        else _live_guidance_strings()
+    )
+
+    # Entries that instruct the agent to *inspect* the preview.  Deliberately
+    # not every entry mentioning a 402 preview: the Intelligence-availability
+    # guidance also mentions one, and it describes the separate pre-existing
+    # artifact-availability gate rather than input discovery.
+    x402_entries = [
+        g for g in guidance
+        if "stocktrends_preview" in g and "inspect" in g.lower()
+    ]
+    assert x402_entries, f"{guidance_source}: no x402 preview guidance found"
+
+    # Every entry mentioning the 402 preview must carry the qualifier; one
+    # corrected entry alongside an uncorrected one still misleads.
+    for entry in x402_entries:
+        assert "serviceable" in entry, (
+            f"{guidance_source}: a 402 preview guidance entry does not say the "
+            f"request must already be serviceable: {entry!r}"
+        )
+
+    combined = " ".join(x402_entries)
+    assert any(source in combined for source in _SCHEMA_SOURCES), (
+        f"{guidance_source}: the 402 preview guidance does not point agents at "
+        f"a real input-schema source ({' or '.join(_SCHEMA_SOURCES)})"
+    )
+
+
+@pytest.mark.parametrize("guidance_source", ["static", "live"])
+def test_guidance_states_input_errors_precede_payment_challenges(
+    manifest, guidance_source
+):
+    """The precedence itself is stated, not merely implied."""
+    guidance = (
+        manifest["usage_guidance"] if guidance_source == "static"
+        else _live_guidance_strings()
+    )
+
+    combined = " ".join(guidance).lower()
+    assert "before any payment challenge" in combined, (
+        f"{guidance_source}: agents are not told that deterministically invalid "
+        "input is answered before a payment challenge"
+    )
+    assert "400" in combined and "422" in combined, (
+        f"{guidance_source}: the input-error statuses an agent should expect "
+        "instead of a 402 are not named"
+    )
+
+
+def test_llms_txt_documents_the_corrected_x402_flow():
+    """The narrative surface agrees with the machine-readable ones."""
+    text = " ".join(LLMS_TXT.read_text(encoding="utf-8").split())
+
+    assert "otherwise-serviceable request" in text, (
+        "llms.txt no longer tells agents to construct a serviceable request "
+        "before expecting a 402"
+    )
+    assert "not how you discover which parameters an endpoint accepts" in text, (
+        "llms.txt still presents the 402 challenge as the input-discovery "
+        "mechanism"
+    )
+    assert "pricing context headers" in text.lower(), (
+        "llms.txt no longer explains that the price stays discoverable on an "
+        "input error"
+    )

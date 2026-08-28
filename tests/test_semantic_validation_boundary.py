@@ -41,6 +41,8 @@ from pathlib import Path
 # is invisible there, and the parameter would be misread as a query field.
 from fastapi import Request
 
+import pytest
+
 from api.routing import (
     SEMANTIC_VALIDATOR_ATTR,
     get_pre_payment_semantic_validator,
@@ -392,6 +394,17 @@ def test_43d_validator_does_not_change_endpoint_coroutine_kind():
 #           registered pre-payment semantic validator.
 # Class 2 — requires querying or executing paid work.  Must stay after the gate.
 # Class 3 — both; only the class 1 portion moves forward.
+#
+# "class 1-none" marks a governed route that carries no request parameter at
+# all, so there is no request-only rejection to classify in either direction.
+#
+# One boundary these labels do NOT describe: the Intelligence artifact routes
+# have a separate, pre-existing availability gate that fails closed before the
+# normal paid lifecycle when the artifact store is unavailable or the requested
+# artifact is absent.  Those outcomes are neither "moved by PR 3" nor
+# "post-payment" — they were already ahead of payment, by a different mechanism,
+# and this PR did not touch them.  Describing them as class 2 would wrongly
+# imply the caller is charged to discover them.
 # ===========================================================================
 
 # Governed routes whose rejections include a class 1 portion.  The note records
@@ -410,11 +423,17 @@ SEMANTIC_VALIDATION_REQUIRED: dict[tuple[str, str], str] = {
     ("GET", "/v1/indicators/history"): "class 1 — symbol/exchange identity",
     ("GET", "/v1/indicators/latest"): "class 1 — symbol/exchange identity",
     ("GET", "/v1/intelligence/guidance/{artifact_id}"):
-        "class 3 — artifact_id shape moved; store availability and whether the "
-        "artifact exists stay post-payment",
+        "class 1 — artifact_id shape/vocabulary only. Store availability and "
+        "artifact existence/serveability are NOT post-payment here: they are "
+        "governed by the separate pre-existing Intelligence artifact-availability "
+        "gate, which fails closed before the normal paid lifecycle. PR 3 moved "
+        "only the request-only id check; no store access is in the validator",
     ("GET", "/v1/intelligence/research/{artifact_id}"):
-        "class 3 — artifact_id shape moved; store availability and whether the "
-        "artifact exists stay post-payment",
+        "class 1 — artifact_id shape/vocabulary only. Store availability and "
+        "artifact existence/serveability are NOT post-payment here: they are "
+        "governed by the separate pre-existing Intelligence artifact-availability "
+        "gate, which fails closed before the normal paid lifecycle. PR 3 moved "
+        "only the request-only id check; no store access is in the validator",
     ("GET", "/v1/leadership/rotation/history"): "class 1 — optional exchange code",
     ("GET", "/v1/leadership/summary/latest"):
         "class 3 — optional exchange code moved; latest weekdate stays post-payment",
@@ -455,11 +474,17 @@ SEMANTIC_VALIDATION_REQUIRED: dict[tuple[str, str], str] = {
 # from the outside.
 NO_SEMANTIC_VALIDATION_REQUIRED: dict[tuple[str, str], str] = {
     ("GET", "/v1/intelligence/guidance/latest"):
-        "class 2 — takes no parameters; store availability and whether a "
-        "published artifact exists are both discovered by the paid lookup",
+        "class 1-none — carries no request parameter, so there is no request-only "
+        "rejection for PR 3 to move. Store availability and published-artifact "
+        "existence are handled by the separate pre-existing Intelligence "
+        "artifact-availability gate, which runs before the normal paid lifecycle "
+        "rather than after payment",
     ("GET", "/v1/intelligence/research/latest"):
-        "class 2 — takes no parameters; store availability and whether a "
-        "published artifact exists are both discovered by the paid lookup",
+        "class 1-none — carries no request parameter, so there is no request-only "
+        "rejection for PR 3 to move. Store availability and published-artifact "
+        "existence are handled by the separate pre-existing Intelligence "
+        "artifact-availability gate, which runs before the normal paid lifecycle "
+        "rather than after payment",
     ("GET", "/v1/market/regime/forecast"):
         "class 2 — only `lookback`, fully constrained by its Query bounds, which "
         "FastAPI already rejects with a 422 ahead of the gate",
@@ -563,14 +588,23 @@ def test_44d_audit_entries_record_a_classification_and_reason():
             )
 
 
-def test_44e_registered_validators_do_no_database_or_service_work():
+def test_44e_registered_validators_name_no_data_access_directly():
     """
-    Semantic validation must be pure.
+    A cheap secondary net over each validator's own source.
 
-    A validator runs before payment on every probe of a paid endpoint, so a DB
-    read or service call placed there would be unpaid work on requests that
-    never settle — and would move a class 2 rejection in front of the gate.
-    Checked structurally over each distinct validator's source.
+    NOT the purity guarantee.  This scan reads only the validator function's
+    text, and every validator is deliberately a thin adapter delegating to a
+    shared helper — so data access one call away is invisible to it, as is any
+    entry point missing from the token list below.  Two independent mutations
+    demonstrated exactly that: `get_engine()` in the shared screener helper, and
+    `configured_intelligence_artifact_store()` in a registered validator.  Both
+    passed this test while doing unpaid data access.
+
+    `test_46_no_set_a_route_touches_data_before_payment` is the actual
+    enforcement: it poisons the data and service entry points and drives every
+    Class 1 route through the real HTTP boundary.  This one is retained only
+    because it is nearly free and fails a little earlier and more legibly on the
+    most obvious mistake.
     """
     forbidden = (
         "get_engine",
@@ -598,8 +632,8 @@ def test_44e_registered_validators_do_no_database_or_service_work():
                 violations.append(f"{name} references {token!r}")
 
     assert not violations, (
-        "pre-payment semantic validator(s) appear to do data or service work, "
-        "which would execute unpaid before the gate:\n  " + "\n  ".join(violations)
+        "pre-payment semantic validator(s) name a data or service entry point "
+        "directly, which would execute unpaid before the gate:\n  " + "\n  ".join(violations)
     )
 
 
@@ -740,3 +774,257 @@ def test_45d_metering_backstop_still_reads_the_matched_route():
         "the finaliser no longer tests the matched route for the payment "
         "wrapper; the runtime fail-closed backstop is gone"
     )
+
+
+# ===========================================================================
+# 46 — behavioural purity: no unpaid data or service access, proved by poisoning
+#
+# `test_44e` scans each registered validator's source for forbidden tokens.  That
+# is close to vacuous by construction: every validator is deliberately a small
+# adapter that delegates to a shared helper, so the text it contains is a call to
+# that helper and nothing else.  Two independently-authored mutations proved it:
+#
+#   1. `get_engine()` added to `routers.screener.resolve_screener_filters`
+#   2. `configured_intelligence_artifact_store()` added to
+#      `routers.intelligence._validate_artifact_id_values`
+#
+# Both passed the entire suite, and both passed `test_44e`.  Neither token
+# appeared in a *validator's* own source — the first was one call away in the
+# shared helper, and the second was a name the scan did not list.
+#
+# The guard below does not read source at all.  It replaces every unpaid data and
+# service entry point on the governed router surface with a sentinel that records
+# and raises, then drives a representative Class 1 invalid request at every route
+# in `SEMANTIC_VALIDATION_REQUIRED` through the real HTTP boundary.  A correct
+# implementation rejects each one without ever reaching a sentinel; either
+# mutation trips one immediately, wherever in the call chain it was hidden.
+# ===========================================================================
+
+# One representative Class 1 invalid request per governed route requiring
+# semantic validation.  Keyed by the same (method, path) tuples as the audit, so
+# a route added to set A without a probe here fails test_46b rather than being
+# silently skipped by a guard that iterates only what it happens to know about.
+CLASS_1_PROBES: dict[tuple[str, str], tuple[str, dict]] = {
+    ("GET", "/v1/agent/screener/top"): ("/v1/agent/screener/top?sort=bogus", {}),
+    ("GET", "/v1/breadth/sector/history"): ("/v1/breadth/sector/history?exchange=ZZ", {}),
+    ("GET", "/v1/breadth/sector/latest"): ("/v1/breadth/sector/latest?exchange=ZZ", {}),
+    ("POST", "/v1/decision/evaluate-symbol"): ("/v1/decision/evaluate-symbol", {"json": {}}),
+    ("GET", "/v1/indicators/history"): ("/v1/indicators/history?symbol_exchange=IBM", {}),
+    ("GET", "/v1/indicators/latest"): ("/v1/indicators/latest?symbol_exchange=IBM", {}),
+    ("GET", "/v1/intelligence/guidance/{artifact_id}"): (
+        "/v1/intelligence/guidance/bad%5Cid", {},
+    ),
+    ("GET", "/v1/intelligence/research/{artifact_id}"): (
+        "/v1/intelligence/research/bad%5Cid", {},
+    ),
+    ("GET", "/v1/leadership/rotation/history"): (
+        "/v1/leadership/rotation/history?exchange=ZZ", {},
+    ),
+    ("GET", "/v1/leadership/summary/latest"): (
+        "/v1/leadership/summary/latest?exchange=ZZ", {},
+    ),
+    ("POST", "/v1/portfolio/compare"): (
+        "/v1/portfolio/compare",
+        {"json": {
+            "left": [{"symbol_exchange": "IBM", "weight": 1.0}],
+            "right": [{"symbol_exchange": "IBM-N", "weight": 1.0}],
+        }},
+    ),
+    ("POST", "/v1/portfolio/construct"): (
+        "/v1/portfolio/construct", {"json": {"bias": "sideways"}},
+    ),
+    ("POST", "/v1/portfolio/evaluate"): (
+        "/v1/portfolio/evaluate",
+        {"json": {"positions": [{"symbol_exchange": "IBM", "weight": 1.0}]}},
+    ),
+    ("GET", "/v1/prices/history"): ("/v1/prices/history?symbol_exchange=IBM", {}),
+    ("GET", "/v1/prices/latest"): ("/v1/prices/latest?symbol_exchange=IBM", {}),
+    ("GET", "/v1/selections/history"): ("/v1/selections/history?symbol_exchange=IBM", {}),
+    ("GET", "/v1/selections/latest"): ("/v1/selections/latest?exchange=ZZ", {}),
+    ("GET", "/v1/selections/published/history"): (
+        "/v1/selections/published/history?symbol_exchange=IBM", {},
+    ),
+    ("GET", "/v1/selections/published/latest"): (
+        "/v1/selections/published/latest?exchange=ZZ", {},
+    ),
+    ("GET", "/v1/stim/history"): ("/v1/stim/history?symbol_exchange=IBM", {}),
+    ("GET", "/v1/stim/latest"): ("/v1/stim/latest?symbol_exchange=IBM", {}),
+    ("GET", "/v1/stwr/reports/history"): (
+        "/v1/stwr/reports/history?rpt=not-a-report&exchange=N", {},
+    ),
+    ("GET", "/v1/stwr/reports/latest"): (
+        "/v1/stwr/reports/latest?rpt=not-a-report&exchange=N", {},
+    ),
+}
+
+# Names that reach a database, a service or an artifact store.  Poisoned on every
+# module that owns a governed route, plus on `db` itself for anything that
+# resolves the name late.
+UNPAID_ACCESS_ENTRY_POINTS = (
+    "get_engine",
+    "configured_intelligence_artifact_store",
+)
+
+
+class UnpaidDataAccess(RuntimeError):
+    """A semantic validator reached for data or a service before payment."""
+
+
+def _governed_router_modules() -> set:
+    """Every module owning a payment-governed route."""
+    import importlib
+
+    return {
+        importlib.import_module(route.endpoint.__module__)
+        for route, _method in payment_governed_routes()
+    }
+
+
+@pytest.fixture
+def poisoned_data_access(monkeypatch):
+    """
+    Replace every unpaid data/service entry point with a recording sentinel.
+
+    Returns the list of touches.  The sentinel raises as well as recording, so a
+    breach surfaces as a failure even on a path that would swallow the return
+    value — but the recording is what the assertions read, because an endpoint
+    that catches broadly could otherwise turn a breach into an ordinary 500.
+    """
+    touched: list[str] = []
+    targets: list[tuple[object, str]] = []
+
+    # Poisoned on the router modules rather than on `db` itself.  Each router
+    # binds `get_engine` at import time, so its own module global is the name the
+    # endpoint actually resolves — and `db` is a MagicMock in this suite's
+    # infrastructure (see conftest), so patching it would poison nothing.
+    # `services.decision_service` and `regime_service` are pure computation over
+    # rows the endpoint has already fetched and reach no data of their own.
+    for module in _governed_router_modules():
+        for name in UNPAID_ACCESS_ENTRY_POINTS:
+            if hasattr(module, name):
+                targets.append((module, name))
+
+    for module, name in targets:
+        label = f"{module.__name__}.{name}"
+
+        def sentinel(*_args, _label=label, **_kwargs):
+            touched.append(_label)
+            raise UnpaidDataAccess(
+                f"{_label} was called while data access was poisoned. On a "
+                "Class 1 rejection this means semantic validation read data or "
+                "called a service before the payment gate."
+            )
+
+        monkeypatch.setattr(module, name, sentinel)
+
+    # Non-vacuity: a fixture that poisoned nothing would make every assertion
+    # below trivially true.
+    assert len(targets) > 10, (
+        f"only {len(targets)} data/service entry point(s) poisoned; the purity "
+        "guard would be nearly vacuous"
+    )
+    return touched
+
+
+def test_46_no_set_a_route_touches_data_before_payment(
+    payment_harness, poisoned_data_access
+):
+    """
+    Every Class 1 rejection, driven through the real HTTP boundary.
+
+    Four things are asserted per route: the expected input error is returned, no
+    poisoned entry point was touched, no facilitator call was made, and no MPP
+    authorization was opened.  The first is what the caller sees; the rest are
+    what the invariant is actually about.
+    """
+    failures = []
+
+    for (method, path), (url, kwargs) in sorted(CLASS_1_PROBES.items()):
+        before = len(poisoned_data_access)
+
+        response = payment_harness.client.request(
+            method, url, headers=x402_headers(), **kwargs
+        )
+
+        touched = poisoned_data_access[before:]
+        if touched:
+            failures.append(
+                f"{method} {path}: reached {sorted(set(touched))} before payment"
+            )
+            continue
+        if response.status_code not in (400, 422):
+            failures.append(
+                f"{method} {path}: expected a 400/422 input error, got "
+                f"{response.status_code} — {response.text[:160]}"
+            )
+
+    assert not failures, (
+        "pre-payment semantic validation is not pure, or is not rejecting:\n  "
+        + "\n  ".join(failures)
+    )
+
+    assert not poisoned_data_access, (
+        f"unpaid data/service access occurred: {sorted(set(poisoned_data_access))}"
+    )
+    assert payment_harness.verify_count == 0, "facilitator verify ran"
+    assert payment_harness.settle_count == 0, "facilitator settle ran"
+    assert payment_harness.mpp.authorize_count == 0, "MPP authorized"
+
+
+def test_46b_every_set_a_route_has_a_probe():
+    """
+    The guard covers all 23 governed Class 1 routes, not a sample.
+
+    Without this, adding a route to `SEMANTIC_VALIDATION_REQUIRED` and forgetting
+    a probe would leave it unexercised while test_46 still passed.
+    """
+    audited = set(SEMANTIC_VALIDATION_REQUIRED)
+    probed = set(CLASS_1_PROBES)
+
+    missing = audited - probed
+    assert not missing, (
+        "governed route(s) audited as needing semantic validation have no "
+        "behavioural purity probe:\n  "
+        + "\n  ".join(f"{m} {p}" for m, p in sorted(missing))
+    )
+
+    stale = probed - audited
+    assert not stale, (
+        f"purity probes for routes no longer in set A: {sorted(stale)}"
+    )
+
+
+def test_46c_the_poison_fixture_actually_bites(payment_harness, poisoned_data_access):
+    """
+    Positive control for the fixture.
+
+    test_46 asserts an absence, which a fixture that patched the wrong names
+    would satisfy perfectly.  A *valid* request must reach the endpoint and trip
+    a sentinel, proving the poison is on the path the paid work uses.
+    """
+    with pytest.raises(UnpaidDataAccess):
+        payment_harness.client.get(
+            "/v1/prices/history?symbol_exchange=IBM-N", headers=x402_headers()
+        )
+
+    assert poisoned_data_access, (
+        "a valid paid request reached the endpoint without touching any poisoned "
+        "entry point; the fixture is patching names nothing calls, and test_46 "
+        "is proving nothing"
+    )
+    assert "routers.prices.get_engine" in poisoned_data_access, (
+        f"expected the prices engine to be reached, got {poisoned_data_access}"
+    )
+
+
+def test_46d_mpp_class_1_rejections_are_also_pure(payment_harness, poisoned_data_access):
+    """The same sweep on the MPP rail: no control-plane round trip either."""
+    for (method, _path), (url, kwargs) in sorted(CLASS_1_PROBES.items()):
+        payment_harness.client.request(method, url, headers=mpp_headers(), **kwargs)
+
+    assert not poisoned_data_access, (
+        f"unpaid data/service access on the MPP rail: {sorted(set(poisoned_data_access))}"
+    )
+    assert payment_harness.mpp.authorize_count == 0
+    assert payment_harness.mpp.capture_count == 0
+    assert payment_harness.mpp.void_count == 0

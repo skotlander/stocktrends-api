@@ -528,12 +528,21 @@ def test_23d_replay_rejection_records_zero_billed_amount(
 def test_23e_pre_gate_rejection_records_zero_billed_amount(
     payment_harness, priced_engines
 ):
+    """
+    A request denied before the gate collected nothing and consumed nothing.
+
+    `payment_status` was `pending` here until the accounting fix: `pending`
+    means "challenged, awaiting payment", which is a live request an agent may
+    still pay for.  A request rejected on the way in is terminal, so it carries
+    the canonical `rejected` status instead — see `test_33_*` for the full
+    cross-rail matrix and the billing-runbook predicate this protects.
+    """
     payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM", headers=x402_headers()
     )
 
     row = payment_harness.logs.only_economics_row()
-    assert row["payment_status"] == "pending"
+    assert row["payment_status"] == "rejected"
     assert row["billed_amount_usd"] == 0
 
 
@@ -1183,3 +1192,310 @@ def test_32_settled_amount_conversions_and_fallbacks():
             f"{unexpected!r} must fall back to the quoted price"
         )
         assert x402_settled_amount_usd(unexpected, quote) != Decimal("0")
+
+
+# ===========================================================================
+# 33 — a request denied before the gate is not reported usage
+#
+# The economics row is what the billing runbook reads.  Its billable/usage
+# queries select `payment_status IN ('presented', 'covered')` and aggregate
+# `COUNT(*)` and `SUM(stc_cost)` over the result, so the status is not merely a
+# label: it decides whether a request appears in reported customer usage and
+# STC consumption.
+#
+# A semantically invalid MPP request used to fall through the finaliser's
+# rail-specific derivation to `presented`, which put a request that never
+# reached the control plane — no authorization, no capture, nothing billed —
+# into those totals.  No money moved either way; the defect was in what was
+# reported as consumed.
+#
+# `rejected` is the canonical status for this condition.  It is already defined
+# as "request denied" in docs/architecture/request-lifecycle.md, and the runbook
+# already groups it with `failed_validation` in its failed-payment diagnostics
+# rather than in its billable queries.  Nothing about either query changes here;
+# the status is corrected at the point it is written.
+# ===========================================================================
+
+# The runbook's billable/usage predicate, transcribed from
+# docs/operations/billing_runbook.md.  Tests assert against this rather than
+# against a hand-written status list so the two cannot drift apart silently.
+RUNBOOK_BILLABLE_STATUSES = {"presented", "covered"}
+
+# A rejection before the gate is terminal.  `pending` is not a substitute: it
+# means a challenge was issued and the request may still be paid for.
+PRE_GATE_REJECTED_STATUS = "rejected"
+
+_SEMANTIC_INVALID_QUERY = "/v1/prices/history?symbol_exchange=IBM"
+_FRAMEWORK_INVALID_QUERY = "/v1/prices/history?symbol_exchange=IBM-N&limit=0"
+
+
+def _assert_not_reported_as_usage(harness, *, expected_status: str) -> None:
+    """The economics row records a denial, and the runbook cannot count it."""
+    row = harness.logs.only_economics_row()
+
+    assert row["payment_status"] == expected_status, (
+        f"expected payment_status {expected_status!r}, got "
+        f"{row['payment_status']!r}"
+    )
+    assert row["payment_status"] not in RUNBOOK_BILLABLE_STATUSES, (
+        f"payment_status {row['payment_status']!r} satisfies the billing "
+        "runbook's `payment_status IN ('presented', 'covered')` predicate, so "
+        "this request would be counted in reported usage and summed into "
+        "SUM(stc_cost) despite never reaching a payment rail"
+    )
+    assert row["billed_amount_usd"] == 0
+    return row
+
+
+def test_33_semantic_invalid_x402_is_recorded_as_rejected(
+    payment_harness, priced_engines
+):
+    """A valid payment artifact presented with an unservable request."""
+    response = payment_harness.client.get(
+        _SEMANTIC_INVALID_QUERY, headers=x402_headers()
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"]["error"] == "invalid_symbol_exchange"
+    _assert_no_settlement(payment_harness)
+    _assert_not_reported_as_usage(
+        payment_harness, expected_status=PRE_GATE_REJECTED_STATUS
+    )
+
+
+def test_33b_semantic_invalid_mpp_is_recorded_as_rejected(
+    payment_harness, priced_engines
+):
+    """
+    The measured regression, asserted on the axis that was actually wrong.
+
+    Execution behaviour was already correct at PR3 — authorize, capture and void
+    were all zero and nothing was billed.  The economics row was not: it said
+    `presented`, and the runbook counts `presented` as usage.
+    """
+    response = payment_harness.client.get(
+        _SEMANTIC_INVALID_QUERY, headers=mpp_headers()
+    )
+
+    assert response.status_code == 400
+    assert payment_harness.mpp.authorize_count == 0
+    assert payment_harness.mpp.capture_count == 0
+    assert payment_harness.mpp.void_count == 0
+    _assert_not_reported_as_usage(
+        payment_harness, expected_status=PRE_GATE_REJECTED_STATUS
+    )
+
+
+@pytest.mark.parametrize(
+    ("rail", "headers_factory"),
+    [("x402", x402_headers), ("mpp", mpp_headers), ("unpaid", unpaid_headers)],
+)
+def test_33c_framework_invalid_request_is_recorded_as_rejected(
+    payment_harness, priced_engines, rail, headers_factory
+):
+    """
+    The same doctrine for a rejection FastAPI made rather than a validator.
+
+    A query constraint violation is denied before the gate for exactly the same
+    reason a semantic rejection is — the wrapper never reached enforcement — so
+    it carries the same terminal status on every rail.  MPP recorded `presented`
+    here too; this was the second instance of the same defect.
+    """
+    response = payment_harness.client.get(
+        _FRAMEWORK_INVALID_QUERY, headers=headers_factory()
+    )
+
+    assert response.status_code == 422, rail
+    _assert_no_settlement(payment_harness)
+    assert payment_harness.mpp.authorize_count == 0, rail
+    _assert_not_reported_as_usage(
+        payment_harness, expected_status=PRE_GATE_REJECTED_STATUS
+    )
+
+
+@pytest.mark.parametrize(
+    ("rail", "headers_factory"),
+    [("x402", x402_headers), ("mpp", mpp_headers)],
+)
+def test_33d_route_miss_under_a_paid_prefix_is_recorded_as_rejected(
+    payment_harness, rail, headers_factory
+):
+    """
+    A route miss is the same accounting state, reached a step earlier.
+
+    `/v1/stim` is a prefix enforcement scope, so a typo inside it publishes a
+    gate that no wrapper ever invokes.  Nothing matched, nothing ran, nothing
+    was collected — and on MPP it too recorded `presented`.
+    """
+    response = payment_harness.client.get(
+        "/v1/stim/latst", headers=headers_factory()
+    )
+
+    assert response.status_code == 404, rail
+    _assert_no_settlement(payment_harness)
+    _assert_not_reported_as_usage(
+        payment_harness, expected_status=PRE_GATE_REJECTED_STATUS
+    )
+
+
+# ---------------------------------------------------------------------------
+# 33e-33h — the states that must NOT become `rejected`
+#
+# The correction keys off "the gate was never invoked".  Everything below runs
+# with the gate invoked, so each keeps the status it had.  Without these, a
+# discriminator that was too broad would look identical to a correct one.
+# ---------------------------------------------------------------------------
+
+def test_33e_valid_unpaid_request_keeps_its_challenge_status(
+    payment_harness, priced_engines
+):
+    """
+    A challenge is a live request, not a denial.
+
+    The gate is what issues the 402, so the gate *was* invoked and this is not a
+    pre-gate rejection.  `pending` must survive: an agent can still pay for this
+    request, and the economics row is later updated in place when it does.
+    """
+    response = payment_harness.client.get(
+        _VALID_PRICES_QUERY, headers=unpaid_headers()
+    )
+
+    assert response.status_code == 402
+    row = payment_harness.logs.only_economics_row()
+    assert row["payment_status"] == "pending", (
+        "a payment challenge was reclassified as a denial; an agent that pays "
+        "after being challenged would no longer match its own pending row"
+    )
+    assert row["billed_amount_usd"] == 0
+
+
+@pytest.mark.parametrize(
+    ("case", "headers_factory", "setup", "expected_status"),
+    [
+        ("underpaid", lambda: x402_headers(amount="1"), None, "failed_validation"),
+        ("malformed artifact", malformed_x402_headers, None, "failed_validation"),
+        (
+            "replay",
+            lambda: x402_headers(reference="already-spent"),
+            lambda h: h.mark_reference_used("already-spent"),
+            "failed_validation",
+        ),
+        (
+            "verification failure",
+            x402_headers,
+            lambda h: setattr(h.facilitator, "verify_valid", False),
+            "failed_validation",
+        ),
+        (
+            "settlement failure",
+            x402_headers,
+            lambda h: setattr(h.facilitator, "settle_valid", False),
+            "failed",
+        ),
+    ],
+)
+def test_33f_facilitator_side_failures_keep_their_statuses(
+    payment_harness, priced_engines, case, headers_factory, setup, expected_status
+):
+    """
+    Payment-side failures are not pre-gate rejections and must not be relabelled.
+
+    Each of these reached the gate and failed inside it.  Collapsing them into
+    `rejected` would erase the distinction operators use to tell a caller who
+    sent a bad request from a rail that refused a payment.
+    """
+    if setup is not None:
+        setup(payment_harness)
+
+    response = payment_harness.client.get(
+        _VALID_PRICES_QUERY, headers=headers_factory()
+    )
+
+    assert response.status_code == 402, case
+    row = payment_harness.logs.only_economics_row()
+    assert row["payment_status"] == expected_status, case
+    assert row["payment_status"] != PRE_GATE_REJECTED_STATUS, case
+
+
+def test_33g_successful_payments_keep_their_statuses(payment_harness, priced_engines):
+    """Settled and captured are untouched, and remain billable usage."""
+    settled = payment_harness.client.get(_VALID_PRICES_QUERY, headers=x402_headers())
+    assert settled.status_code == 200
+    row = payment_harness.logs.only_economics_row()
+    assert row["payment_status"] == "settled"
+    assert row["billed_amount_usd"] == SENTINEL_UNIT_PRICE_USD
+
+
+def test_33g_mpp_capture_keeps_its_status(payment_harness, priced_engines):
+    response = payment_harness.client.get(_VALID_PRICES_QUERY, headers=mpp_headers())
+
+    assert response.status_code == 200
+    row = payment_harness.logs.only_economics_row()
+    assert row["payment_status"] == "captured"
+    assert row["billed_amount_usd"] == SENTINEL_UNIT_PRICE_USD
+    assert payment_harness.mpp.authorize_count == 1
+    assert payment_harness.mpp.capture_count == 1
+
+
+def test_33h_post_payment_data_failure_stays_settled_and_chargeable(
+    payment_harness, monkeypatch
+):
+    """
+    The permission the correction must not erode.
+
+    A failure discovered by running the paid service settled, so it is reported
+    usage.  A discriminator that keyed off "the response is 4xx" rather than
+    "the gate was never invoked" would wrongly sweep this in and under-report
+    real consumption.
+    """
+    monkeypatch.setattr(prices_router, "get_engine", lambda: rows_engine([]))
+
+    response = payment_harness.client.get(
+        "/v1/prices/latest?symbol_exchange=ZZZZ-N", headers=x402_headers()
+    )
+
+    assert response.status_code == 404
+    row = payment_harness.logs.only_economics_row()
+    assert row["payment_status"] == "settled"
+    assert row["payment_status"] != PRE_GATE_REJECTED_STATUS, (
+        "a failure discovered by paid execution was misclassified as a denial"
+    )
+    assert payment_harness.settle_count == 1
+    assert row["billed_amount_usd"] == SENTINEL_UNIT_PRICE_USD
+
+
+def test_33i_rejected_is_a_documented_canonical_status():
+    """
+    `rejected` is not a status invented by this fix.
+
+    It is already defined in the lifecycle document's status table and already
+    appears in the runbook's failed-payment diagnostics.  Asserted against the
+    documents so that inventing a new status, or the documents drifting away
+    from the code, both fail here.
+    """
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parents[1]
+
+    lifecycle = (repo_root / "docs/architecture/request-lifecycle.md").read_text(
+        encoding="utf-8"
+    )
+    runbook = (repo_root / "docs/operations/billing_runbook.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "| rejected" in lifecycle, (
+        "`rejected` is no longer defined in the lifecycle status table; the "
+        "status this fix writes must remain part of the canonical model"
+    )
+    assert "IN ('failed_validation', 'rejected')" in runbook, (
+        "the runbook no longer groups `rejected` with failed payments"
+    )
+    assert "IN ('presented', 'covered')" in runbook, (
+        "the runbook's billable predicate changed shape; re-verify that "
+        "pre-gate rejections are still excluded from reported usage"
+    )
+    # And the fix must not have been made by editing the query to hide a status.
+    assert PRE_GATE_REJECTED_STATUS not in "presented covered".split(), (
+        "the rejected status must not be part of the billable predicate"
+    )
