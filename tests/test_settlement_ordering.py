@@ -92,6 +92,12 @@ def test_01_malformed_symbol_exchange_does_not_settle(payment_harness, monkeypat
     Non-execution of the paid service is proved by the query counter rather than
     inferred from the status code: a 400 is equally consistent with "the endpoint
     never ran" and "the endpoint ran, queried, and then rejected the input".
+
+    Assertion order is deliberate.  The query-count assertion passes today and
+    must therefore be reached and exercised, so it is placed ahead of the
+    facilitator assertions that raise the expected failure.  Putting the
+    facilitator checks first would short-circuit the test at the xfail and leave
+    the endpoint-nonexecution measurement permanently unevaluated.
     """
     engine, queries = counting_engine([_PRICE_ROW])
     monkeypatch.setattr(prices_router, "get_engine", lambda: engine)
@@ -100,14 +106,19 @@ def test_01_malformed_symbol_exchange_does_not_settle(payment_harness, monkeypat
         "/v1/prices/history?symbol_exchange=IBM", headers=x402_headers()
     )
 
+    # 1. The expected deterministic client-input error.
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "invalid_symbol_exchange"
-    assert payment_harness.verify_count == 0, "facilitator verify must not run"
-    assert payment_harness.settle_count == 0, "facilitator settle must not run"
+
+    # 2. The paid service did not execute.  Passes today; actively exercised.
     assert len(queries) == 0, (
         f"the paid service executed {len(queries)} quer(ies) for a request that "
         "must be rejected before payment"
     )
+
+    # 3-4. No money moved.  These are what fail today.
+    assert payment_harness.verify_count == 0, "facilitator verify must not run"
+    assert payment_harness.settle_count == 0, "facilitator settle must not run"
 
 
 @pytest.mark.xfail(strict=True, reason=PRE_GATE)

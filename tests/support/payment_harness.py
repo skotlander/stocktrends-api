@@ -316,6 +316,11 @@ def assert_mpp_bindings_intact() -> None:
     The check is structural rather than textual: it asserts where the names live,
     not how the import statements are formatted.
     """
+    # Scope: these two modules are the complete set of known production callers
+    # of the MPP control plane today -- `payments.mpp` for authorize, and the
+    # `middleware.metering` finaliser for capture and void.  The enumeration is
+    # deliberately explicit rather than a repository-wide scan.  A newly
+    # introduced caller must be added here, or the guard will not cover it.
     import middleware.metering as _metering
     import payments.mpp as _mpp
 
