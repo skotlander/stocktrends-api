@@ -46,7 +46,7 @@ def _stub_runtime(monkeypatch):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0"), Decimal("0"), Decimal("0")),
+        lambda *a, **kw: (Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *a, **kw: None)
 

@@ -29,8 +29,6 @@ from support.payment_harness import (
     v1_path,
 )
 
-WRAPPER_PENDING = "PR2: universal v1 endpoint wrapper not yet installed"
-
 
 # ---------------------------------------------------------------------------
 # 0 — spy integrity
@@ -38,10 +36,11 @@ WRAPPER_PENDING = "PR2: universal v1 endpoint wrapper not yet installed"
 # These run unmarked and standalone.  Both guards are also invoked from their
 # respective fixtures, but a fixture-raised failure inside an xfail-marked test
 # is swallowed as an expected failure: xfail masks setup errors, not just
-# assertion errors.  With 16 strict xfails in the acceptance suite, a broken
-# attach point could therefore leave the suite green while real settlements went
-# unobserved.  Calling the guards directly from unmarked tests removes that
-# dependence on collateral failures elsewhere.
+# assertion errors.  While strict xfails remain in the acceptance suite (the
+# semantic cases deferred to PR 3), a broken attach point could therefore leave
+# the suite green while real settlements went unobserved.  Calling the guards
+# directly from unmarked tests removes that dependence on collateral failures
+# elsewhere.
 # ---------------------------------------------------------------------------
 
 def test_facilitator_spy_attach_points_are_intact():
@@ -72,7 +71,6 @@ def test_v1_exposes_api_routes_to_guard():
     assert len(routes) > 20, f"expected the full v1 surface, found {len(routes)}"
 
 
-@pytest.mark.xfail(strict=True, reason=WRAPPER_PENDING)
 def test_21_every_v1_api_route_carries_the_payment_wrapper():
     """
     The wrapper is installed on every v1 APIRoute, not only on routes currently
@@ -98,7 +96,6 @@ def test_21_every_v1_api_route_carries_the_payment_wrapper():
     )
 
 
-@pytest.mark.xfail(strict=True, reason=WRAPPER_PENDING)
 def test_21b_wrapper_preserves_endpoint_coroutine_kind():
     """
     FastAPI derives threadpool-vs-await from `iscoroutinefunction(dependant.call)`
@@ -252,6 +249,21 @@ def test_fastapi_endpoint_seam_still_behaves_as_verified():
         "the Request without it"
     )
 
+    # The wrapper obtains its Request by setting `request_param_name` and
+    # reading the key back out of the solved values.  Existence of the field is
+    # not enough: solve_dependencies must still populate the values from it, and
+    # must do so from the name rather than from a declared endpoint parameter —
+    # seven v1 routes declare no Request at all and depend entirely on the
+    # injected name.  Without this, the wrapper would fail closed on every such
+    # route and the API would 500 instead of serving.
+    from fastapi.dependencies.utils import solve_dependencies
+
+    solve_source = inspect.getsource(solve_dependencies)
+    assert "values[dependant.request_param_name] = request" in solve_source, (
+        "solve_dependencies no longer populates the solved values from "
+        "dependant.request_param_name; the wrapper's request injection is broken"
+    )
+
     source = inspect.getsource(run_endpoint_function)
     assert "dependant.call(**values)" in source, (
         "run_endpoint_function no longer invokes dependant.call directly"
@@ -294,3 +306,169 @@ def test_solve_dependencies_still_runs_sub_dependencies_before_param_validation(
         "sub-dependency invocation no longer precedes parameter validation; "
         "the rationale for rejecting a Depends()-based payment gate has changed"
     )
+
+
+# ---------------------------------------------------------------------------
+# 24 — startup verification
+#
+# Coverage is enforced at application initialization, not only under pytest.
+# A route that reaches the surface unwrapped can serve paid work with no gate,
+# so the application must refuse to start rather than log about it afterwards.
+# ---------------------------------------------------------------------------
+
+def _probe_app():
+    """A minimal app whose single route is payment-governed by path."""
+    from fastapi import FastAPI
+
+    app = FastAPI()
+
+    @app.get("/stim/probe")
+    def probe():
+        return {"paid": True}
+
+    return app
+
+
+def test_24_startup_verification_accepts_a_fully_wrapped_surface():
+    from api.routing import (
+        assert_payment_boundary_complete,
+        install_payment_execution_boundary,
+    )
+
+    app = _probe_app()
+    assert install_payment_execution_boundary(app) == 1
+    assert assert_payment_boundary_complete(app) == 1
+
+
+def test_24b_startup_verification_rejects_an_unwrapped_route():
+    """
+    The failure mode the backstop exists for, caught one layer earlier.
+
+    A route registered after installation carries no boundary.  Initialization
+    must fail loudly and name the offending route rather than starting an
+    application that would serve it unpaid.
+    """
+    from api.routing import (
+        PaymentExecutionBoundaryError,
+        assert_payment_boundary_complete,
+        install_payment_execution_boundary,
+    )
+
+    app = _probe_app()
+    install_payment_execution_boundary(app)
+
+    @app.get("/stim/registered-too-late")
+    def late():
+        return {"paid": True}
+
+    with pytest.raises(PaymentExecutionBoundaryError) as excinfo:
+        assert_payment_boundary_complete(app)
+
+    message = str(excinfo.value)
+    assert "/stim/registered-too-late" in message, (
+        f"the diagnostic must identify the unwrapped route; got: {message}"
+    )
+    assert "/stim/probe" not in message, "the wrapped route must not be reported"
+
+
+def test_24c_startup_verification_rejects_a_vacuous_surface():
+    """"every route is wrapped" is trivially true of no routes at all."""
+    from fastapi import FastAPI
+
+    from api.routing import (
+        PaymentExecutionBoundaryError,
+        assert_payment_boundary_complete,
+    )
+
+    with pytest.raises(PaymentExecutionBoundaryError, match="vacuous"):
+        assert_payment_boundary_complete(FastAPI(), expected_minimum=1)
+
+
+def test_24d_installer_is_idempotent():
+    """A second install must not double-wrap or re-mark an already-wrapped route."""
+    from api.routing import install_payment_execution_boundary, is_payment_wrapped
+
+    app = _probe_app()
+    assert install_payment_execution_boundary(app) == 1
+    first_call = app.routes[-1].dependant.call
+
+    assert install_payment_execution_boundary(app) == 0, (
+        "an already-wrapped route must not be wrapped a second time"
+    )
+    assert app.routes[-1].dependant.call is first_call
+    assert is_payment_wrapped(app.routes[-1])
+
+
+def test_24e_live_v1_surface_passes_startup_verification():
+    """The real application's surface satisfies the invariant main.py asserts."""
+    import main
+    from api.routing import assert_payment_boundary_complete
+
+    assert assert_payment_boundary_complete(main.v1, expected_minimum=20) > 20
+
+
+# ---------------------------------------------------------------------------
+# 25 — the wrapper fails closed when it cannot see the request
+# ---------------------------------------------------------------------------
+
+def test_25_wrapper_refuses_to_execute_without_the_request():
+    """
+    An installed wrapper that cannot recover the `Request` cannot read
+    `request.state`, so it cannot know whether a payment gate is pending.
+    Proceeding there would execute a paid endpoint unpaid, so it must raise.
+    """
+    from api.routing import (
+        BOUNDARY_REQUEST_VALUE_KEY,
+        PaymentExecutionBoundaryError,
+        install_payment_execution_boundary,
+    )
+
+    executed = []
+
+    from fastapi import FastAPI
+
+    app = FastAPI()
+
+    @app.get("/stim/probe")
+    def probe():
+        executed.append(1)
+        return {"paid": True}
+
+    install_payment_execution_boundary(app)
+    route = app.routes[-1]
+
+    # The endpoint declares no Request, so the installer injected the parameter
+    # name.  Invoking the wrapped call without that value is exactly what a
+    # framework change in solve_dependencies would produce.
+    assert route.dependant.request_param_name == BOUNDARY_REQUEST_VALUE_KEY
+
+    with pytest.raises(PaymentExecutionBoundaryError):
+        route.dependant.call()
+
+    assert not executed, "the endpoint body must not run when the gate is unreadable"
+
+
+def test_25b_wrapper_proceeds_when_the_injected_request_carries_no_gate():
+    """The complement: an injected request with no gate is the inert path."""
+    from types import SimpleNamespace
+
+    from api.routing import (
+        BOUNDARY_REQUEST_VALUE_KEY,
+        install_payment_execution_boundary,
+    )
+
+    from fastapi import FastAPI
+
+    app = FastAPI()
+
+    @app.get("/stim/probe")
+    def probe():
+        return {"paid": True}
+
+    install_payment_execution_boundary(app)
+    route = app.routes[-1]
+
+    free_request = SimpleNamespace(state=SimpleNamespace())
+    assert route.dependant.call(**{BOUNDARY_REQUEST_VALUE_KEY: free_request}) == {
+        "paid": True
+    }

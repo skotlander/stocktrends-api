@@ -3,6 +3,7 @@ import os
 import re
 import time
 import logging
+from dataclasses import dataclass
 from uuid import uuid4
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -12,6 +13,11 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from fastapi import Request
 
+from api.routing import (
+    BOUNDARY_NOT_CONSULTED_ERROR,
+    PAYMENT_GATE_STATE_ATTR,
+    is_payment_wrapped,
+)
 from metering.logger import (
     log_api_request_event,
     log_api_request_economics,
@@ -60,6 +66,99 @@ AGENT_PAY_TEST_CUSTOMER_IDS = _parse_csv_env("AGENT_PAY_TEST_CUSTOMER_IDS")
 AGENT_PAY_TEST_API_KEY_IDS = _parse_csv_env("AGENT_PAY_TEST_API_KEY_IDS")
 PAYMENT_RESPONSE_CACHE_CONTROL = "no-store, private"
 FREE_CACHEABLE_PRICING_RULE_IDS = {"default_free", "default_free_metered"}
+
+
+@dataclass
+class PaymentExecutionState:
+    """
+    Payment enforcement facts produced at the endpoint execution seam.
+
+    Enforcement used to run in this middleware's own frame, so the finaliser
+    could simply read its locals after `call_next()`.  It now runs inside the
+    endpoint wrapper, which is a different frame entirely, so the facts travel
+    back on `request.state` instead.  MPP capture/void depends on that handoff:
+    without `enforcement_result` the finaliser cannot tell an authorized
+    session from one that was never opened, and would either lose a capture or
+    leave a dangling authorization.
+
+    The header fields are seeded from the inbound request so the enforcement
+    layer's "use the verified value, else keep the presented one" fallbacks
+    survive the move unchanged.
+    """
+
+    payment_reference: str | None = None
+    payment_network: str | None = None
+    payment_token: str | None = None
+    payment_amount: str | None = None
+    payment_channel_id: str | None = None
+
+    validation_valid: bool = True
+    validation_error: str | None = None
+    validation_detail: str | None = None
+
+    enforcement_result: object | None = None
+
+    # True only where money actually moved: x402 settled, or MPP captured.
+    # `collected_amount_usd` is what that collection actually took, and is the
+    # sole source of `billed_amount_usd`.  Price lookup never supplies it.
+    collected: bool = False
+    collected_amount_usd: Decimal | None = None
+
+    # Recorded when the gate itself rejects the request, so the finaliser
+    # reports that rejection rather than re-deriving it from a 402 it did not
+    # produce.
+    rejected: bool = False
+    accepted_methods: str | None = None
+    event_error_code: str | None = None
+    event_notes: str | None = None
+    econ_payment_fields: dict | None = None
+
+
+class DeferredPaymentGate:
+    """
+    One-shot payment enforcement, invoked at the endpoint execution seam.
+
+    The endpoint wrapper calls this once per request, but one-shot behaviour is
+    guaranteed by construction rather than by convention: a second call returns
+    the first call's answer without verifying again, settling again, or opening
+    a second MPP authorization.
+
+    The outcome is terminal in both directions.  A raising enforcement attempt
+    caches its exception and re-raises it on every later call, so a failed
+    attempt can never decay into the `None` that means "proceed" — which is
+    what a bare `_invoked = True` before the call would have produced.
+    """
+
+    __slots__ = ("_enforce", "_invoked", "_response", "_exception")
+
+    def __init__(self, enforce):
+        self._enforce = enforce
+        self._invoked = False
+        self._response = None
+        self._exception = None
+
+    @property
+    def invoked(self) -> bool:
+        return self._invoked
+
+    @property
+    def failed(self) -> bool:
+        """True when the single enforcement attempt raised."""
+        return self._exception is not None
+
+    def __call__(self):
+        if self._invoked:
+            if self._exception is not None:
+                raise self._exception
+            return self._response
+
+        self._invoked = True
+        try:
+            self._response = self._enforce()
+        except BaseException as exc:
+            self._exception = exc
+            raise
+        return self._response
 
 
 def validate_payment_headers(request: Request):
@@ -305,22 +404,51 @@ def get_active_pricing_rule(rule_name: str | None) -> dict | None:
         return None
 
 
-def resolve_economic_amounts(rule_name: str | None) -> tuple[Decimal, Decimal, Decimal]:
+def resolve_economic_amounts(rule_name: str | None) -> tuple[Decimal, Decimal]:
+    """
+    Resolve what the priced operation is worth, from the pricing rule alone.
+
+    Returns `(unit_price_usd, stc_cost)`.
+
+    There is deliberately no billed amount here.  `billed_amount_usd` records
+    what a payment rail actually collected, which price lookup cannot know: it
+    is an outcome of enforcement, decided at the gate, not a value read from a
+    catalogue.  Returning one from here is what previously let a list price be
+    logged as a collected amount on requests that never paid.
+    """
     rule = get_active_pricing_rule(rule_name)
     if not rule:
-        return Decimal("0"), Decimal("0"), Decimal("0")
+        return Decimal("0"), Decimal("0")
 
     unit_price_usd = safe_decimal(rule.get("cost_per_request"), "0")
-    access_type = rule.get("access_type")
-
-    if access_type == "paid":
-        billed_amount_usd = unit_price_usd
-    else:
-        billed_amount_usd = Decimal("0")
-
     stc_cost = unit_price_usd
 
-    return unit_price_usd, billed_amount_usd, stc_cost
+    return unit_price_usd, stc_cost
+
+
+def x402_settled_amount_usd(
+    payment_amount_native,
+    unit_price_usd: Decimal,
+) -> Decimal:
+    """
+    USD actually settled for a successful x402 payment.
+
+    The native amount is the atomic token value the artifact authorized and the
+    facilitator settled, so it converts with the same token-decimal semantics
+    used for `payment_amount_usd` elsewhere in this module.  Where enforcement
+    surfaced no native amount, successful settlement still guarantees the quoted
+    requirement was satisfied, so the quoted unit price is the correct fallback
+    — never a larger list price and never the STC cost.
+    """
+    if payment_amount_native is None:
+        return unit_price_usd
+
+    try:
+        return safe_decimal(payment_amount_native) / Decimal(
+            10 ** X402_DEFAULT_TOKEN_DECIMALS
+        )
+    except (InvalidOperation, TypeError, ValueError, ZeroDivisionError):
+        return unit_price_usd
 
 
 def build_econ_payment_fields(
@@ -994,13 +1122,22 @@ class MeteringMiddleware(BaseHTTPMiddleware):
         request.state.econ_payment_status = decision.econ_payment_status
 
         economic_rule_name = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
-        unit_price_usd, billed_amount_usd, stc_cost = resolve_economic_amounts(economic_rule_name)
-        # Subscription and other quota-based callers are not billed per-request.
-        # Zero billed_amount so the economics log never implies a charge that
-        # wasn't collected.  stc_cost is preserved — it is the STC-equivalent
-        # value used for analytics and future control-plane intelligence.
-        if decision.econ_payment_required == 0:
-            billed_amount_usd = Decimal("0")
+        unit_price_usd, stc_cost = resolve_economic_amounts(economic_rule_name)
+        # The three economics fields answer three different questions and must
+        # never be conflated:
+        #
+        #   unit_price_usd     what the operation is quoted at, collected or not
+        #   stc_cost           the Stock Trends analytical/economic value measure
+        #   billed_amount_usd  what a payment rail actually collected
+        #
+        # billed_amount_usd has no pre-payment source at all: price resolution
+        # does not return one.  It starts at zero and is set from the collection
+        # the gate confirms — the settled x402 amount, or the captured MPP
+        # amount.  Every other state (challenge, malformed artifact, replay,
+        # verification or settlement failure, framework rejection before the
+        # gate, route miss, subscription quota) leaves it at zero, so a row
+        # never implies a charge that was not taken.
+        billed_amount_usd = Decimal("0")
         workflow_type = normalize_workflow_type(auth_mode, agent_identifier)
         resolved_payment_method = payment_method_header or decision.log_payment_method
         effective_payment_method = (
@@ -1209,44 +1346,82 @@ class MeteringMiddleware(BaseHTTPMiddleware):
 
         should_enforce_agent_pay = should_enforce_agent_pay_for_request(request, path, method, decision)
 
-        validation_valid = True
-        validation_error = None
-        validation_detail = None
-        validated_payment_reference = None
-        validated_payment_network = None
-        validated_payment_token = None
-        validated_payment_amount_native = None
-        payment_channel_id = None
+        # ------------------------------------------------------------------
+        # Deferred payment gate
+        #
+        # Enforcement deliberately does NOT run here.  Middleware executes
+        # before routing, so settling at this point charges for requests
+        # FastAPI has not yet accepted: a path matching no route, a body that
+        # does not parse, a query value outside its declared constraints.
+        # Everything above this line is pre-routing work that moves no money —
+        # auth context, pricing classification, rail resolution, pricing
+        # metadata.
+        #
+        # The gate below is published on request.state and invoked by the
+        # endpoint wrapper (api/routing.py) at `dependant.call`, which FastAPI
+        # reaches only once route matching, body parsing and Pydantic/query
+        # validation have all succeeded.
+        #
+        # Its result is published back on request.state rather than left in
+        # this frame: the finaliser runs after call_next() and can no longer
+        # assume enforcement happened in its own scope.  MPP capture/void
+        # depends on that handoff.
+        # ------------------------------------------------------------------
+        gate_state = PaymentExecutionState(
+            payment_reference=payment_reference_header,
+            payment_network=payment_network_header,
+            payment_token=payment_token_header,
+            payment_amount=payment_amount_header,
+        )
+        request.state.payment_enforcement = gate_state
 
-        if should_validate_agent_pay:
-            if is_x402_payment_method(normalized_payment_method):
-                x402_result = validate_x402_payment(
-                    request.headers,
-                    required_amount_usd=unit_price_usd,
-                )
-                validation_valid = x402_result.valid
-                validation_error = x402_result.error_code
-                validation_detail = x402_result.error_detail
-                validated_payment_reference = x402_result.payment_reference
-                validated_payment_network = x402_result.payment_network
-                validated_payment_token = x402_result.payment_token
-                validated_payment_amount_native = x402_result.payment_amount_native
-            else:
-                validation_valid, validation_error, validation_detail = validate_payment_headers(request)
+        def run_payment_gate():
+            """
+            Validate and enforce payment for a request FastAPI has accepted.
 
-        enforcement_result = None
+            Returns the response to send in place of executing the endpoint, or
+            None when the caller may proceed.  Records what happened on
+            `gate_state` so the finaliser can log it and settle MPP correctly.
+            """
+            validated_payment_reference = None
+            validated_payment_network = None
+            validated_payment_token = None
+            validated_payment_amount_native = None
 
-        if should_enforce_agent_pay and decision.econ_payment_required == 1:
+            if should_validate_agent_pay:
+                if is_x402_payment_method(normalized_payment_method):
+                    x402_result = validate_x402_payment(
+                        request.headers,
+                        required_amount_usd=unit_price_usd,
+                    )
+                    gate_state.validation_valid = x402_result.valid
+                    gate_state.validation_error = x402_result.error_code
+                    gate_state.validation_detail = x402_result.error_detail
+                    validated_payment_reference = x402_result.payment_reference
+                    validated_payment_network = x402_result.payment_network
+                    validated_payment_token = x402_result.payment_token
+                    validated_payment_amount_native = x402_result.payment_amount_native
+                else:
+                    (
+                        gate_state.validation_valid,
+                        gate_state.validation_error,
+                        gate_state.validation_detail,
+                    ) = validate_payment_headers(request)
+
+            if not (should_enforce_agent_pay and decision.econ_payment_required == 1):
+                return None
+
+            local_enforcement_result = None
             if payment_rail in {"x402", "mpp"}:
-                enforcement_result = enforce_payment_rail(
+                local_enforcement_result = enforce_payment_rail(
                     payment_rail=payment_rail,
                     headers=request.headers,
                     path=path,
                     method=method,
                     amount_usd=unit_price_usd,
-                    validation_valid=validation_valid,
-                    validation_error=validation_error,
-                    validation_detail=validation_detail,
+                    validation_valid=gate_state.validation_valid,
+                    validation_error=gate_state.validation_error,
+                    validation_detail=gate_state.validation_detail,
                     validated_payment_reference=validated_payment_reference,
                     validated_payment_network=validated_payment_network,
                     validated_payment_token=validated_payment_token,
@@ -1255,14 +1430,52 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                     pricing_rule_id=economic_rule_name,
                     request_id=request_id,
                 )
+                gate_state.enforcement_result = local_enforcement_result
+
+            pricing_rule_for_headers = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
+
+            def reject(
+                *,
+                enforcement,
+                content: dict,
+                accepted_methods: str,
+                event_error_code: str,
+                event_notes: str | None,
+                econ_payment_fields: dict,
+                payment_required_header: str | None = None,
+            ):
+                """Build the 402 and record what the finaliser must report."""
+                rejection = JSONResponse(status_code=402, content=content)
+                if payment_required_header is not None:
+                    rejection.headers["PAYMENT-REQUIRED"] = payment_required_header
+
+                gate_state.rejected = True
+                gate_state.accepted_methods = accepted_methods
+                gate_state.event_error_code = event_error_code
+                gate_state.event_notes = event_notes
+                gate_state.econ_payment_fields = econ_payment_fields
+
+                # A conformant x402 client sends only `X-Payment`, so the
+                # network and token are known from the enforcement result rather
+                # than from any inbound Stock Trends header.  Carry them onto the
+                # state the request-event builder reads, or api_request_logs
+                # loses that context on every rejection — the economics row keeps
+                # it, the event row would not.
+                if enforcement is not None:
+                    gate_state.payment_network = (
+                        enforcement.payment_network or payment_network_header
+                    )
+                    gate_state.payment_token = (
+                        enforcement.payment_token or payment_token_header
+                    )
+                return rejection
 
             if payment_rail == "x402":
-                if enforcement_result.outcome == "challenge":
+                if local_enforcement_result.outcome == "challenge":
                     # Resolve accepted methods from policy before building the
                     # response so both the header and the body carry the full
                     # endpoint capability list (subscription,x402,mpp for paid
                     # endpoints) rather than the selected challenge rail only.
-                    pricing_rule_for_headers = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
                     accepted_methods_str = get_accepted_payment_methods(
                         path,
                         pricing_rule_for_headers,
@@ -1270,7 +1483,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                     )
 
                     # Shallow-copy so we don't mutate the cached enforcement result.
-                    challenge_body = dict(enforcement_result.challenge_body)
+                    challenge_body = dict(local_enforcement_result.challenge_body)
                     challenge_body["accepted_payment_methods"] = accepted_methods_str.split(",")
                     # Inject non-sensitive schema preview for known agent endpoints only.
                     # Omitted entirely for unknown paths; never contains live data.
@@ -1282,617 +1495,307 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                     )
                     if _preview is not None:
                         challenge_body["stocktrends_preview"] = _preview
-                    payment_required_header = enforcement_result.payment_required_header
 
-                    response = JSONResponse(
-                        status_code=402,
+                    return reject(
+                        enforcement=local_enforcement_result,
                         content=challenge_body,
-                    )
-                    response.headers["PAYMENT-REQUIRED"] = payment_required_header
-
-                    apply_pricing_headers(
-                        response,
-                        pricing_rule_id=pricing_rule_for_headers,
-                        payment_required=True,
                         accepted_methods=accepted_methods_str,
-                    )
-
-                    latency_ms = int((time.time() - start_time) * 1000)
-
-                    event = build_request_event(
-                        request_id=request_id,
-                        environment="production",
-                        api_key_id=api_key_id,
-                        customer_id=customer_id,
-                        subscription_id=subscription_id,
-                        plan_code=plan_code,
-                        actor_type=actor_type,
-                        workflow_type=workflow_type,
-                        agent_identifier=agent_identifier,
-                        agent_registry_id=agent_registry_id,
-                        path=path,
-                        method=method,
-                        query_string=query_string,
-                        request=request,
-                        status_code=402,
-                        success=0,
-                        latency_ms=latency_ms,
-                        response=response,
-                        decision=decision,
-                        payment_rail=payment_rail,
-                        payment_method=resolved_payment_method,
-                        payment_network=enforcement_result.payment_network or payment_network_header,
-                        payment_token=enforcement_result.payment_token or payment_token_header,
-                        error_code="payment_required",
-                        notes="x402 payment required",
-                    )
-
-                    try:
-                        log_api_request_event(event)
-                    except Exception as e:
-                        logger.error("Metering request-log insert failed: %s", e, exc_info=True)
-
-                    if should_log_economics(decision):
-                        econ_payment_fields = {
+                        event_error_code="payment_required",
+                        event_notes="x402 payment required",
+                        payment_required_header=local_enforcement_result.payment_required_header,
+                        econ_payment_fields={
                             "payment_status": "pending",
                             "payment_method": payment_method_header or decision.econ_payment_method,
-                            "payment_network": enforcement_result.payment_network or payment_network_header,
-                            "payment_token": enforcement_result.payment_token or payment_token_header,
+                            "payment_network": local_enforcement_result.payment_network or payment_network_header,
+                            "payment_token": local_enforcement_result.payment_token or payment_token_header,
                             "payment_amount_native": None,
                             "payment_amount_usd": None,
                             "payment_reference": None,
-                        }
-
-                        econ = build_request_econ(
-                            request_id=request_id,
-                            customer_id=customer_id,
-                            api_key_id=api_key_id,
-                            pricing_rule_id=economic_rule_name,
-                            unit_price_usd=unit_price_usd,
-                            billed_amount_usd=billed_amount_usd,
-                            stc_cost=stc_cost,
-                            payment_required=1,
-                            payment_rail=payment_rail,
-                            payment_channel_id=enforcement_result.payment_channel_id,
-                            econ_payment_fields=econ_payment_fields,
-                            session_id_header=session_id_header,
-                            agent_registry_id=agent_registry_id,
-                            agent_type=agent_type_header,
-                            agent_vendor=agent_vendor_header,
-                            agent_version=agent_version_header,
-                            request_purpose=request_purpose_header,
-                        )
-
-                        try:
-                            log_api_request_economics(econ)
-                        except Exception as e:
-                            logger.error("Metering economics-log insert failed: %s", e, exc_info=True)
-
-                    return response
-
-                if enforcement_result.outcome == "validation_failed":
-                    response = JSONResponse(
-                        status_code=402,
-                        content={
-                            "error": enforcement_result.error_code,
-                            "detail": enforcement_result.error_detail,
-                            "request_id": request_id,
                         },
                     )
 
-                    pricing_rule_for_headers = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
-                    apply_pricing_headers(
-                        response,
-                        pricing_rule_id=pricing_rule_for_headers,
-                        payment_required=True,
-                        accepted_methods=get_accepted_payment_methods(
-                            path,
-                            pricing_rule_for_headers,
-                            method=method,
-                            enforced_payment_method="x402",
-                        ),
-                    )
+                x402_rejection_methods = get_accepted_payment_methods(
+                    path,
+                    pricing_rule_for_headers,
+                    method=method,
+                    enforced_payment_method="x402",
+                )
+                x402_amount_native = (
+                    float(local_enforcement_result.payment_amount_native)
+                    if local_enforcement_result.payment_amount_native is not None
+                    else None
+                )
 
-                    latency_ms = int((time.time() - start_time) * 1000)
-
-                    event = build_request_event(
-                        request_id=request_id,
-                        environment="production",
-                        api_key_id=api_key_id,
-                        customer_id=customer_id,
-                        subscription_id=subscription_id,
-                        plan_code=plan_code,
-                        actor_type=actor_type,
-                        workflow_type=workflow_type,
-                        agent_identifier=agent_identifier,
-                        agent_registry_id=agent_registry_id,
-                        path=path,
-                        method=method,
-                        query_string=query_string,
-                        request=request,
-                        status_code=402,
-                        success=0,
-                        latency_ms=latency_ms,
-                        response=response,
-                        decision=decision,
-                        payment_rail=payment_rail,
-                        payment_method=resolved_payment_method,
-                        payment_network=enforcement_result.payment_network or payment_network_header,
-                        payment_token=enforcement_result.payment_token or payment_token_header,
-                        error_code=enforcement_result.error_code,
-                        notes=enforcement_result.error_detail,
-                    )
-
-                    try:
-                        log_api_request_event(event)
-                    except Exception as e:
-                        logger.error("Metering request-log insert failed: %s", e, exc_info=True)
-
-                    if should_log_economics(decision):
-                        econ_payment_fields = {
+                if local_enforcement_result.outcome == "validation_failed":
+                    return reject(
+                        enforcement=local_enforcement_result,
+                        content={
+                            "error": local_enforcement_result.error_code,
+                            "detail": local_enforcement_result.error_detail,
+                            "request_id": request_id,
+                        },
+                        accepted_methods=x402_rejection_methods,
+                        event_error_code=local_enforcement_result.error_code,
+                        event_notes=local_enforcement_result.error_detail,
+                        econ_payment_fields={
                             "payment_status": "failed_validation",
                             "payment_method": payment_method_header or decision.econ_payment_method,
-                            "payment_network": enforcement_result.payment_network or payment_network_header,
-                            "payment_token": enforcement_result.payment_token or payment_token_header,
-                            "payment_amount_native": float(enforcement_result.payment_amount_native) if enforcement_result.payment_amount_native is not None else None,
+                            "payment_network": local_enforcement_result.payment_network or payment_network_header,
+                            "payment_token": local_enforcement_result.payment_token or payment_token_header,
+                            "payment_amount_native": x402_amount_native,
                             "payment_amount_usd": None,
-                            "payment_reference": enforcement_result.payment_reference,
-                        }
+                            "payment_reference": local_enforcement_result.payment_reference,
+                        },
+                    )
 
-                        econ = build_request_econ(
-                            request_id=request_id,
-                            customer_id=customer_id,
-                            api_key_id=api_key_id,
-                            pricing_rule_id=economic_rule_name,
-                            unit_price_usd=unit_price_usd,
-                            billed_amount_usd=billed_amount_usd,
-                            stc_cost=stc_cost,
-                            payment_required=1,
-                            payment_rail=payment_rail,
-                            payment_channel_id=enforcement_result.payment_channel_id,
-                            econ_payment_fields=econ_payment_fields,
-                            session_id_header=session_id_header,
-                            agent_registry_id=agent_registry_id,
-                            agent_type=agent_type_header,
-                            agent_vendor=agent_vendor_header,
-                            agent_version=agent_version_header,
-                            request_purpose=request_purpose_header,
-                        )
+                replay_reference = local_enforcement_result.payment_reference
 
-                        try:
-                            log_api_request_economics(econ)
-                        except Exception as e:
-                            logger.error("Metering economics-log insert failed: %s", e, exc_info=True)
-
-                    return response
-
-                replay_reference = enforcement_result.payment_reference
-                if enforcement_result.outcome == "replay_detected":
-                    response = JSONResponse(
-                        status_code=402,
+                if local_enforcement_result.outcome == "replay_detected":
+                    return reject(
+                        enforcement=local_enforcement_result,
                         content={
                             "error": "replay_detected",
                             "detail": "Payment reference has already been used.",
                             "request_id": request_id,
                         },
-                    )
-
-                    pricing_rule_for_headers = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
-                    apply_pricing_headers(
-                        response,
-                        pricing_rule_id=pricing_rule_for_headers,
-                        payment_required=True,
-                        accepted_methods=get_accepted_payment_methods(
-                            path,
-                            pricing_rule_for_headers,
-                            method=method,
-                            enforced_payment_method="x402",
-                        ),
-                    )
-
-                    latency_ms = int((time.time() - start_time) * 1000)
-
-                    event = build_request_event(
-                        request_id=request_id,
-                        environment="production",
-                        api_key_id=api_key_id,
-                        customer_id=customer_id,
-                        subscription_id=subscription_id,
-                        plan_code=plan_code,
-                        actor_type=actor_type,
-                        workflow_type=workflow_type,
-                        agent_identifier=agent_identifier,
-                        agent_registry_id=agent_registry_id,
-                        path=path,
-                        method=method,
-                        query_string=query_string,
-                        request=request,
-                        status_code=402,
-                        success=0,
-                        latency_ms=latency_ms,
-                        response=response,
-                        decision=decision,
-                        payment_rail=payment_rail,
-                        payment_method=resolved_payment_method,
-                        payment_network=enforcement_result.payment_network or payment_network_header,
-                        payment_token=enforcement_result.payment_token or payment_token_header,
-                        error_code=enforcement_result.error_code,
-                        notes=enforcement_result.error_detail,
-                    )
-
-                    try:
-                        log_api_request_event(event)
-                    except Exception as e:
-                        logger.error("Metering request-log insert failed: %s", e, exc_info=True)
-
-                    if should_log_economics(decision):
-                        econ_payment_fields = {
+                        accepted_methods=x402_rejection_methods,
+                        event_error_code=local_enforcement_result.error_code,
+                        event_notes=local_enforcement_result.error_detail,
+                        econ_payment_fields={
                             "payment_status": "failed_validation",
                             "payment_method": payment_method_header or decision.econ_payment_method,
-                            "payment_network": enforcement_result.payment_network or payment_network_header,
-                            "payment_token": enforcement_result.payment_token or payment_token_header,
-                            "payment_amount_native": float(enforcement_result.payment_amount_native) if enforcement_result.payment_amount_native is not None else None,
+                            "payment_network": local_enforcement_result.payment_network or payment_network_header,
+                            "payment_token": local_enforcement_result.payment_token or payment_token_header,
+                            "payment_amount_native": x402_amount_native,
                             "payment_amount_usd": None,
                             "payment_reference": replay_reference,
-                        }
+                        },
+                    )
 
-                        econ = build_request_econ(
-                            request_id=request_id,
-                            customer_id=customer_id,
-                            api_key_id=api_key_id,
-                            pricing_rule_id=economic_rule_name,
-                            unit_price_usd=unit_price_usd,
-                            billed_amount_usd=billed_amount_usd,
-                            stc_cost=stc_cost,
-                            payment_required=1,
-                            payment_rail=payment_rail,
-                            payment_channel_id=enforcement_result.payment_channel_id,
-                            econ_payment_fields=econ_payment_fields,
-                            session_id_header=session_id_header,
-                            agent_registry_id=agent_registry_id,
-                            agent_type=agent_type_header,
-                            agent_vendor=agent_vendor_header,
-                            agent_version=agent_version_header,
-                            request_purpose=request_purpose_header,
-                        )
-
-                        try:
-                            log_api_request_economics(econ)
-                        except Exception as e:
-                            logger.error("Metering economics-log insert failed: %s", e, exc_info=True)
-
-                    return response
-
-                if enforcement_result.outcome == "verification_failed":
-                    response = JSONResponse(
-                        status_code=402,
+                if local_enforcement_result.outcome == "verification_failed":
+                    return reject(
+                        enforcement=local_enforcement_result,
                         content={
                             "error": "payment_verification_failed",
-                            "detail": enforcement_result.error_detail,
+                            "detail": local_enforcement_result.error_detail,
                             "request_id": request_id,
                         },
-                    )
-
-                    pricing_rule_for_headers = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
-                    apply_pricing_headers(
-                        response,
-                        pricing_rule_id=pricing_rule_for_headers,
-                        payment_required=True,
-                        accepted_methods=get_accepted_payment_methods(
-                            path,
-                            pricing_rule_for_headers,
-                            method=method,
-                            enforced_payment_method="x402",
-                        ),
-                    )
-
-                    latency_ms = int((time.time() - start_time) * 1000)
-
-                    event = build_request_event(
-                        request_id=request_id,
-                        environment="production",
-                        api_key_id=api_key_id,
-                        customer_id=customer_id,
-                        subscription_id=subscription_id,
-                        plan_code=plan_code,
-                        actor_type=actor_type,
-                        workflow_type=workflow_type,
-                        agent_identifier=agent_identifier,
-                        agent_registry_id=agent_registry_id,
-                        path=path,
-                        method=method,
-                        query_string=query_string,
-                        request=request,
-                        status_code=402,
-                        success=0,
-                        latency_ms=latency_ms,
-                        response=response,
-                        decision=decision,
-                        payment_rail=payment_rail,
-                        payment_method=resolved_payment_method,
-                        payment_network=enforcement_result.payment_network or payment_network_header,
-                        payment_token=enforcement_result.payment_token or payment_token_header,
-                        error_code="payment_verification_failed",
-                        notes=enforcement_result.error_detail,
-                    )
-
-                    try:
-                        log_api_request_event(event)
-                    except Exception as e:
-                        logger.error("Metering request-log insert failed: %s", e, exc_info=True)
-
-                    if should_log_economics(decision):
-                        econ_payment_fields = {
+                        accepted_methods=x402_rejection_methods,
+                        event_error_code="payment_verification_failed",
+                        event_notes=local_enforcement_result.error_detail,
+                        econ_payment_fields={
                             "payment_status": "failed_validation",
                             "payment_method": payment_method_header or decision.econ_payment_method,
-                            "payment_network": enforcement_result.payment_network or payment_network_header,
-                            "payment_token": enforcement_result.payment_token or payment_token_header,
-                            "payment_amount_native": float(enforcement_result.payment_amount_native) if enforcement_result.payment_amount_native is not None else None,
+                            "payment_network": local_enforcement_result.payment_network or payment_network_header,
+                            "payment_token": local_enforcement_result.payment_token or payment_token_header,
+                            "payment_amount_native": x402_amount_native,
                             "payment_amount_usd": None,
                             "payment_reference": replay_reference,
-                        }
-
-                        econ = build_request_econ(
-                            request_id=request_id,
-                            customer_id=customer_id,
-                            api_key_id=api_key_id,
-                            pricing_rule_id=economic_rule_name,
-                            unit_price_usd=unit_price_usd,
-                            billed_amount_usd=billed_amount_usd,
-                            stc_cost=stc_cost,
-                            payment_required=1,
-                            payment_rail=payment_rail,
-                            payment_channel_id=enforcement_result.payment_channel_id,
-                            econ_payment_fields=econ_payment_fields,
-                            session_id_header=session_id_header,
-                            agent_registry_id=agent_registry_id,
-                            agent_type=agent_type_header,
-                            agent_vendor=agent_vendor_header,
-                            agent_version=agent_version_header,
-                            request_purpose=request_purpose_header,
-                        )
-
-                        try:
-                            log_api_request_economics(econ)
-                        except Exception as e:
-                            logger.error("Metering economics-log insert failed: %s", e, exc_info=True)
-
-                    return response
-
-                if enforcement_result.outcome == "settlement_failed":
-                    response = JSONResponse(
-                        status_code=402,
-                        content={
-                            "error": "payment_settlement_failed",
-                            "detail": enforcement_result.error_detail,
-                            "request_id": request_id,
                         },
                     )
 
-                    pricing_rule_for_headers = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
-                    apply_pricing_headers(
-                        response,
-                        pricing_rule_id=pricing_rule_for_headers,
-                        payment_required=True,
-                        accepted_methods=get_accepted_payment_methods(
-                            path,
-                            pricing_rule_for_headers,
-                            method=method,
-                            enforced_payment_method="x402",
-                        ),
-                    )
-
-                    latency_ms = int((time.time() - start_time) * 1000)
-
-                    event = build_request_event(
-                        request_id=request_id,
-                        environment="production",
-                        api_key_id=api_key_id,
-                        customer_id=customer_id,
-                        subscription_id=subscription_id,
-                        plan_code=plan_code,
-                        actor_type=actor_type,
-                        workflow_type=workflow_type,
-                        agent_identifier=agent_identifier,
-                        agent_registry_id=agent_registry_id,
-                        path=path,
-                        method=method,
-                        query_string=query_string,
-                        request=request,
-                        status_code=402,
-                        success=0,
-                        latency_ms=latency_ms,
-                        response=response,
-                        decision=decision,
-                        payment_rail=payment_rail,
-                        payment_method=resolved_payment_method,
-                        payment_network=enforcement_result.payment_network or payment_network_header,
-                        payment_token=enforcement_result.payment_token or payment_token_header,
-                        error_code="payment_settlement_failed",
-                        notes=enforcement_result.error_detail,
-                    )
-
-                    try:
-                        log_api_request_event(event)
-                    except Exception as e:
-                        logger.error("Metering request-log insert failed: %s", e, exc_info=True)
-
-                    if should_log_economics(decision):
-                        econ_payment_fields = {
+                if local_enforcement_result.outcome == "settlement_failed":
+                    return reject(
+                        enforcement=local_enforcement_result,
+                        content={
+                            "error": "payment_settlement_failed",
+                            "detail": local_enforcement_result.error_detail,
+                            "request_id": request_id,
+                        },
+                        accepted_methods=x402_rejection_methods,
+                        event_error_code="payment_settlement_failed",
+                        event_notes=local_enforcement_result.error_detail,
+                        econ_payment_fields={
                             "payment_status": "failed",
                             "payment_method": payment_method_header or decision.econ_payment_method,
-                            "payment_network": enforcement_result.payment_network or payment_network_header,
-                            "payment_token": enforcement_result.payment_token or payment_token_header,
-                            "payment_amount_native": float(enforcement_result.payment_amount_native) if enforcement_result.payment_amount_native is not None else None,
+                            "payment_network": local_enforcement_result.payment_network or payment_network_header,
+                            "payment_token": local_enforcement_result.payment_token or payment_token_header,
+                            "payment_amount_native": x402_amount_native,
                             "payment_amount_usd": None,
                             "payment_reference": replay_reference,
-                        }
+                        },
+                    )
 
-                        econ = build_request_econ(
-                            request_id=request_id,
-                            customer_id=customer_id,
-                            api_key_id=api_key_id,
-                            pricing_rule_id=economic_rule_name,
-                            unit_price_usd=unit_price_usd,
-                            billed_amount_usd=billed_amount_usd,
-                            stc_cost=stc_cost,
-                            payment_required=1,
-                            payment_rail=payment_rail,
-                            payment_channel_id=enforcement_result.payment_channel_id,
-                            econ_payment_fields=econ_payment_fields,
-                            session_id_header=session_id_header,
-                            agent_registry_id=agent_registry_id,
-                            agent_type=agent_type_header,
-                            agent_vendor=agent_vendor_header,
-                            agent_version=agent_version_header,
-                            request_purpose=request_purpose_header,
-                        )
-
-                        try:
-                            log_api_request_economics(econ)
-                        except Exception as e:
-                            logger.error("Metering economics-log insert failed: %s", e, exc_info=True)
-
-                    return response
-
-                request.state.x402_payment_response = enforcement_result.payment_response
-
-                payment_reference_header = replay_reference
-                payment_network_header = enforcement_result.payment_network or payment_network_header
-                payment_token_header = enforcement_result.payment_token or payment_token_header
-                if enforcement_result.payment_amount_native is not None:
-                    payment_amount_header = str(enforcement_result.payment_amount_native)
-                payment_channel_id = enforcement_result.payment_channel_id
-                request.state.payment_channel_id = payment_channel_id
+                # Settled.  This is the only x402 path on which money moved, so
+                # it is the only one that records a collected amount.
+                request.state.x402_payment_response = local_enforcement_result.payment_response
+                gate_state.collected = True
+                gate_state.collected_amount_usd = x402_settled_amount_usd(
+                    local_enforcement_result.payment_amount_native,
+                    unit_price_usd,
+                )
+                gate_state.payment_reference = replay_reference
+                gate_state.payment_network = (
+                    local_enforcement_result.payment_network or payment_network_header
+                )
+                gate_state.payment_token = (
+                    local_enforcement_result.payment_token or payment_token_header
+                )
+                if local_enforcement_result.payment_amount_native is not None:
+                    gate_state.payment_amount = str(local_enforcement_result.payment_amount_native)
+                gate_state.payment_channel_id = local_enforcement_result.payment_channel_id
+                request.state.payment_channel_id = gate_state.payment_channel_id
 
             if payment_rail == "mpp":
-                payment_reference_header = enforcement_result.payment_reference or payment_reference_header
-                payment_network_header = enforcement_result.payment_network or payment_network_header
-                payment_token_header = enforcement_result.payment_token or payment_token_header
-                if enforcement_result.payment_amount_native is not None:
-                    payment_amount_header = str(enforcement_result.payment_amount_native)
-                payment_channel_id = enforcement_result.payment_channel_id
-                request.state.payment_channel_id = payment_channel_id
-                if enforcement_result.outcome not in {"proceed", "authorized"}:
-                    validation_valid = False
-                    validation_error = enforcement_result.error_code
-                    validation_detail = enforcement_result.error_detail
+                gate_state.payment_reference = (
+                    local_enforcement_result.payment_reference or payment_reference_header
+                )
+                gate_state.payment_network = (
+                    local_enforcement_result.payment_network or payment_network_header
+                )
+                gate_state.payment_token = (
+                    local_enforcement_result.payment_token or payment_token_header
+                )
+                if local_enforcement_result.payment_amount_native is not None:
+                    gate_state.payment_amount = str(local_enforcement_result.payment_amount_native)
+                gate_state.payment_channel_id = local_enforcement_result.payment_channel_id
+                request.state.payment_channel_id = gate_state.payment_channel_id
+                if local_enforcement_result.outcome not in {"proceed", "authorized"}:
+                    gate_state.validation_valid = False
+                    gate_state.validation_error = local_enforcement_result.error_code
+                    gate_state.validation_detail = local_enforcement_result.error_detail
 
-            if payment_rail != "x402" and not validation_valid:
-                response = JSONResponse(
-                    status_code=402,
+            if payment_rail != "x402" and not gate_state.validation_valid:
+                return reject(
+                    enforcement=local_enforcement_result,
                     content={
-                        "error": validation_error,
-                        "detail": validation_detail,
+                        "error": gate_state.validation_error,
+                        "detail": gate_state.validation_detail,
                         "request_id": request_id,
                     },
-                )
-
-                pricing_rule_for_headers = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
-                apply_pricing_headers(
-                    response,
-                    pricing_rule_id=pricing_rule_for_headers,
-                    payment_required=True,
                     accepted_methods=get_accepted_payment_methods(
                         path,
                         pricing_rule_for_headers,
                         method=method,
                         enforced_payment_method=None,
                     ),
-                )
-
-                latency_ms = int((time.time() - start_time) * 1000)
-
-                event = build_request_event(
-                    request_id=request_id,
-                    environment="production",
-                    api_key_id=api_key_id,
-                    customer_id=customer_id,
-                    subscription_id=subscription_id,
-                    plan_code=plan_code,
-                    actor_type=actor_type,
-                    workflow_type=workflow_type,
-                    agent_identifier=agent_identifier,
-                    agent_registry_id=agent_registry_id,
-                    path=path,
-                    method=method,
-                    query_string=query_string,
-                    request=request,
-                    status_code=402,
-                    success=0,
-                    latency_ms=latency_ms,
-                    response=response,
-                    decision=decision,
-                    payment_rail=payment_rail,
-                    payment_method=resolved_payment_method,
-                    error_code=validation_error,
-                    notes=validation_detail,
-                )
-
-                try:
-                    log_api_request_event(event)
-                except Exception as e:
-                    logger.error("Metering request-log insert failed: %s", e, exc_info=True)
-
-                if should_log_economics(decision):
-                    econ_payment_fields = build_econ_payment_fields(
+                    event_error_code=gate_state.validation_error,
+                    event_notes=gate_state.validation_detail,
+                    econ_payment_fields=build_econ_payment_fields(
                         payment_required=1,
                         payment_status="failed_validation",
                         payment_method_header=payment_method_header,
-                        payment_network_header=payment_network_header,
-                        payment_token_header=payment_token_header,
-                        payment_amount_header=payment_amount_header,
-                        payment_reference_header=payment_reference_header,
+                        payment_network_header=gate_state.payment_network,
+                        payment_token_header=gate_state.payment_token,
+                        payment_amount_header=gate_state.payment_amount,
+                        payment_reference_header=gate_state.payment_reference,
                         decision=decision,
-                    )
+                    ),
+                )
 
-                    econ = build_request_econ(
-                        request_id=request_id,
-                        customer_id=customer_id,
-                        api_key_id=api_key_id,
-                        pricing_rule_id=economic_rule_name,
-                        unit_price_usd=unit_price_usd,
-                        billed_amount_usd=billed_amount_usd,
-                        stc_cost=stc_cost,
-                        payment_required=1,
-                        payment_rail=payment_rail,
-                        payment_channel_id=payment_channel_id,
-                        econ_payment_fields=econ_payment_fields,
-                        session_id_header=session_id_header,
-                        agent_registry_id=agent_registry_id,
-                        agent_type=agent_type_header,
-                        agent_vendor=agent_vendor_header,
-                        agent_version=agent_version_header,
-                        request_purpose=request_purpose_header,
-                    )
+            return None
 
-                    try:
-                        log_api_request_economics(econ)
-                    except Exception as e:
-                        logger.error("Metering economics-log insert failed: %s", e, exc_info=True)
-
-                return response
+        payment_gate = None
+        if should_validate_agent_pay or should_enforce_agent_pay:
+            payment_gate = DeferredPaymentGate(run_payment_gate)
+            setattr(request.state, PAYMENT_GATE_STATE_ATTR, payment_gate)
 
         response = None
         caught_exception = None
 
         try:
             response = await call_next(request)
-            return response
         except Exception as exc:
             caught_exception = exc
             raise
         finally:
+            # ------------------------------------------------------------------
+            # Execution-boundary backstop.
+            #
+            # A route that reached the surface without the wrapper can execute
+            # paid work and return its payload with no gate consulted, no
+            # challenge issued and nothing settled.  Startup verification makes
+            # that unreachable in this application; this is the second line, for
+            # anything that mounts MeteringMiddleware over a surface it did not
+            # verify.
+            #
+            # The breach is read from the matched route rather than inferred
+            # from the status code: `scope["route"]` is set only when a route
+            # matched, so a route miss (no route) and a rejection on a properly
+            # wrapped route are both correctly left alone, while an unwrapped
+            # route is caught whether it returned 2xx, 4xx or 5xx.
+            #
+            # Payment is NOT invoked here.  Enforcement after call_next() would
+            # charge for work already done and cannot be undone; the only safe
+            # answer is to refuse to deliver the result.
+            # ------------------------------------------------------------------
+            matched_route = request.scope.get("route")
+            boundary_breached = (
+                payment_gate is not None
+                and not payment_gate.invoked
+                and should_enforce_agent_pay
+                and decision.econ_payment_required == 1
+                and response is not None
+                and matched_route is not None
+                and not is_payment_wrapped(matched_route)
+            )
+
+            if boundary_breached:
+                logger.critical(
+                    "%s — a payment-governed endpoint executed without consulting "
+                    "the payment gate; the paid result is being discarded and the "
+                    "request failed closed: request_id=%s path=%s method=%s "
+                    "rail=%s downstream_status=%s",
+                    BOUNDARY_NOT_CONSULTED_ERROR,
+                    request_id,
+                    path,
+                    method,
+                    payment_rail,
+                    response.status_code,
+                )
+                response = JSONResponse(
+                    status_code=500,
+                    content={
+                        "error": BOUNDARY_NOT_CONSULTED_ERROR,
+                        "detail": (
+                            "The request could not be completed: an internal "
+                            "payment execution boundary invariant was violated. "
+                            "No payment was taken."
+                        ),
+                        "request_id": request_id,
+                    },
+                )
+
             latency_ms = int((time.time() - start_time) * 1000)
             status_code = response.status_code if response is not None else 500
             success = 1 if status_code < 400 else 0
+
+            # Collect what the gate did.  When it never ran — route miss,
+            # framework validation rejection, or a request that was never
+            # payment-governed — these keep their inbound values and nothing
+            # below reports a payment that did not happen.
+            enforcement_result = gate_state.enforcement_result
+            validation_valid = gate_state.validation_valid
+            payment_reference_header = gate_state.payment_reference
+            payment_network_header = gate_state.payment_network
+            payment_token_header = gate_state.payment_token
+            payment_amount_header = gate_state.payment_amount
+            payment_channel_id = gate_state.payment_channel_id
+
+            if boundary_breached:
+                # Nothing was verified, settled or authorized, so every payment
+                # fact stays at its uncollected default and the row records the
+                # invariant failure rather than a delivered paid result.
+                gate_state.collected = False
+                gate_state.collected_amount_usd = None
+                gate_state.event_error_code = BOUNDARY_NOT_CONSULTED_ERROR
+                gate_state.event_notes = (
+                    "endpoint executed without the payment execution boundary; "
+                    "paid result discarded"
+                )
 
             pricing_rule_for_headers = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
             payment_required_for_headers = bool(decision.econ_payment_required)
             accepted_methods = get_accepted_payment_methods(path, pricing_rule_for_headers, method=method)
 
             if response is not None:
-                if decision.econ_payment_required and is_x402_payment_method(normalized_payment_method):
+                if gate_state.rejected:
+                    # The gate rejected the request and already resolved which
+                    # methods that particular rejection advertises — a challenge
+                    # offers the endpoint's full capability list, an enforcement
+                    # failure narrows to the attempted rail.
+                    accepted_methods = gate_state.accepted_methods
+                elif decision.econ_payment_required and is_x402_payment_method(normalized_payment_method):
                     accepted_methods = get_accepted_payment_methods(
                         path,
                         pricing_rule_for_headers,
@@ -1940,8 +1843,16 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 payment_method=resolved_payment_method,
                 payment_network=payment_network_header,
                 payment_token=payment_token_header,
-                error_code=caught_exception.__class__.__name__ if caught_exception else None,
-                notes=str(caught_exception) if caught_exception else None,
+                error_code=(
+                    caught_exception.__class__.__name__
+                    if caught_exception
+                    else gate_state.event_error_code
+                ),
+                notes=(
+                    str(caught_exception)
+                    if caught_exception
+                    else gate_state.event_notes
+                ),
             )
 
             try:
@@ -1967,15 +1878,22 @@ class MeteringMiddleware(BaseHTTPMiddleware):
             ):
                 if response is not None and status_code < 400:
                     from payments.mpp_client import capture_mpp_payment
+                    # Capture the amount that was authorized.  enforce_mpp_payment
+                    # authorizes `unit_price_usd` (the quoted charge), so capture
+                    # must use the same figure or the two legs of one payment
+                    # disagree.  stc_cost is the analytical measure and never
+                    # decides how much is taken; production hid the discrepancy
+                    # only because the two values happen to be equal today.
                     _cap = capture_mpp_payment(
                         channel_id=enforcement_result.payment_channel_id,
                         payment_reference=enforcement_result.payment_reference,
-                        captured_stc=stc_cost,
+                        captured_stc=unit_price_usd,
                         pricing_rule_id=economic_rule_name,
                         request_id=request_id,
                     )
                     if _cap.success:
                         mpp_capture_outcome = "captured"
+                        gate_state.collected_amount_usd = unit_price_usd
                     else:
                         mpp_capture_outcome = "capture_failed"
                         logger.error(
@@ -2032,12 +1950,24 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                             exc_info=True,
                         )
 
+            # MPP capture is the second and last way money moves.  Recorded on
+            # the same state the gate wrote to, so the billed amount below has a
+            # single source of truth for both rails.
+            if mpp_capture_outcome == "captured":
+                gate_state.collected = True
+
+            # billed_amount_usd is the amount a rail actually collected, and
+            # rises off zero only here.  unit_price_usd and stc_cost keep their
+            # own meanings and are unaffected.
+            if gate_state.collected and gate_state.collected_amount_usd is not None:
+                billed_amount_usd = gate_state.collected_amount_usd
+
             if should_log_economics(decision):
                 payment_status = decision.econ_payment_status
 
                 if decision.econ_payment_required:
                     if payment_rail == "x402" or is_x402_payment_method(normalized_payment_method):
-                        if validation_valid and payment_reference_header:
+                        if gate_state.collected and payment_reference_header:
                             payment_status = "settled"
                         elif payment_reference_header and not validation_valid:
                             payment_status = "failed_validation"
@@ -2061,16 +1991,23 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                         elif not validation_valid:
                             payment_status = "failed_validation" if should_enforce_agent_pay else "pending"
 
-                econ_payment_fields = build_econ_payment_fields(
-                    payment_required=decision.econ_payment_required,
-                    payment_status=payment_status or "pending",
-                    payment_method_header=effective_payment_method,
-                    payment_network_header=payment_network_header,
-                    payment_token_header=payment_token_header,
-                    payment_amount_header=payment_amount_header,
-                    payment_reference_header=payment_reference_header,
-                    decision=decision,
-                )
+                if gate_state.rejected:
+                    # The gate rejected the request and knows exactly what it
+                    # rejected it for.  Re-deriving that from the 402 alone
+                    # would lose the distinction between a challenge, a replay,
+                    # and a settlement failure.
+                    econ_payment_fields = dict(gate_state.econ_payment_fields)
+                else:
+                    econ_payment_fields = build_econ_payment_fields(
+                        payment_required=decision.econ_payment_required,
+                        payment_status=payment_status or "pending",
+                        payment_method_header=effective_payment_method,
+                        payment_network_header=payment_network_header,
+                        payment_token_header=payment_token_header,
+                        payment_amount_header=payment_amount_header,
+                        payment_reference_header=payment_reference_header,
+                        decision=decision,
+                    )
 
                 econ = build_request_econ(
                     request_id=request_id,
@@ -2096,3 +2033,9 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                     log_api_request_economics(econ)
                 except Exception as e:
                     logger.error("Metering economics-log insert failed: %s", e, exc_info=True)
+
+        # Returned after the finaliser, not from inside the try: the backstop
+        # above may have replaced a paid payload that was produced without the
+        # execution boundary, and a `return` inside the try would have captured
+        # the original response before that substitution.
+        return response

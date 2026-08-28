@@ -490,7 +490,7 @@ def client(monkeypatch, outcome_engine):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *_args, **_kwargs: (Decimal("0"), Decimal("0"), Decimal("0")),
+        lambda *_args, **_kwargs: (Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "_ENABLE_AGENT_PAY", False)
     monkeypatch.setattr(metering_module, "ENABLE_AGENT_PAY", False)

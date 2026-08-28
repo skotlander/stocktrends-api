@@ -53,25 +53,28 @@ from payments.x402 import X402ValidationResult
 # ---------------------------------------------------------------------------
 # Canonical test economics
 #
-# The three economics fields carry DELIBERATELY DISTINCT sentinel values.
-# `resolve_economic_amounts` returns them in the order
-# (unit_price_usd, billed_amount_usd, stc_cost), and in production all three
-# happen to be the same number for a paid rule — which would let an accidental
-# field swap pass every assertion unnoticed.  PR2 changes how the billed amount
-# is derived, so distinguishing the three is what makes that change reviewable.
+# Two values are resolved from pricing, and they are DELIBERATELY DIFFERENT:
 #
-#   A  quoted / list unit price   -> unit_price_usd
-#   B  initial billed value       -> billed_amount_usd (zeroed when uncollected)
-#   C  STC analytical cost        -> stc_cost
+#   A  quoted unit price   -> unit_price_usd
+#   C  STC analytical cost -> stc_cost
+#
+# In production both happen to be the same number for a paid rule, which would
+# let an accidental field swap pass every assertion unnoticed.  Keeping them
+# distinct is what proves each economics field carries the value it claims to.
+#
+# There is deliberately no billed-amount sentinel.  `billed_amount_usd` is not
+# a resolvable price — it is the amount a payment rail actually collected, so
+# it is zero everywhere no collection occurred and equals the collected amount
+# where one did.  A third sentinel here would manufacture a fictional amount
+# collected, which is precisely the accounting error this suite exists to
+# detect.
 #
 # A must stay consistent with UNIT_PRICE_ATOMIC: it is the amount x402 payment
-# validation requires, and the MPP minimum-amount check compares against it.
-# B and C are free values chosen only to be visibly different from A and
-# from each other.
+# validation requires, it is what the settled artifact carries, and the MPP
+# minimum-amount check compares against it.
 # ---------------------------------------------------------------------------
 
 SENTINEL_UNIT_PRICE_USD = Decimal("0.15")     # A
-SENTINEL_BILLED_AMOUNT_USD = Decimal("0.21")  # B
 SENTINEL_STC_COST = Decimal("0.37")           # C
 
 # Retained under its original name because A is also the real quoted price the
@@ -79,8 +82,8 @@ SENTINEL_STC_COST = Decimal("0.37")           # C
 UNIT_PRICE_USD = SENTINEL_UNIT_PRICE_USD
 UNIT_PRICE_ATOMIC = "150000"          # 0.15 USDC at 6 decimals
 
-assert len({SENTINEL_UNIT_PRICE_USD, SENTINEL_BILLED_AMOUNT_USD, SENTINEL_STC_COST}) == 3, (
-    "economics sentinels must be pairwise distinct or field swaps go undetected"
+assert SENTINEL_UNIT_PRICE_USD != SENTINEL_STC_COST, (
+    "unit price and STC cost must differ or a field swap goes undetected"
 )
 PAYMENT_TOKEN = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 PAYMENT_NETWORK = "eip155:8453"
@@ -234,6 +237,20 @@ class LogSpy:
             f"{[row.get('payment_status') for row in self.economics]}"
         )
         return self.economics[0]
+
+    def only_event_row(self) -> dict[str, Any]:
+        """
+        The single `api_request_logs` row for the request.
+
+        Kept separate from the economics row on purpose: the two carry different
+        payment context, and a fix that repairs one while leaving the other
+        blank is exactly the kind of regression this accessor exists to catch.
+        """
+        assert len(self.events) == 1, (
+            f"expected exactly one request-event row, got {len(self.events)}: "
+            f"{[row.get('error_code') for row in self.events]}"
+        )
+        return self.events[0]
 
 
 @dataclass
@@ -538,19 +555,16 @@ def priced_at_unit_price(monkeypatch) -> None:
     """
     Resolve every pricing rule to the acceptance-suite sentinels.
 
-    The three values are distinct on purpose — see the sentinel block at the top
+    The two values are distinct on purpose — see the sentinel block at the top
     of this module.  Tests assert each economics field against its own sentinel,
-    so a mapping swap between unit_price_usd, billed_amount_usd and stc_cost
-    fails rather than passing silently.
+    so a mapping swap between unit_price_usd and stc_cost fails rather than
+    passing silently, and a billed amount sourced from either of them is
+    immediately visible.
     """
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *_a, **_kw: (
-            SENTINEL_UNIT_PRICE_USD,
-            SENTINEL_BILLED_AMOUNT_USD,
-            SENTINEL_STC_COST,
-        ),
+        lambda *_a, **_kw: (SENTINEL_UNIT_PRICE_USD, SENTINEL_STC_COST),
     )
 
 

@@ -95,7 +95,7 @@ def _stub_runtime_side_effects(monkeypatch, *, cost: Decimal = Decimal("0")):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *args, **kwargs: (cost, cost, cost),
+        lambda *args, **kwargs: (cost, cost),
     )
 
 
@@ -174,7 +174,6 @@ def paid_subscription_client(monkeypatch, artifact_root):
         metering_module,
         "resolve_economic_amounts",
         lambda rule_name: (
-            cost_by_rule.get(rule_name, Decimal("0")),
             cost_by_rule.get(rule_name, Decimal("0")),
             cost_by_rule.get(rule_name, Decimal("0")),
         ),

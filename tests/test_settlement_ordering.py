@@ -25,6 +25,9 @@ marker is removed.  That is the intended handshake between the PRs.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from decimal import Decimal
+
 import pytest
 
 import routers.decision as decision_router
@@ -33,7 +36,6 @@ import routers.prices as prices_router
 import routers.screener as screener_router
 import routers.stim as stim_router
 from support.payment_harness import (
-    SENTINEL_BILLED_AMOUNT_USD,
     SENTINEL_STC_COST,
     SENTINEL_UNIT_PRICE_USD,
     counting_engine,
@@ -121,7 +123,6 @@ def test_01_malformed_symbol_exchange_does_not_settle(payment_harness, monkeypat
     assert payment_harness.settle_count == 0, "facilitator settle must not run"
 
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_02_constraint_violation_does_not_settle(payment_harness, priced_engines):
     response = payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM-N&limit=0", headers=x402_headers()
@@ -156,7 +157,6 @@ def test_04_invalid_exchange_domain_does_not_settle(payment_harness, priced_engi
 # 5-7 — invalid POST bodies presented with a valid payment proof
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_05_malformed_json_body_does_not_settle(payment_harness):
     headers = x402_headers()
     headers["Content-Type"] = "application/json"
@@ -169,7 +169,6 @@ def test_05_malformed_json_body_does_not_settle(payment_harness):
     _assert_no_settlement(payment_harness)
 
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_06_schema_invalid_body_does_not_settle(payment_harness):
     response = payment_harness.client.post(
         "/v1/portfolio/construct", headers=x402_headers(), json={"count": 99}
@@ -447,7 +446,6 @@ def test_17b_invalid_mpp_request_never_authorizes(payment_harness, priced_engine
 # 18-19 — route and method misses
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason=PRE_GATE)
 def test_18_route_miss_under_paid_prefix_does_not_settle(payment_harness):
     """`/v1/stim` is a prefix enforcement scope, so a typo settles today and
     then 404s for a route that does not exist."""
@@ -470,7 +468,6 @@ def test_19_method_miss_does_not_settle(payment_harness):
 # 23-24 — accounting: billed_amount_usd is what was collected
 # ===========================================================================
 
-@pytest.mark.xfail(strict=True, reason=BILLED)
 def test_23a_challenge_records_zero_billed_amount(payment_harness, priced_engines):
     payment_harness.client.get(_VALID_PRICES_QUERY, headers=unpaid_headers())
 
@@ -488,7 +485,6 @@ def test_23a_challenge_records_zero_billed_amount(payment_harness, priced_engine
     )
 
 
-@pytest.mark.xfail(strict=True, reason=BILLED)
 def test_23b_verification_failure_records_zero_billed_amount(
     payment_harness, priced_engines
 ):
@@ -499,7 +495,6 @@ def test_23b_verification_failure_records_zero_billed_amount(
     assert row["billed_amount_usd"] == 0
 
 
-@pytest.mark.xfail(strict=True, reason=BILLED)
 def test_23c_settlement_failure_records_zero_billed_amount(
     payment_harness, priced_engines
 ):
@@ -511,7 +506,6 @@ def test_23c_settlement_failure_records_zero_billed_amount(
     assert row["billed_amount_usd"] == 0
 
 
-@pytest.mark.xfail(strict=True, reason=BILLED)
 def test_23d_replay_rejection_records_zero_billed_amount(
     payment_harness, priced_engines
 ):
@@ -539,11 +533,12 @@ def test_23e_pre_gate_rejection_records_zero_billed_amount(
 
 def test_24_settled_request_records_the_collected_amount(payment_harness, priced_engines):
     """
-    Each field carries its own sentinel.
+    The billed amount is what the rail collected, not what the catalogue quoted.
 
-    Because the three values are pairwise distinct, this fails if PR2 wires the
-    quoted price or the STC cost into the billed slot — a swap that would be
-    invisible if all three were the same number.
+    On this path the two coincide by definition — an `exact` scheme artifact
+    settles the quoted requirement — so the assertion is that billed tracks the
+    settled artifact, and that it is emphatically not the STC cost, which is a
+    different number and a different concept.
     """
     payment_harness.client.get(_VALID_PRICES_QUERY, headers=x402_headers())
 
@@ -551,22 +546,68 @@ def test_24_settled_request_records_the_collected_amount(payment_harness, priced
     assert row["payment_status"] == "settled"
     assert row["unit_price_usd"] == SENTINEL_UNIT_PRICE_USD
     assert row["stc_cost"] == SENTINEL_STC_COST
-    assert row["billed_amount_usd"] == SENTINEL_BILLED_AMOUNT_USD
+    assert row["billed_amount_usd"] == SENTINEL_UNIT_PRICE_USD, (
+        "billed must equal the amount actually settled by the artifact"
+    )
+    assert row["billed_amount_usd"] != SENTINEL_STC_COST, (
+        "the STC analytical cost must never become the collected amount"
+    )
 
 
 def test_24b_economics_fields_are_not_swapped(payment_harness, priced_engines):
     """
     A dedicated positive control for the sentinel scheme itself.
 
-    Asserting each field is *not* equal to the other two catches a swap even if
-    a future edit changes what the correct value should be.
+    unit price and STC cost are distinct values, so a mapping swap between them
+    is visible; and the billed amount must follow the collection rather than the
+    analytical measure.
     """
     payment_harness.client.get(_VALID_PRICES_QUERY, headers=x402_headers())
 
     row = payment_harness.logs.only_economics_row()
-    assert row["unit_price_usd"] not in (SENTINEL_BILLED_AMOUNT_USD, SENTINEL_STC_COST)
-    assert row["billed_amount_usd"] not in (SENTINEL_UNIT_PRICE_USD, SENTINEL_STC_COST)
-    assert row["stc_cost"] not in (SENTINEL_UNIT_PRICE_USD, SENTINEL_BILLED_AMOUNT_USD)
+    assert row["unit_price_usd"] == SENTINEL_UNIT_PRICE_USD
+    assert row["unit_price_usd"] != SENTINEL_STC_COST
+    assert row["stc_cost"] == SENTINEL_STC_COST
+    assert row["stc_cost"] != SENTINEL_UNIT_PRICE_USD
+    assert row["billed_amount_usd"] != SENTINEL_STC_COST
+
+
+def test_24c_settled_amount_follows_the_artifact_not_the_quote(
+    payment_harness, priced_engines, monkeypatch
+):
+    """
+    Billed is derived from what settled, not from price lookup.
+
+    The quoted price is held at the sentinel while the enforcement layer reports
+    a different settled native amount.  A billed amount sourced from the
+    catalogue would still read 0.15; one sourced from the settlement reads the
+    settled value.
+    """
+    import middleware.metering as metering_module
+    from payments.enforcement import PaymentEnforcementResult
+
+    monkeypatch.setattr(
+        metering_module,
+        "enforce_payment_rail",
+        lambda **_kw: PaymentEnforcementResult(
+            outcome="proceed",
+            payment_reference="x402-partial-ref",
+            payment_network="eip155:8453",
+            payment_token="0xtoken",
+            # 0.09 USDC at 6 decimals — deliberately not the quoted 0.15.
+            payment_amount_native=Decimal("90000"),
+            payment_response={"success": True, "transaction": "0xdeadbeef"},
+        ),
+    )
+
+    payment_harness.client.get(_VALID_PRICES_QUERY, headers=x402_headers())
+
+    row = payment_harness.logs.only_economics_row()
+    assert row["payment_status"] == "settled"
+    assert row["unit_price_usd"] == SENTINEL_UNIT_PRICE_USD
+    assert row["billed_amount_usd"] == Decimal("0.09"), (
+        "billed must come from the settled payment amount, not the quoted price"
+    )
 
 
 # ===========================================================================
@@ -630,3 +671,305 @@ def test_opt_underpaid_proof_never_settles(payment_harness, priced_engines):
     assert response.status_code == 402
     assert response.json()["error"] == "insufficient_payment_amount"
     _assert_no_settlement(payment_harness)
+
+
+# ===========================================================================
+# 26-27 — the execution boundary is load-bearing, not advisory
+#
+# Startup verification makes an unwrapped route unreachable in this
+# application.  These cases construct one anyway, because the middleware must
+# still fail closed for any surface it did not verify itself.
+# ===========================================================================
+
+PAID_PAYLOAD_MARKER = "paid-payload-that-must-never-reach-a-client"
+
+# `/v1/stim/*` is a prefix enforcement scope, so a route registered here is
+# payment-governed by policy without needing a bespoke registration.
+_UNWRAPPED_PROBE_PATH = "/stim/_boundary_probe"
+
+
+@contextmanager
+def temporary_v1_route(path: str, *, wrap: bool):
+    """
+    Register a route on the shared v1 app for one test, then withdraw it.
+
+    `wrap=False` reproduces the reviewer's scenario: a payment-governed route
+    that reached the surface after the boundary was installed.
+    """
+    import main
+    from api.routing import install_payment_execution_boundary
+
+    original_routes = list(main.v1.routes)
+    original_schema = main.v1.openapi_schema
+    try:
+        @main.v1.get(path)
+        def probe_endpoint():
+            return {"marker": PAID_PAYLOAD_MARKER}
+
+        if wrap:
+            install_payment_execution_boundary(main.v1)
+        yield
+    finally:
+        main.v1.router.routes[:] = original_routes
+        # A schema generated while the probe existed must not outlive it.
+        main.v1.openapi_schema = original_schema
+
+
+def test_26_unwrapped_paid_route_fails_closed_and_never_leaks_the_payload(
+    payment_harness, caplog
+):
+    """
+    An endpoint that executed without consulting the payment gate must not have
+    its result delivered.
+
+    Payment is deliberately NOT invoked to repair this: enforcement after the
+    work is done would charge for a request the caller never agreed to pay, and
+    could not be undone.  The only safe answer is to refuse the result.
+    """
+    import logging
+
+    with temporary_v1_route(_UNWRAPPED_PROBE_PATH, wrap=False):
+        with caplog.at_level(logging.CRITICAL, logger="stocktrends_api.metering"):
+            response = payment_harness.client.get(
+                f"/v1{_UNWRAPPED_PROBE_PATH}", headers=x402_headers()
+            )
+
+    # The client is told the request failed, and learns nothing of the payload.
+    assert response.status_code == 500
+    assert response.json()["error"] == "payment_execution_boundary_not_consulted"
+    assert PAID_PAYLOAD_MARKER not in response.text, (
+        "the paid payload leaked to a caller that never paid for it"
+    )
+
+    # No rail was contacted — not before the fact, and not retroactively.
+    assert payment_harness.verify_count == 0
+    assert payment_harness.settle_count == 0
+    assert payment_harness.mpp.authorize_count == 0
+    assert payment_harness.mpp.capture_count == 0
+    assert payment_harness.mpp.void_count == 0
+
+    # The economics row records an uncollected request.
+    row = payment_harness.logs.only_economics_row()
+    assert row["billed_amount_usd"] == 0
+
+    event = payment_harness.logs.only_event_row()
+    assert event["success"] == 0
+    assert event["error_code"] == "payment_execution_boundary_not_consulted"
+
+    assert any(
+        record.levelno >= logging.CRITICAL for record in caplog.records
+    ), "the invariant breach must be logged at CRITICAL"
+
+
+def test_26b_wrapped_probe_route_behaves_normally(payment_harness):
+    """
+    Control for test_26.  The same route, wrapped, takes the ordinary path — so
+    the 500 above is attributable to the missing boundary and nothing else.
+    """
+    with temporary_v1_route(_UNWRAPPED_PROBE_PATH, wrap=True):
+        response = payment_harness.client.get(
+            f"/v1{_UNWRAPPED_PROBE_PATH}", headers=x402_headers()
+        )
+
+    assert response.status_code == 200
+    assert response.json()["marker"] == PAID_PAYLOAD_MARKER
+    assert payment_harness.settle_count == 1
+    assert payment_harness.logs.only_economics_row()["payment_status"] == "settled"
+
+
+def test_27_paid_route_without_a_request_parameter_still_consults_the_gate(
+    payment_harness
+):
+    """
+    The injected-request path, end to end, on a payment-governed route.
+
+    `probe_endpoint` declares no `Request`, so the wrapper can only reach
+    `request.state` through the parameter name the installer injected.  A 402
+    here proves that injection worked: the gate was consulted for an endpoint
+    that never asked for a request of its own.
+    """
+    with temporary_v1_route(_UNWRAPPED_PROBE_PATH, wrap=True):
+        response = payment_harness.client.get(
+            f"/v1{_UNWRAPPED_PROBE_PATH}", headers=unpaid_headers()
+        )
+
+    assert response.status_code == 402
+    assert response.json()["error"] == "payment_required"
+    assert PAID_PAYLOAD_MARKER not in response.text
+    _assert_no_settlement(payment_harness)
+
+
+# ===========================================================================
+# 28 — MPP charges one amount, not two
+# ===========================================================================
+
+def test_28_mpp_authorizes_and_captures_the_quoted_charge(payment_harness, priced_engines):
+    """
+    Authorization and capture are two legs of one payment and must agree.
+
+    Production hid a disagreement here because the quoted price and the STC cost
+    are the same number for every current rule.  The harness prices them apart,
+    so authorizing the quote and capturing the STC cost is now visible — and
+    billed must follow what was captured, not either catalogue value by
+    coincidence.
+    """
+    response = payment_harness.client.get(_VALID_PRICES_QUERY, headers=mpp_headers())
+
+    assert response.status_code == 200
+    assert payment_harness.mpp.authorize_count == 1
+    assert payment_harness.mpp.capture_count == 1
+
+    authorized = payment_harness.mpp.authorize_calls[0]["requested_stc"]
+    captured = payment_harness.mpp.capture_calls[0]["captured_stc"]
+
+    assert authorized == SENTINEL_UNIT_PRICE_USD, (
+        f"MPP authorized {authorized}, expected the quoted charge "
+        f"{SENTINEL_UNIT_PRICE_USD}"
+    )
+    assert captured == SENTINEL_UNIT_PRICE_USD, (
+        f"MPP captured {captured}, expected the authorized charge "
+        f"{SENTINEL_UNIT_PRICE_USD}; capturing the STC cost "
+        f"({SENTINEL_STC_COST}) would settle a different amount than was reserved"
+    )
+    assert captured == authorized, "capture must settle exactly what was authorized"
+    assert captured != SENTINEL_STC_COST
+
+    row = payment_harness.logs.only_economics_row()
+    assert row["payment_status"] == "captured"
+    assert row["billed_amount_usd"] == SENTINEL_UNIT_PRICE_USD
+    assert row["unit_price_usd"] == SENTINEL_UNIT_PRICE_USD
+    assert row["stc_cost"] == SENTINEL_STC_COST, (
+        "the STC analytical cost is recorded independently and is not the charge"
+    )
+
+
+def test_28b_mpp_capture_failure_collects_nothing(payment_harness, priced_engines):
+    """A capture the control plane refused collected no money."""
+    payment_harness.mpp.capture_success = False
+
+    payment_harness.client.get(_VALID_PRICES_QUERY, headers=mpp_headers())
+
+    row = payment_harness.logs.only_economics_row()
+    assert row["payment_status"] == "capture_failed"
+    assert row["billed_amount_usd"] == 0
+
+
+# ===========================================================================
+# 29 — rejection paths keep their payment context in api_request_logs
+# ===========================================================================
+
+@pytest.mark.parametrize(
+    ("case", "headers_factory", "setup"),
+    [
+        ("unpaid challenge", unpaid_headers, None),
+        ("malformed artifact", malformed_x402_headers, None),
+        ("underpaid artifact", lambda: x402_headers(amount="1"), None),
+        (
+            "replay",
+            lambda: x402_headers(reference="already-spent"),
+            lambda h: h.mark_reference_used("already-spent"),
+        ),
+        (
+            "verification failure",
+            x402_headers,
+            lambda h: setattr(h.facilitator, "verify_valid", False),
+        ),
+        (
+            "settlement failure",
+            x402_headers,
+            lambda h: setattr(h.facilitator, "settle_valid", False),
+        ),
+    ],
+)
+def test_29_rejections_record_payment_context_in_the_request_event(
+    payment_harness, priced_engines, case, headers_factory, setup
+):
+    """
+    A standard x402 client sends only `X-Payment`, so the network and token are
+    known from enforcement rather than from any inbound Stock Trends header.
+    Both log destinations must keep them: fixing only the economics row would
+    leave api_request_logs blind on exactly the requests operators investigate.
+    """
+    if setup is not None:
+        setup(payment_harness)
+
+    response = payment_harness.client.get(_VALID_PRICES_QUERY, headers=headers_factory())
+    assert response.status_code == 402, case
+
+    event = payment_harness.logs.only_event_row()
+    assert event["payment_network"], f"{case}: request event lost payment_network"
+    assert event["payment_token"], f"{case}: request event lost payment_token"
+
+    econ = payment_harness.logs.only_economics_row()
+    assert event["payment_network"] == econ["payment_network"], case
+    assert event["payment_token"] == econ["payment_token"], case
+    assert econ["billed_amount_usd"] == 0, case
+
+
+# ===========================================================================
+# 30 — the gate's outcome is terminal in both directions
+# ===========================================================================
+
+def test_30_gate_caches_and_reraises_an_enforcement_failure():
+    """
+    A raising enforcement attempt must never decay into "proceed".
+
+    Marking the gate invoked before the call returns would leave
+    `invoked=True, response=None` after a crash — and `None` is the signal that
+    means the endpoint may execute.  A caller that retried would then serve paid
+    work for free.
+    """
+    from middleware.metering import DeferredPaymentGate
+
+    attempts = []
+    boom = RuntimeError("facilitator exploded")
+
+    def failing_enforcement():
+        attempts.append(1)
+        raise boom
+
+    gate = DeferredPaymentGate(failing_enforcement)
+
+    with pytest.raises(RuntimeError) as first:
+        gate()
+    with pytest.raises(RuntimeError) as second:
+        gate()
+
+    assert len(attempts) == 1, (
+        f"enforcement ran {len(attempts)} times; a failed attempt must not be retried"
+    )
+    assert first.value is boom
+    assert second.value is boom, "the second call must re-raise the cached failure"
+    assert gate.invoked and gate.failed
+
+
+def test_30b_gate_caches_a_normal_outcome_without_re_enforcing():
+    """The success side of the same contract."""
+    from starlette.responses import JSONResponse
+
+    from middleware.metering import DeferredPaymentGate
+
+    attempts = []
+    rejection = JSONResponse(status_code=402, content={"error": "payment_required"})
+
+    def enforcement():
+        attempts.append(1)
+        return rejection
+
+    gate = DeferredPaymentGate(enforcement)
+
+    assert gate() is rejection
+    assert gate() is rejection
+    assert len(attempts) == 1
+    assert not gate.failed
+
+
+def test_30c_gate_proceed_result_is_cached_as_proceed():
+    from middleware.metering import DeferredPaymentGate
+
+    attempts = []
+    gate = DeferredPaymentGate(lambda: attempts.append(1))
+
+    assert gate() is None
+    assert gate() is None
+    assert len(attempts) == 1

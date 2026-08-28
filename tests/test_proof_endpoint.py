@@ -39,7 +39,7 @@ def _stub_runtime(monkeypatch):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0"), Decimal("0"), Decimal("0")),
+        lambda *a, **kw: (Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *a, **kw: None)
 
@@ -149,7 +149,7 @@ def test_proof_endpoint_request_log_is_called(monkeypatch):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0"), Decimal("0"), Decimal("0")),
+        lambda *a, **kw: (Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *a, **kw: None)
 
@@ -171,7 +171,7 @@ def test_proof_endpoint_economics_log_not_called(monkeypatch):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0"), Decimal("0"), Decimal("0")),
+        lambda *a, **kw: (Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *a, **kw: None)
 
