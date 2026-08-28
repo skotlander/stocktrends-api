@@ -33,7 +33,10 @@ import routers.prices as prices_router
 import routers.screener as screener_router
 import routers.stim as stim_router
 from support.payment_harness import (
-    UNIT_PRICE_USD,
+    SENTINEL_BILLED_AMOUNT_USD,
+    SENTINEL_STC_COST,
+    SENTINEL_UNIT_PRICE_USD,
+    counting_engine,
     malformed_x402_headers,
     mpp_headers,
     rows_engine,
@@ -82,14 +85,29 @@ def _assert_no_settlement(harness, *, verify_expected: int = 0) -> None:
 # ===========================================================================
 
 @pytest.mark.xfail(strict=True, reason=PRE_GATE)
-def test_01_malformed_symbol_exchange_does_not_settle(payment_harness, priced_engines):
+def test_01_malformed_symbol_exchange_does_not_settle(payment_harness, monkeypatch):
+    """
+    The representative case, asserted on all four axes at once.
+
+    Non-execution of the paid service is proved by the query counter rather than
+    inferred from the status code: a 400 is equally consistent with "the endpoint
+    never ran" and "the endpoint ran, queried, and then rejected the input".
+    """
+    engine, queries = counting_engine([_PRICE_ROW])
+    monkeypatch.setattr(prices_router, "get_engine", lambda: engine)
+
     response = payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM", headers=x402_headers()
     )
 
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "invalid_symbol_exchange"
-    _assert_no_settlement(payment_harness)
+    assert payment_harness.verify_count == 0, "facilitator verify must not run"
+    assert payment_harness.settle_count == 0, "facilitator settle must not run"
+    assert len(queries) == 0, (
+        f"the paid service executed {len(queries)} quer(ies) for a request that "
+        "must be rejected before payment"
+    )
 
 
 @pytest.mark.xfail(strict=True, reason=PRE_GATE)
@@ -212,13 +230,16 @@ def test_09_valid_unpaid_request_returns_challenge(payment_harness, priced_engin
 # 10-11 — payment presented but not acceptable
 # ===========================================================================
 
-def test_10_invalid_proof_verifies_but_never_settles(payment_harness, priced_engines):
+def test_10_malformed_payment_syntax_rejected_before_verification(
+    payment_harness, priced_engines
+):
+    """An undecodable payment artifact fails header validation, so the request
+    never reaches the facilitator at all — neither verify nor settle."""
     response = payment_harness.client.get(
         _VALID_PRICES_QUERY, headers=malformed_x402_headers()
     )
 
     assert response.status_code == 402
-    # The artifact is rejected during header validation, ahead of the facilitator.
     _assert_no_settlement(payment_harness, verify_expected=0)
 
 
@@ -327,6 +348,11 @@ def test_14_subscription_valid_request_never_settles(subscription_client, priced
     row = subscription_client.logs.only_economics_row()
     assert row["payment_rail"] == "subscription"
     assert row["payment_required"] == 0
+    assert row["unit_price_usd"] == SENTINEL_UNIT_PRICE_USD
+    assert row["stc_cost"] == SENTINEL_STC_COST
+    assert row["billed_amount_usd"] == 0, (
+        "a quota-backed caller is never charged per request"
+    )
 
 
 def test_15_subscription_invalid_input_never_settles(subscription_client, priced_engines):
@@ -357,13 +383,37 @@ def test_16_valid_mpp_request_authorizes_and_captures(payment_harness, priced_en
 
 
 def test_17_invalid_mpp_request_never_captures(payment_harness, priced_engines):
-    """Economic capture must never occur for a request that was never servable."""
+    """
+    Pins today's compensating behaviour for a structurally invalid MPP request.
+
+    MPP is already economically safe on invalid input, but only because the
+    finaliser compensates: it authorizes, the endpoint then rejects the input,
+    and the authorization is voided.  All three counts are asserted so that PR2
+    cannot lose the compensation while moving the gate.
+
+    NOTE FOR PR2 — this test is expected to change.  Once validation runs before
+    MPP authorization the target state is authorize 0 / capture 0 / void 0, which
+    is what test_17b asserts.  When test_17b stops xfailing, the authorize and
+    void assertions here must be updated to 0.  A failure here after PR2 is that
+    handover, not a regression.
+    """
     response = payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM", headers=mpp_headers()
     )
 
     assert response.status_code == 400
-    assert payment_harness.mpp.capture_count == 0
+    assert payment_harness.mpp.capture_count == 0, (
+        "economic capture must never occur for a request that was never servable"
+    )
+    assert payment_harness.mpp.authorize_count == 1, (
+        "current behaviour: the control plane is asked to authorize before the "
+        "endpoint rejects the input"
+    )
+    assert payment_harness.mpp.void_count == 1, (
+        "current behaviour: the authorization is compensated by a void once the "
+        "endpoint returns 4xx. PR2 must not drop this until authorize is no "
+        "longer reached at all"
+    )
 
 
 @pytest.mark.xfail(strict=True, reason=PRE_GATE)
@@ -415,8 +465,13 @@ def test_23a_challenge_records_zero_billed_amount(payment_harness, priced_engine
 
     row = payment_harness.logs.only_economics_row()
     assert row["payment_status"] == "pending"
-    assert row["unit_price_usd"] == UNIT_PRICE_USD, "quoted price is still recorded"
-    assert row["stc_cost"] == UNIT_PRICE_USD, "STC analytics value is still recorded"
+    assert row["unit_price_usd"] == SENTINEL_UNIT_PRICE_USD, (
+        "the quoted price is still recorded; it is a price, not a claim of "
+        "collection"
+    )
+    assert row["stc_cost"] == SENTINEL_STC_COST, (
+        "the STC analytical value is still recorded regardless of collection"
+    )
     assert row["billed_amount_usd"] == 0, (
         "nothing was collected on a challenge; billed_amount_usd must be zero"
     )
@@ -472,13 +527,35 @@ def test_23e_pre_gate_rejection_records_zero_billed_amount(
 
 
 def test_24_settled_request_records_the_collected_amount(payment_harness, priced_engines):
+    """
+    Each field carries its own sentinel.
+
+    Because the three values are pairwise distinct, this fails if PR2 wires the
+    quoted price or the STC cost into the billed slot — a swap that would be
+    invisible if all three were the same number.
+    """
     payment_harness.client.get(_VALID_PRICES_QUERY, headers=x402_headers())
 
     row = payment_harness.logs.only_economics_row()
     assert row["payment_status"] == "settled"
-    assert row["unit_price_usd"] == UNIT_PRICE_USD
-    assert row["stc_cost"] == UNIT_PRICE_USD
-    assert row["billed_amount_usd"] == UNIT_PRICE_USD
+    assert row["unit_price_usd"] == SENTINEL_UNIT_PRICE_USD
+    assert row["stc_cost"] == SENTINEL_STC_COST
+    assert row["billed_amount_usd"] == SENTINEL_BILLED_AMOUNT_USD
+
+
+def test_24b_economics_fields_are_not_swapped(payment_harness, priced_engines):
+    """
+    A dedicated positive control for the sentinel scheme itself.
+
+    Asserting each field is *not* equal to the other two catches a swap even if
+    a future edit changes what the correct value should be.
+    """
+    payment_harness.client.get(_VALID_PRICES_QUERY, headers=x402_headers())
+
+    row = payment_harness.logs.only_economics_row()
+    assert row["unit_price_usd"] not in (SENTINEL_BILLED_AMOUNT_USD, SENTINEL_STC_COST)
+    assert row["billed_amount_usd"] not in (SENTINEL_UNIT_PRICE_USD, SENTINEL_STC_COST)
+    assert row["stc_cost"] not in (SENTINEL_UNIT_PRICE_USD, SENTINEL_BILLED_AMOUNT_USD)
 
 
 # ===========================================================================
@@ -506,3 +583,39 @@ def test_25_data_dependent_not_found_still_settles(payment_harness, monkeypatch)
         "data-dependent failures discovered by paid execution remain chargeable"
     )
     assert payment_harness.logs.only_economics_row()["payment_status"] == "settled"
+
+
+# ===========================================================================
+# Optional coverage
+#
+# Not required for approval of this PR.  Both cases are three lines and depend
+# only on the existing harness, and both are relevant to PR2 — the first because
+# a standard x402 client sends no Stock Trends payment header at all, the second
+# because amount validation happens before enforcement and must stay there.
+# Isolated here so they can be dropped in one edit if review prefers.
+# ===========================================================================
+
+def test_opt_standard_x402_client_without_stocktrends_method_header(
+    payment_harness, priced_engines
+):
+    """A conformant x402 client sends only `X-Payment`; rail resolution must
+    still reach x402 rather than depending on the private header."""
+    response = payment_harness.client.get(
+        _VALID_PRICES_QUERY, headers=x402_headers(declare_method=False)
+    )
+
+    assert response.status_code == 200
+    assert payment_harness.settle_count == 1
+    assert payment_harness.logs.only_economics_row()["payment_rail"] == "x402"
+
+
+def test_opt_underpaid_proof_never_settles(payment_harness, priced_engines):
+    """An artifact presenting less than the quoted price is rejected during
+    header validation, ahead of the facilitator."""
+    response = payment_harness.client.get(
+        _VALID_PRICES_QUERY, headers=x402_headers(amount="1")
+    )
+
+    assert response.status_code == 402
+    assert response.json()["error"] == "insufficient_payment_amount"
+    _assert_no_settlement(payment_harness)

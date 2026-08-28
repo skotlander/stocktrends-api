@@ -52,10 +52,36 @@ from payments.x402 import X402ValidationResult
 
 # ---------------------------------------------------------------------------
 # Canonical test economics
+#
+# The three economics fields carry DELIBERATELY DISTINCT sentinel values.
+# `resolve_economic_amounts` returns them in the order
+# (unit_price_usd, billed_amount_usd, stc_cost), and in production all three
+# happen to be the same number for a paid rule — which would let an accidental
+# field swap pass every assertion unnoticed.  PR2 changes how the billed amount
+# is derived, so distinguishing the three is what makes that change reviewable.
+#
+#   A  quoted / list unit price   -> unit_price_usd
+#   B  initial billed value       -> billed_amount_usd (zeroed when uncollected)
+#   C  STC analytical cost        -> stc_cost
+#
+# A must stay consistent with UNIT_PRICE_ATOMIC: it is the amount x402 payment
+# validation requires, and the MPP minimum-amount check compares against it.
+# B and C are free values chosen only to be visibly different from A and
+# from each other.
 # ---------------------------------------------------------------------------
 
-UNIT_PRICE_USD = Decimal("0.15")
+SENTINEL_UNIT_PRICE_USD = Decimal("0.15")     # A
+SENTINEL_BILLED_AMOUNT_USD = Decimal("0.21")  # B
+SENTINEL_STC_COST = Decimal("0.37")           # C
+
+# Retained under its original name because A is also the real quoted price the
+# payment artifact must satisfy, not merely a sentinel.
+UNIT_PRICE_USD = SENTINEL_UNIT_PRICE_USD
 UNIT_PRICE_ATOMIC = "150000"          # 0.15 USDC at 6 decimals
+
+assert len({SENTINEL_UNIT_PRICE_USD, SENTINEL_BILLED_AMOUNT_USD, SENTINEL_STC_COST}) == 3, (
+    "economics sentinels must be pairwise distinct or field swaps go undetected"
+)
 PAYMENT_TOKEN = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
 PAYMENT_NETWORK = "eip155:8453"
 SETTLEMENT_TX = "0x3ed456f52d6a6c330534e7544b4bb6d1c14af770ee08097ef3b012b4d27c3189"
@@ -264,6 +290,66 @@ def assert_facilitator_bindings_intact() -> None:
         )
 
 
+MPP_CONTROL_PLANE_CALLS = (
+    "authorize_mpp_payment",
+    "capture_mpp_payment",
+    "void_mpp_authorization",
+)
+
+
+def assert_mpp_bindings_intact() -> None:
+    """
+    Fail loudly if the MppSpy attach points stop being the ones actually invoked.
+
+    The MPP control-plane functions are imported *inside* the functions that use
+    them — `authorize_mpp_payment` inside `payments.mpp.enforce_mpp_payment`, and
+    `capture_mpp_payment` / `void_mpp_authorization` inside the metering
+    finaliser.  A function-local import resolves through `payments.mpp_client`'s
+    module globals on every call, which is what makes the spy effective.
+
+    Promoting any of them to a module-level `from payments.mpp_client import ...`
+    in a calling module would bind the name at import time, and monkeypatching
+    `payments.mpp_client` afterwards would no longer be observed.  The harness
+    would then record zero authorize/capture/void calls while real ones
+    happened — the same silent failure the facilitator guard exists to prevent.
+
+    The check is structural rather than textual: it asserts where the names live,
+    not how the import statements are formatted.
+    """
+    import middleware.metering as _metering
+    import payments.mpp as _mpp
+
+    for name in MPP_CONTROL_PLANE_CALLS:
+        assert hasattr(mpp_client_module, name), (
+            f"payments.mpp_client.{name} is missing; the MppSpy cannot attach."
+        )
+
+    # No calling module may hold its own module-level binding of these names.
+    for module in (_metering, _mpp):
+        shadowed = [name for name in MPP_CONTROL_PLANE_CALLS if hasattr(module, name)]
+        assert not shadowed, (
+            f"{module.__name__} now binds {shadowed} at module level. "
+            "Patching payments.mpp_client would no longer be observed and the "
+            "MppSpy would silently record zero calls."
+        )
+
+    # And the names must still be referenced by the code paths under test, so a
+    # rename or removal is caught rather than producing a vacuously green spy.
+    import inspect
+
+    authorize_source = inspect.getsource(_mpp.enforce_mpp_payment)
+    assert "authorize_mpp_payment" in authorize_source, (
+        "enforce_mpp_payment no longer references authorize_mpp_payment."
+    )
+
+    finaliser_source = inspect.getsource(_metering.MeteringMiddleware.dispatch)
+    for name in ("capture_mpp_payment", "void_mpp_authorization"):
+        assert name in finaliser_source, (
+            f"MeteringMiddleware.dispatch no longer references {name}; the MPP "
+            "capture/void finaliser may have moved and the spy is stale."
+        )
+
+
 # ---------------------------------------------------------------------------
 # Engine stubs
 # ---------------------------------------------------------------------------
@@ -381,6 +467,7 @@ def facilitator_spy(monkeypatch) -> FacilitatorSpy:
 @pytest.fixture
 def mpp_spy(monkeypatch) -> MppSpy:
     """Replace the MPP control-plane calls with recording fakes."""
+    assert_mpp_bindings_intact()
     spy = MppSpy()
 
     def fake_authorize(**kwargs):
@@ -443,11 +530,22 @@ def agent_pay_enabled(monkeypatch) -> None:
 
 @pytest.fixture
 def priced_at_unit_price(monkeypatch) -> None:
-    """Resolve every pricing rule to the canonical acceptance-suite price."""
+    """
+    Resolve every pricing rule to the acceptance-suite sentinels.
+
+    The three values are distinct on purpose — see the sentinel block at the top
+    of this module.  Tests assert each economics field against its own sentinel,
+    so a mapping swap between unit_price_usd, billed_amount_usd and stc_cost
+    fails rather than passing silently.
+    """
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *_a, **_kw: (UNIT_PRICE_USD, UNIT_PRICE_USD, UNIT_PRICE_USD),
+        lambda *_a, **_kw: (
+            SENTINEL_UNIT_PRICE_USD,
+            SENTINEL_BILLED_AMOUNT_USD,
+            SENTINEL_STC_COST,
+        ),
     )
 
 
