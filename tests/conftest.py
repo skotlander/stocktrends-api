@@ -31,3 +31,9 @@ _STUBS = {
 
 for _name, _stub in _STUBS.items():
     sys.modules.setdefault(_name, _stub)
+
+
+# The settlement-ordering acceptance suite shares a measurement harness.
+# Registering it as a plugin makes its fixtures available without every test
+# module importing them by hand.
+pytest_plugins = ["support.payment_harness"]
