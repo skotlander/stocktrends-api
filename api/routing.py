@@ -60,6 +60,20 @@ PAYMENT_GATE_STATE_ATTR = "payment_gate"
 # removes the key again before calling the original endpoint.
 BOUNDARY_REQUEST_VALUE_KEY = "__stocktrends_boundary_request"
 
+# Stable internal error code for a breach of the execution-boundary invariant.
+# Surfaced by the metering finaliser's runtime backstop and by the wrapper's
+# own fail-closed path, so operators see one code for one condition.
+BOUNDARY_NOT_CONSULTED_ERROR = "payment_execution_boundary_not_consulted"
+
+
+class PaymentExecutionBoundaryError(RuntimeError):
+    """
+    The payment execution boundary could not do its job.
+
+    Raised rather than returned: there is no safe way to continue, and an
+    exception cannot be mistaken for a normal result the way a `None` can.
+    """
+
 
 def is_payment_wrapped(target: Any) -> bool:
     """
@@ -84,12 +98,29 @@ def _gate_rejection(request: Any) -> Optional[Response]:
     or `None` when the request may proceed.  The gate is responsible for its
     own one-shot semantics and for recording its result on `request.state`;
     this module deliberately knows nothing about pricing or payment rails.
+
+    Fails closed when the `Request` cannot be recovered.  An installed wrapper
+    with no request in hand cannot read `request.state`, so it cannot tell a
+    free endpoint from a paid one that has a gate waiting.  Returning `None`
+    there would let a paid endpoint execute unpaid, so this raises instead.
     """
     if request is None:
-        return None
+        raise PaymentExecutionBoundaryError(
+            f"{BOUNDARY_NOT_CONSULTED_ERROR}: the payment execution boundary "
+            "could not recover the Request from the solved endpoint values, so "
+            "it cannot determine whether a payment gate is pending. Refusing to "
+            "execute the endpoint."
+        )
 
     state = getattr(request, "state", None)
-    gate = getattr(state, PAYMENT_GATE_STATE_ATTR, None) if state is not None else None
+    if state is None:
+        raise PaymentExecutionBoundaryError(
+            f"{BOUNDARY_NOT_CONSULTED_ERROR}: the request carries no state, so "
+            "a pending payment gate could not be read. Refusing to execute the "
+            "endpoint."
+        )
+
+    gate = getattr(state, PAYMENT_GATE_STATE_ATTR, None)
     if gate is None:
         return None
 
@@ -189,3 +220,53 @@ def install_payment_execution_boundary(app: Any) -> int:
         wrapped += 1
 
     return wrapped
+
+
+def unwrapped_api_routes(app: Any) -> list[APIRoute]:
+    """Every `APIRoute` on `app` that does not carry the execution boundary."""
+    return [
+        route
+        for route in getattr(app, "routes", [])
+        if isinstance(route, APIRoute) and not is_payment_wrapped(route)
+    ]
+
+
+def assert_payment_boundary_complete(app: Any, *, expected_minimum: int = 1) -> int:
+    """
+    Refuse to start with an incompletely wrapped route surface.
+
+    Coverage is a load-bearing runtime invariant, not merely a tested property.
+    A payment-governed route registered after `install_payment_execution_boundary`
+    would otherwise serve its full paid payload with no gate, no challenge and
+    no settlement — visible only as a log line after the fact.  Failing
+    initialization converts that into an error nobody can deploy past.
+
+    Uses the same marker contract the tests read, so there is one definition of
+    "wrapped" rather than two that can drift apart.
+    """
+    api_routes = [r for r in getattr(app, "routes", []) if isinstance(r, APIRoute)]
+
+    # Non-vacuity: an empty surface would satisfy "every route is wrapped".
+    if len(api_routes) < expected_minimum:
+        raise PaymentExecutionBoundaryError(
+            "payment execution boundary verification is vacuous: found "
+            f"{len(api_routes)} APIRoute(s), expected at least {expected_minimum}. "
+            "The boundary is probably being verified against the wrong app."
+        )
+
+    unwrapped = unwrapped_api_routes(app)
+    if unwrapped:
+        listing = "\n  ".join(
+            sorted(
+                f"{sorted(route.methods or set())} {route.path}"
+                for route in unwrapped
+            )
+        )
+        raise PaymentExecutionBoundaryError(
+            f"{len(unwrapped)} route(s) are missing the payment execution "
+            "boundary and could execute paid work without consulting the "
+            "payment gate. Every APIRoute must be wrapped before the "
+            f"application serves traffic:\n  {listing}"
+        )
+
+    return len(api_routes)

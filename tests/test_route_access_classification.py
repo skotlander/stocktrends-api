@@ -66,7 +66,7 @@ def _stub_metering_side_effects(monkeypatch, *, cost: Decimal = Decimal("0")):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *_args, **_kwargs: (cost, cost, cost),
+        lambda *_args, **_kwargs: (cost, cost),
     )
 
 

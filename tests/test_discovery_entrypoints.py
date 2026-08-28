@@ -16,7 +16,7 @@ def _stub_runtime_side_effects(monkeypatch):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *args, **kwargs: (Decimal("0"), Decimal("0"), Decimal("0")),
+        lambda *args, **kwargs: (Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *args, **kwargs: None)
 
@@ -104,6 +104,7 @@ def test_route_level_404_keeps_existing_detail_schema(client, monkeypatch):
     # route that was never put through the payment execution boundary, which
     # the universal-coverage guard correctly reports as a hole.
     original_routes = list(main.v1.routes)
+    original_schema = main.v1.openapi_schema
     try:
         @main.v1.get("/_test-route-level-404")
         def route_level_404():
@@ -116,6 +117,10 @@ def test_route_level_404_keeps_existing_detail_schema(client, monkeypatch):
         response = client.get("/v1/_test-route-level-404", headers={"X-API-Key": "test-key"})
     finally:
         main.v1.router.routes[:] = original_routes
+        # A schema generated while the probe route existed would otherwise stay
+        # cached after the route is gone, advertising an endpoint that no longer
+        # exists to every later test in the session.
+        main.v1.openapi_schema = original_schema
 
     assert response.status_code == 404
     assert response.json() == {"detail": "Route-level missing resource"}

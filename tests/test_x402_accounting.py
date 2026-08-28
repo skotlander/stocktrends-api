@@ -105,7 +105,7 @@ def test_standard_x402_retry_without_stocktrends_method_logs_settled(monkeypatch
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *_args, **_kwargs: (Decimal("0.15"), Decimal("0.15"), Decimal("0.15")),
+        lambda *_args, **_kwargs: (Decimal("0.15"), Decimal("0.15")),
     )
     monkeypatch.setattr(metering_module, "log_api_request_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(

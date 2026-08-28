@@ -122,7 +122,7 @@ def _stub_runtime(monkeypatch, *, enforce_result: PaymentEnforcementResult, path
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0.05"), Decimal("0.05"), Decimal("0.05")),
+        lambda *a, **kw: (Decimal("0.05"), Decimal("0.05")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *a, **kw: None)
 
@@ -659,7 +659,7 @@ def test_paid_200_response_gets_no_store_cache_control(monkeypatch):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0.05"), Decimal("0.05"), Decimal("0.05")),
+        lambda *a, **kw: (Decimal("0.05"), Decimal("0.05")),
     )
 
     with TestClient(main.app) as client:

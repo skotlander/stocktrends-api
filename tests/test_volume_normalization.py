@@ -116,7 +116,7 @@ def patched_client(monkeypatch):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *_a, **_kw: (Decimal("0"), Decimal("0"), Decimal("0")),
+        lambda *_a, **_kw: (Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "_ENABLE_AGENT_PAY", False)
     monkeypatch.setattr(metering_module, "ENABLE_AGENT_PAY", False)
@@ -501,7 +501,7 @@ def free_client(monkeypatch):
     monkeypatch.setattr(
         metering_module,
         "resolve_economic_amounts",
-        lambda *_a, **_kw: (Decimal("0"), Decimal("0"), Decimal("0")),
+        lambda *_a, **_kw: (Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "_ENABLE_AGENT_PAY", False)
     monkeypatch.setattr(metering_module, "ENABLE_AGENT_PAY", False)
