@@ -6,8 +6,14 @@ This document defines the exact lifecycle of an API request, including:
 
 * authentication
 * pricing
+* request validation
 * payment enforcement
 * logging
+
+Ordering is load-bearing, not incidental. Payment enforcement is deliberately
+positioned after every rejection the system can reach without doing paid work,
+so that no deterministic client-input failure or route-miss condition can move
+money. Steps 6 through 9 exist for that reason and must not be reordered.
 
 ---
 
@@ -352,9 +358,9 @@ Example:
 
 ---
 
-### 4. Payment Path Selection
+### 4. Payment Rail Selection / Classification — No Collection
 
-Based on request context:
+Based on request context, the rail that *would* be used is resolved:
 
 #### A. Subscription Path
 
@@ -371,9 +377,99 @@ Based on request context:
 * active session
 * STC consumed within session
 
+This step classifies only. No payment is collected, no facilitator is
+contacted, and no MPP authorization is opened here.
+
+Rail selection happens in middleware, which runs *before* routing. At this
+point the system does not yet know that the path matches a route, that the body
+parses, or that the request is answerable. Enforcing payment here is what
+allowed unservable requests to settle; enforcement is therefore deferred to
+step 10 and published as a one-shot gate on the request for the endpoint
+boundary to invoke.
+
 ---
 
-### 5. Payment Enforcement
+### 5. Intelligence Artifact Availability Boundary
+
+A separate, pre-existing gate that applies only to the paid
+`/v1/intelligence/*` artifact routes.
+
+When the configured artifact store is unavailable — or the requested published
+artifact does not exist — the request fails **before** the normal payment
+lifecycle, with no payment challenge and no settlement.
+
+This is deliberately fail-closed: the system does not quote a price for, or
+collect payment against, an intelligence product it cannot serve.
+
+It is distinct from the request-only semantic validation in step 9:
+
+* the availability boundary is **store/data dependent** — it asks whether the
+  artifact exists and is serveable;
+* semantic validation is **request-only** — it asks whether the caller's input
+  is well formed.
+
+Both run before payment, for different reasons. Neither replaces the other, and
+store access must never be moved into a semantic validator.
+
+---
+
+### 6. FastAPI Route Matching
+
+The path and method are matched against the registered route surface.
+
+A route miss or method miss is resolved here, before any payment step. A typo
+under a paid path prefix must never settle.
+
+---
+
+### 7. JSON / Body Parsing
+
+The request body is decoded.
+
+Malformed JSON is rejected here, before payment.
+
+---
+
+### 8. Query / Path / Pydantic Structural Validation
+
+FastAPI validates declared query, path and body parameters against their types
+and constraints.
+
+Constraint violations (`limit=0`, a body failing its model) are rejected here
+with the framework's `422`, before payment.
+
+---
+
+### 9. Request-Only Semantic Validation
+
+Structural validity is not the same as answerability. `symbol_exchange=IBM` is
+a well-formed string that names no instrument; an empty
+`EvaluateSymbolRequest` body satisfies its model but identifies nothing.
+
+Endpoints with such rules register a pre-payment semantic validator, which runs
+here on the already-validated request values and raises the endpoint's existing
+`HTTPException` when the request is unanswerable.
+
+Constraints on this step:
+
+* it must be **request-only** — decidable from the submitted values alone;
+* it must be synchronous and side-effect free: no database, no service, no
+  network, no mutable application state;
+* it must reuse the same helper the endpoint itself uses, so there is one
+  definition of validity rather than a pre-payment copy that can drift.
+
+Rejections that require querying or executing paid work — a symbol that does
+not exist, an unavailable weekdate, an empty candidate set, an ambiguous
+symbol-only lookup — deliberately do **not** run here. They remain after
+payment and remain chargeable, because discovering them consumed the paid
+service.
+
+---
+
+### 10. Deferred Payment Enforcement
+
+The one-shot gate published in step 4 is invoked here, at the endpoint call
+boundary — after every rejection above, and before any paid work.
 
 System validates:
 
@@ -386,16 +482,29 @@ Outcomes:
 * success → proceed
 * failure → `402 Payment Required`
 
+For x402, an artifact presenting less than the quoted amount is rejected before
+the facilitator is contacted. That minimum is enforced by the enforcement path
+itself and is not conditional on the optional payment-header validation flag.
+
 ---
 
-### 6. Endpoint Execution
+### 11. Endpoint / Service Execution
 
 * data fetched
 * response generated
 
+Everything from this point on is paid work, and its failures are chargeable.
+
 ---
 
-### 7. Metering + Logging
+### 12. MPP Finalization
+
+Where applicable, the MPP authorization opened at step 10 is resolved —
+captured on success, or compensated.
+
+---
+
+### 13. Metering + Logging
 
 Record written to:
 
@@ -414,13 +523,41 @@ Fields:
 
 ---
 
-### 8. Response Returned
+### 14. Response Returned
 
 Includes:
 
 * requested data
 * payment headers (if applicable)
 * request ID for tracking
+
+---
+
+## Precedence: Input Errors and the Payment Challenge
+
+Two rules follow from the ordering above, and both are contract-visible.
+
+**A deterministic request-only input error takes precedence over a payment
+challenge.** An unpaid request that could never have been served returns its
+input error (`400`/`422`), not a `402`. Quoting a price for a request the
+endpoint would refuse tells the agent nothing useful and invites it to pay for
+a request that cannot succeed. Pricing context headers remain present on the
+error response, so the price is still discoverable once the request is
+corrected.
+
+**An otherwise-valid unpaid paid request proceeds to the 402 challenge.** The
+`402` is the final pre-payment surface for a request that *is* serviceable — it
+is not the mechanism for discovering which parameters an endpoint accepts.
+Agents should read `/v1/ai/tools` or the canonical OpenAPI document for input
+schemas, and `/v1/pricing/catalog` for current pricing, then construct a
+serviceable request.
+
+Accounting consequence: a request denied before the payment gate — route miss,
+structural validation failure, or semantic rejection — records
+`payment_status = rejected` on every rail. It is terminal and non-consuming, and
+is excluded from the billing runbook's `presented`/`covered` usage queries. A
+challenge, by contrast, records `pending`, because the agent may still pay for
+it.
 
 ---
 
@@ -432,6 +569,18 @@ Includes:
 | presented         | billable agent payment     |
 | failed_validation | invalid payment attempt    |
 | rejected          | request denied             |
+
+`rejected` is terminal and non-consuming: the request was denied before payment
+execution, so no rail was contacted and nothing was served. It covers a route
+miss, a structural validation failure, and a request-only semantic rejection,
+on every rail.
+
+It is deliberately outside the billing runbook's `payment_status IN
+('presented', 'covered')` usage queries, and is grouped with
+`failed_validation` in that runbook's failed-payment diagnostics.
+
+Do not confuse it with `pending`, which means a challenge was issued and the
+request may still be paid for.
 
 ---
 

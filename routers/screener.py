@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
 
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
 
 router = APIRouter(prefix="/agent/screener", tags=["agent_screener"])
@@ -40,6 +41,64 @@ def _parse_trend_filter(trend: str | None) -> list[str] | None:
     return codes
 
 
+def resolve_screener_filters(
+    *,
+    sort: str,
+    exchange: str | None,
+    trend: str | None,
+) -> tuple[str, str | None, list[str] | None]:
+    """
+    The screener's request-only validity, in one place.
+
+    Returns the normalized `(sort, exchange, trend_codes)` the query is built
+    from.  All three checks are decided by the query string alone — an
+    unsupported sort key, an exchange code that does not exist, a trend code
+    outside the Stock Trends vocabulary — so they are knowable before any paid
+    work and are registered as this endpoint's pre-payment validation.
+
+    Deliberately NOT here: resolving the latest weekdate, and whether any signal
+    rows match.  Both are answers the database gives, so both stay behind the
+    payment gate.
+
+    The endpoint consumes this function's normalized result rather than
+    re-deriving it, so the pre-payment check and the executed query can never
+    disagree about what the caller asked for.
+    """
+    if sort not in _VALID_SORT_FIELDS:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_sort",
+                "value": sort,
+                "valid": sorted(_VALID_SORT_FIELDS),
+            },
+        )
+
+    norm_exchange: str | None = None
+    if exchange:
+        norm_exchange = exchange.strip().upper()
+        if norm_exchange not in _VALID_EXCHANGES:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "invalid_exchange",
+                    "value": exchange,
+                    "valid": sorted(_VALID_EXCHANGES),
+                },
+            )
+
+    return sort, norm_exchange, _parse_trend_filter(trend)
+
+
+def _validate_screener_values(request: Request, values: dict) -> None:
+    """Pre-payment adapter: the shared resolver over the solved query values."""
+    resolve_screener_filters(
+        sort=values.get("sort"),
+        exchange=values.get("exchange"),
+        trend=values.get("trend"),
+    )
+
+
 @router.get(
     "/top",
     summary="Top-ranked instruments screener",
@@ -53,6 +112,7 @@ def _parse_trend_filter(trend: str | None) -> list[str] | None:
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
+@pre_payment_semantic_validator(_validate_screener_values)
 def screener_top(
     request: Request,
     exchange: str | None = Query(
@@ -100,33 +160,15 @@ def screener_top(
         description="Override weekdate YYYY-MM-DD. Defaults to latest available in st_signals_latest.",
     ),
 ):
-    # --- Validate sort ---
-    if sort not in _VALID_SORT_FIELDS:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "invalid_sort",
-                "value": sort,
-                "valid": sorted(_VALID_SORT_FIELDS),
-            },
-        )
-
-    # --- Validate exchange ---
-    norm_exchange: str | None = None
-    if exchange:
-        norm_exchange = exchange.strip().upper()
-        if norm_exchange not in _VALID_EXCHANGES:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "invalid_exchange",
-                    "value": exchange,
-                    "valid": sorted(_VALID_EXCHANGES),
-                },
-            )
-
-    # --- Parse and validate trend filter ---
-    trend_codes = _parse_trend_filter(trend)
+    # Request-only validation and normalization, shared with the pre-payment
+    # validator registered on this endpoint.  Already run once before the
+    # payment gate; run again here so the query is built from the same
+    # normalized values rather than from a second interpretation of them.
+    sort, norm_exchange, trend_codes = resolve_screener_filters(
+        sort=sort,
+        exchange=exchange,
+        trend=trend,
+    )
 
     engine = get_engine()
 

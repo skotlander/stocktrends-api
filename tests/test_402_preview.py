@@ -50,6 +50,17 @@ from services.intelligence_artifact_store import STORE_ENV_VAR
 
 _KNOWN_PREVIEW_PATH = "/v1/indicators/latest"
 _INDICATORS_HISTORY_PATH = "/v1/indicators/history"
+
+# These suites exercise the *shape* of the 402 challenge, so the requests they
+# send must be ones the endpoint could actually serve once paid.  Since PR3,
+# request-only semantic validation runs before the payment gate, so a paid
+# instrument endpoint called with no instrument now returns its deterministic
+# 400 instead of a challenge — correct behaviour, but it would answer a
+# different question than these tests are asking.  Naming a valid instrument
+# keeps them pointed at the challenge.
+_KNOWN_PREVIEW_REQUEST = f"{_KNOWN_PREVIEW_PATH}?symbol_exchange=IBM-N"
+_STIM_LATEST_PATH = "/v1/stim/latest"
+_STIM_LATEST_REQUEST = f"{_STIM_LATEST_PATH}?symbol_exchange=IBM-N"
 _DEVELOPER_ORIGIN = "https://developer.stocktrends.com"
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _INTELLIGENCE_FIXTURE_ROOT = _REPO_ROOT / "tests" / "fixtures" / "intelligence" / "public_artifacts" / "v1"
@@ -400,7 +411,7 @@ def client_x402_challenge_known(monkeypatch):
 
 def test_x402_challenge_returns_402(client_x402_challenge_known):
     response = client_x402_challenge_known.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={"X-StockTrends-Payment-Method": "x402"},
     )
     assert response.status_code == 402
@@ -409,7 +420,7 @@ def test_x402_challenge_returns_402(client_x402_challenge_known):
 def test_x402_challenge_includes_stocktrends_preview(client_x402_challenge_known):
     """Challenge body for a known preview path must include stocktrends_preview."""
     response = client_x402_challenge_known.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={"X-StockTrends-Payment-Method": "x402"},
     )
     assert response.status_code == 402
@@ -422,7 +433,7 @@ def test_x402_challenge_includes_stocktrends_preview(client_x402_challenge_known
 def test_default_x402_challenge_preview_remains_rich(client_x402_challenge_known):
     """Default challenge mode keeps the rich first-discovery body preview."""
     response = client_x402_challenge_known.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={"X-StockTrends-Payment-Method": "x402"},
     )
     assert response.status_code == 402
@@ -436,7 +447,7 @@ def test_default_x402_challenge_preview_remains_rich(client_x402_challenge_known
 def test_compact_x402_challenge_mode_keeps_rich_body_preview(client_x402_challenge_known):
     """Challenge compactness must not remove rich Stock Trends body metadata."""
     response = client_x402_challenge_known.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={
             "X-StockTrends-Payment-Method": "x402",
             "X-StockTrends-Challenge-Mode": "compact",
@@ -455,7 +466,7 @@ def test_compact_x402_challenge_mode_keeps_rich_body_preview(client_x402_challen
 def test_x402_challenge_preview_is_schema_only(client_x402_challenge_known):
     """stocktrends_preview must not contain paid response values."""
     body = client_x402_challenge_known.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={"X-StockTrends-Payment-Method": "x402"},
     ).json()
     preview = body.get("stocktrends_preview", {})
@@ -468,10 +479,10 @@ def test_x402_challenge_preview_is_schema_only(client_x402_challenge_known):
 
 
 def test_stim_latest_compact_402_body_preview_remains_rich(monkeypatch):
-    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result(_STIM_LATEST_PATH))
     with TestClient(main.app) as client:
         response = client.get(
-            "/v1/stim/latest",
+            _STIM_LATEST_REQUEST,
             headers={
                 "X-StockTrends-Payment-Method": "x402",
                 "X-StockTrends-Challenge-Mode": "compact",
@@ -493,10 +504,10 @@ def test_stim_latest_compact_402_body_preview_remains_rich(monkeypatch):
 
 
 def test_bazaar_service_identity_does_not_shrink_stocktrends_preview(monkeypatch):
-    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result(_STIM_LATEST_PATH))
     with TestClient(main.app) as client:
         response = client.get(
-            "/v1/stim/latest",
+            _STIM_LATEST_REQUEST,
             headers={
                 "X-StockTrends-Payment-Method": "x402",
                 "X-StockTrends-Challenge-Mode": "compact",
@@ -517,7 +528,7 @@ def test_bazaar_service_identity_does_not_shrink_stocktrends_preview(monkeypatch
 def test_x402_challenge_existing_fields_preserved(client_x402_challenge_known):
     """All original challenge fields must still be present."""
     body = client_x402_challenge_known.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={"X-StockTrends-Payment-Method": "x402"},
     ).json()
     for field in ("error", "pricing", "accepted_payment_methods", "payment_required"):
@@ -527,7 +538,7 @@ def test_x402_challenge_existing_fields_preserved(client_x402_challenge_known):
 def test_x402_challenge_accepted_methods_has_all_rails(client_x402_challenge_known):
     """accepted_payment_methods must include subscription, x402, and mpp."""
     body = client_x402_challenge_known.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={"X-StockTrends-Payment-Method": "x402"},
     ).json()
     methods = set(body.get("accepted_payment_methods", []))
@@ -539,7 +550,7 @@ def test_x402_challenge_accepted_methods_has_all_rails(client_x402_challenge_kno
 def test_x402_challenge_payment_required_header_present(client_x402_challenge_known):
     """PAYMENT-REQUIRED header must be set (not X-Payment-Required)."""
     response = client_x402_challenge_known.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={"X-StockTrends-Payment-Method": "x402"},
     )
     # Starlette lowercases response headers
@@ -551,9 +562,9 @@ def test_x402_challenge_payment_required_header_present(client_x402_challenge_kn
 
 
 def test_stim_latest_no_payment_request_still_returns_402(monkeypatch):
-    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result(_STIM_LATEST_PATH))
     with TestClient(main.app) as client:
-        response = client.get("/v1/stim/latest")
+        response = client.get(_STIM_LATEST_REQUEST)
 
     assert response.status_code == 402
 
@@ -584,10 +595,10 @@ def test_paid_intelligence_routes_return_402_with_preview(monkeypatch, path, pri
 
 
 def test_x402_402_response_is_readable_from_developer_portal(monkeypatch):
-    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result(_STIM_LATEST_PATH))
     with TestClient(main.app) as client:
         response = client.get(
-            "/v1/stim/latest",
+            _STIM_LATEST_REQUEST,
             headers={"Origin": _DEVELOPER_ORIGIN},
         )
 
@@ -603,7 +614,7 @@ def test_x402_402_response_is_readable_from_developer_portal(monkeypatch):
 def test_x402_preflight_allows_payment_headers_for_paid_route():
     with TestClient(main.app) as client:
         response = client.options(
-            "/v1/stim/latest",
+            _STIM_LATEST_REQUEST,
             headers={
                 "Origin": _DEVELOPER_ORIGIN,
                 "Access-Control-Request-Method": "GET",
@@ -630,10 +641,10 @@ def test_public_tools_endpoint_remains_non_payment_public():
 
 def test_non_developer_origin_gets_no_cors_headers(monkeypatch):
     """Requests from non-whitelisted origins must not receive access-control-allow-origin."""
-    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result("/v1/stim/latest"))
+    _stub_runtime(monkeypatch, enforce_result=_make_challenge_result(_STIM_LATEST_PATH))
     with TestClient(main.app) as client:
         response = client.get(
-            "/v1/stim/latest",
+            _STIM_LATEST_REQUEST,
             headers={"Origin": "https://evil.example.com"},
         )
 
@@ -683,7 +694,7 @@ def client_x402_validation_failed(monkeypatch):
 def test_x402_validation_failed_no_preview(client_x402_validation_failed):
     """validation_failed 402 must not include stocktrends_preview."""
     response = client_x402_validation_failed.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={
             "X-StockTrends-Payment-Method": "x402",
             "X-StockTrends-Payment-Reference": "0xsig",
@@ -708,7 +719,7 @@ def client_x402_replay(monkeypatch):
 def test_x402_replay_detected_no_preview(client_x402_replay):
     """replay_detected 402 must not include stocktrends_preview."""
     response = client_x402_replay.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={
             "X-StockTrends-Payment-Method": "x402",
             "X-StockTrends-Payment-Reference": "0xdupe",
@@ -733,7 +744,7 @@ def client_mpp_failure(monkeypatch):
 def test_mpp_failure_no_preview(client_mpp_failure):
     """MPP 402 errors must not include stocktrends_preview (different branch)."""
     response = client_mpp_failure.get(
-        _KNOWN_PREVIEW_PATH,
+        _KNOWN_PREVIEW_REQUEST,
         headers={
             "X-StockTrends-Payment-Method": "mpp",
             "X-StockTrends-Session-Id": "ses_test",

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
+
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
 
 from routers.signals import VALID_EXCHANGES, parse_symbol_exchange
@@ -59,6 +61,27 @@ def _resolve_symbol_exchange(
     return _norm_symbol(symbol), _norm_exchange(exchange)
 
 
+def _validate_symbol_exchange_values(request: Request, values: dict) -> None:
+    """
+    Pre-payment adapter over `_resolve_symbol_exchange`.
+
+    Only the request-only half of this endpoint's validity moves forward: whether
+    the caller named an instrument at all, and whether the exchange code names a
+    real exchange.  Everything the answer depends on — whether an ST-IM estimate
+    exists for the instrument, and whether it is stale against the latest market
+    week — is discovered by the paid query and stays behind the payment gate.
+
+    The adapter maps solved values into the shared resolver and holds no rule of
+    its own, so the 400 a client sees is byte-for-byte the resolver's.
+    """
+    _resolve_symbol_exchange(
+        request=request,
+        symbol_exchange=values.get("symbol_exchange"),
+        symbol=values.get("symbol"),
+        exchange=values.get("exchange"),
+    )
+
+
 def _fetch_latest_weekdate_st_data(engine, symbol: str, exchange: str):
     """
     Latest weekdate present in st_data for this instrument.
@@ -92,6 +115,7 @@ def _fetch_latest_weekdate_st_data(engine, symbol: str, exchange: str):
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
+@pre_payment_semantic_validator(_validate_symbol_exchange_values)
 def stim_latest(
     request: Request,
     symbol_exchange: str | None = Query(default=None, description="e.g., IBM-N"),
@@ -183,6 +207,7 @@ def stim_latest(
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
+@pre_payment_semantic_validator(_validate_symbol_exchange_values)
 def stim_history(
     request: Request,
     symbol_exchange: str | None = Query(default=None, description="e.g., IBM-N"),

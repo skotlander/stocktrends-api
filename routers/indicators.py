@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
+
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
 
 from routers.signals import VALID_EXCHANGES, parse_symbol_exchange
@@ -60,7 +62,28 @@ def _resolve_symbol_exchange(
     return _norm_symbol(symbol), _norm_exchange(exchange)
 
 
+def _validate_symbol_exchange_values(request: Request, values: dict) -> None:
+    """
+    Pre-payment adapter over `_resolve_symbol_exchange`.
+
+    Same shape as prices and ST-IM: whether the caller named an instrument is
+    request-only and moves ahead of payment; whether that instrument has
+    indicator rows is discovered by the paid query and does not.
+
+    The adapter maps solved values into the shared resolver and holds no rule of
+    its own, so the 400 a client sees is byte-for-byte the resolver's.
+    """
+    _resolve_symbol_exchange(
+        request=request,
+        symbol_exchange=values.get("symbol_exchange"),
+        symbol=values.get("symbol"),
+        exchange=values.get("exchange"),
+    )
+
+
+
 @router.get("/latest")
+@pre_payment_semantic_validator(_validate_symbol_exchange_values)
 def indicators_latest(
     request: Request,
     symbol_exchange: str | None = Query(default=None, description="e.g., IBM-N"),
@@ -147,6 +170,7 @@ def indicators_latest(
 
 
 @router.get("/history")
+@pre_payment_semantic_validator(_validate_symbol_exchange_values)
 def indicators_history(
     request: Request,
     symbol_exchange: str | None = Query(default=None, description="e.g., IBM-N"),

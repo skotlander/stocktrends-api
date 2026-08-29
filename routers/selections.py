@@ -12,6 +12,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
 from services import stim_select_outcome_summary as outcome_summary_service
@@ -117,6 +118,76 @@ def _norm_exchange(ex: str) -> str:
             detail=f"Invalid exchange '{ex}'. Must be one of {sorted(VALID_EXCHANGES)}",
         )
     return ex
+
+
+def resolve_selection_filters(
+    request: Request,
+    *,
+    symbol_exchange: str | None,
+    symbol: str | None,
+    exchange: str | None,
+) -> tuple[str | None, str | None]:
+    """
+    The selection-history filters' request-only validity, in one place.
+
+    Returns the normalized `(symbol, exchange)` the WHERE clause is built from.
+    A composite identifier that is not of the form `IBM-N`, and an exchange code
+    outside the Stock Trends vocabulary, are both decided by the query string
+    alone, so they are refused before any payment rail is touched.
+
+    Deliberately NOT here: whether any selection rows match.  That is the paid
+    answer the caller asked for.
+
+    The endpoint consumes this result rather than re-deriving it, so the
+    pre-payment check and the executed query cannot disagree.
+    """
+    s: str | None = None
+    ex: str | None = None
+
+    if symbol_exchange:
+        if "-" not in symbol_exchange:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "request_id": request.state.request_id,
+                    "error": "invalid_symbol_exchange",
+                    "message": "Use like 'IBM-N'",
+                },
+            )
+        s_part, ex_part = symbol_exchange.rsplit("-", 1)
+        s = _norm_symbol(s_part)
+        ex = _norm_exchange(ex_part)
+
+    elif symbol:
+        s = _norm_symbol(symbol)
+
+    if exchange:
+        ex = _norm_exchange(exchange)
+
+    return s, ex
+
+
+def _validate_selection_filter_values(request: Request, values: dict) -> None:
+    """Pre-payment adapter: the shared resolver over the solved query values."""
+    resolve_selection_filters(
+        request,
+        symbol_exchange=values.get("symbol_exchange"),
+        symbol=values.get("symbol"),
+        exchange=values.get("exchange"),
+    )
+
+
+def _validate_exchange_values(request: Request, values: dict) -> None:
+    """
+    Pre-payment adapter over `_norm_exchange` for the latest-list endpoints.
+
+    They accept only the optional exchange filter, so that is the whole of their
+    request-only validity.  Calls the same `_norm_exchange` the endpoint calls.
+    """
+    exchange = values.get("exchange")
+    if exchange:
+        _norm_exchange(exchange)
+
 
 
 def _norm_outcome_exchange(ex: str) -> str:
@@ -669,6 +740,7 @@ def stim_select_outcomes_summary(
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
+@pre_payment_semantic_validator(_validate_exchange_values)
 def selections_latest(
     request: Request,
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
@@ -811,6 +883,7 @@ def selections_latest(
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
+@pre_payment_semantic_validator(_validate_selection_filter_values)
 def selections_history(
     request: Request,
     symbol_exchange: str | None = Query(default=None, description="e.g., IBM-N"),
@@ -836,28 +909,14 @@ def selections_history(
     """
     engine = get_engine()
 
-    s = None
-    ex = None
-
-    if symbol_exchange:
-        if "-" not in symbol_exchange:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "request_id": request.state.request_id,
-                    "error": "invalid_symbol_exchange",
-                    "message": "Use like 'IBM-N'",
-                },
-            )
-        s_part, ex_part = symbol_exchange.rsplit("-", 1)
-        s = _norm_symbol(s_part)
-        ex = _norm_exchange(ex_part)
-
-    elif symbol:
-        s = _norm_symbol(symbol)
-
-    if exchange:
-        ex = _norm_exchange(exchange)
+    # Shared with the pre-payment validator registered on this endpoint; the
+    # normalized filters below are the ones it already checked.
+    s, ex = resolve_selection_filters(
+        request,
+        symbol_exchange=symbol_exchange,
+        symbol=symbol,
+        exchange=exchange,
+    )
 
     params: dict[str, Any] = {"limit": limit}
     where = "WHERE 1=1"

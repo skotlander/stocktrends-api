@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Path, Request
 
+from api.routing import pre_payment_semantic_validator
 from services.intelligence_artifact_store import (
     STORE_ENV_VAR,
     IntelligenceArtifactStoreUnavailable,
@@ -50,6 +51,21 @@ def _validate_artifact_id(artifact_id: str) -> str:
             },
         )
     return artifact_id
+
+
+def _validate_artifact_id_values(request: Request, values: dict) -> None:
+    """
+    Pre-payment adapter over `_validate_artifact_id`.
+
+    Whether the path segment is a single manifest identifier is decided by the
+    request alone, so a traversal-shaped id is refused before any payment rail
+    is touched.  Whether an artifact with that id exists is a store lookup and
+    stays behind the payment gate, as does store availability.
+
+    Calls the same `_validate_artifact_id` the endpoint calls, so the 400 is
+    unchanged.
+    """
+    _validate_artifact_id(values.get("artifact_id"))
 
 
 def _latest_artifact(request: Request, artifact_type: str) -> PublicArtifactEnvelope:
@@ -129,6 +145,7 @@ def intelligence_guidance_latest(request: Request) -> PublicArtifactEnvelope:
         "type returns 404."
     ),
 )
+@pre_payment_semantic_validator(_validate_artifact_id_values)
 def intelligence_guidance_by_id(
     request: Request,
     artifact_id: str = Path(..., min_length=1),
@@ -166,6 +183,7 @@ def intelligence_research_latest(request: Request) -> PublicArtifactEnvelope:
         "artifact type returns 404."
     ),
 )
+@pre_payment_semantic_validator(_validate_artifact_id_values)
 def intelligence_research_by_id(
     request: Request,
     artifact_id: str = Path(..., min_length=1),

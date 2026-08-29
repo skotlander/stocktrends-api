@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
+
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
 
 # Reuse exchange validation + parsing you already have
@@ -67,7 +69,31 @@ def _resolve_symbol_exchange(
     return _norm_symbol(symbol), _norm_exchange(exchange)
 
 
+def _validate_symbol_exchange_values(request: Request, values: dict) -> None:
+    """
+    Pre-payment adapter over `_resolve_symbol_exchange`.
+
+    Instrument identity is decided entirely by the query values, so a caller who
+    cannot name an instrument can be refused before any payment rail is touched.
+    The adapter only maps solved values into the shared resolver — it holds no
+    rule of its own, so there is one definition of a valid identifier and the
+    400 the client sees is the resolver's, unchanged.
+
+    The resolver runs a second time inside the endpoint on a valid request.  It
+    is pure string work over three query parameters; paying for it twice is
+    cheaper than a cache, and far cheaper than two implementations that can
+    disagree about what is valid.
+    """
+    _resolve_symbol_exchange(
+        request=request,
+        symbol_exchange=values.get("symbol_exchange"),
+        symbol=values.get("symbol"),
+        exchange=values.get("exchange"),
+    )
+
+
 @router.get("/latest")
+@pre_payment_semantic_validator(_validate_symbol_exchange_values)
 def prices_latest(
     request: Request,
     symbol_exchange: str | None = Query(default=None, description="e.g., IBM-N"),
@@ -143,6 +169,7 @@ def prices_latest(
 
 
 @router.get("/history")
+@pre_payment_semantic_validator(_validate_symbol_exchange_values)
 def prices_history(
     request: Request,
     symbol_exchange: str | None = Query(default=None, description="e.g., IBM-N"),

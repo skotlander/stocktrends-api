@@ -6,6 +6,7 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES, parse_symbol_exchange
 from services import decision_service, regime_service
@@ -33,6 +34,70 @@ class ConstructPortfolioRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Portfolio helpers
 # ---------------------------------------------------------------------------
+
+def resolve_construct_request(
+    body: "ConstructPortfolioRequest",
+    request_id: object,
+) -> str | None:
+    """
+    The construct endpoint's request-only validity, in one place.
+
+    Returns the normalized exchange filter (or `None`).  Universe, bias and
+    exchange are all decided by the submitted body alone, so they are knowable
+    before any paid work and are registered as this endpoint's pre-payment
+    validation.
+
+    Deliberately NOT here: weekdate availability, regime computation, candidate
+    availability, and `insufficient_candidates`.  Those are discovered from
+    market data by the paid execution the caller asked for, and remain
+    chargeable even where they answer with a 4xx.
+    """
+    if body.universe not in _VALID_UNIVERSES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "request_id": request_id,
+                "error": "invalid_universe",
+                "value": body.universe,
+                "valid": sorted(_VALID_UNIVERSES),
+            },
+        )
+
+    if body.bias not in _VALID_BIASES:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "request_id": request_id,
+                "error": "invalid_bias",
+                "value": body.bias,
+                "valid": sorted(_VALID_BIASES),
+            },
+        )
+
+    norm_exchange: str | None = None
+    if body.exchange:
+        norm_exchange = body.exchange.strip().upper()
+        if norm_exchange not in VALID_EXCHANGES:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "request_id": request_id,
+                    "error": "invalid_exchange",
+                    "value": body.exchange,
+                    "valid": sorted(VALID_EXCHANGES),
+                },
+            )
+
+    return norm_exchange
+
+
+def _validate_construct_values(request: Request, values: dict) -> None:
+    """Pre-payment adapter: the shared resolver over the solved body."""
+    resolve_construct_request(
+        values["body"],
+        getattr(request.state, "request_id", None),
+    )
+
 
 def _resolve_trend_codes(bias: str, current_regime: str) -> list[str]:
     """
@@ -141,45 +206,14 @@ def _construction_notes(
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
+@pre_payment_semantic_validator(_validate_construct_values)
 def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
     request_id = getattr(request.state, "request_id", None)
 
     # --- Validate request ---
-    if body.universe not in _VALID_UNIVERSES:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "request_id": request_id,
-                "error": "invalid_universe",
-                "value": body.universe,
-                "valid": sorted(_VALID_UNIVERSES),
-            },
-        )
-
-    if body.bias not in _VALID_BIASES:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "request_id": request_id,
-                "error": "invalid_bias",
-                "value": body.bias,
-                "valid": sorted(_VALID_BIASES),
-            },
-        )
-
-    norm_exchange: str | None = None
-    if body.exchange:
-        norm_exchange = body.exchange.strip().upper()
-        if norm_exchange not in VALID_EXCHANGES:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "request_id": request_id,
-                    "error": "invalid_exchange",
-                    "value": body.exchange,
-                    "valid": sorted(VALID_EXCHANGES),
-                },
-            )
+    # Shared with the pre-payment validator registered on this endpoint; the
+    # normalized exchange filter below is the one it already checked.
+    norm_exchange = resolve_construct_request(body, request_id)
 
     engine = get_engine()
 
@@ -510,6 +544,110 @@ class EvaluatePortfolioRequest(BaseModel):
     positions: list[EvaluatePortfolioPosition] = Field(min_length=1, max_length=_MAX_POSITIONS)
 
 
+def _parse_and_validate_positions(
+    positions: list[EvaluatePortfolioPosition],
+    side: str | None,
+    request_id: object,
+) -> list[tuple[str, str, float]]:
+    """
+    A submitted position list's request-only validity, in one place.
+
+    Returns the normalized `(symbol, exchange, weight)` tuples both portfolio
+    endpoints evaluate.  Every check here — parseable identifier, no duplicate
+    instrument, positive weights, weights summing to 1.0 — is decided by the
+    submitted body alone, so this is the registered pre-payment validation for
+    `/portfolio/evaluate` and `/portfolio/compare` alike.
+
+    Deliberately NOT here: whether each instrument exists.  A position that is
+    not in the database comes back with `found=false` from the paid lookup, and
+    that lookup is what the caller is charged for.
+
+    `side` distinguishes the two callers' error contracts and nothing else.
+    `/compare` labels which side failed, because a caller who submitted two
+    portfolios cannot otherwise tell them apart; `/evaluate` submits one list
+    and passes `None`, which omits the key and the phrase exactly as before.
+    One rule, two renderings — not two rules.
+    """
+    sided = side is not None
+
+    def _detail(error: str, message: str) -> dict:
+        detail = {"request_id": request_id, "error": error}
+        if sided:
+            detail["side"] = side
+        detail["message"] = message
+        return detail
+
+    parsed: list[tuple[str, str, float]] = []
+    seen: set[tuple[str, str]] = set()
+
+    for pos in positions:
+        try:
+            s, ex = parse_symbol_exchange(pos.symbol_exchange)
+        except ValueError as ve:
+            raise HTTPException(
+                status_code=400,
+                detail=_detail("invalid_input", str(ve)),
+            )
+
+        key = (s, ex)
+        if key in seen:
+            raise HTTPException(
+                status_code=400,
+                detail=_detail(
+                    "duplicate_positions",
+                    f"Duplicate position in {side}: {s}-{ex}" if sided
+                    else f"Duplicate position: {s}-{ex}",
+                ),
+            )
+        seen.add(key)
+
+        if pos.weight <= 0:
+            raise HTTPException(
+                status_code=400,
+                detail=_detail(
+                    "invalid_weights",
+                    f"Weight for {s}-{ex} must be > 0, got {pos.weight}",
+                ),
+            )
+
+        parsed.append((s, ex, pos.weight))
+
+    weight_sum = sum(w for _, _, w in parsed)
+    if not (1.0 - _WEIGHT_SUM_TOLERANCE <= weight_sum <= 1.0 + _WEIGHT_SUM_TOLERANCE):
+        raise HTTPException(
+            status_code=400,
+            detail=_detail(
+                "invalid_weights",
+                (
+                    f"Weights for {side} must sum to 1.0 (±{_WEIGHT_SUM_TOLERANCE}), "
+                    f"got {round(weight_sum, 6)}"
+                ) if sided else (
+                    f"Weights must sum to 1.0 (±{_WEIGHT_SUM_TOLERANCE}), "
+                    f"got {round(weight_sum, 6)}"
+                ),
+            ),
+        )
+
+    return parsed
+
+
+def _validate_evaluate_values(request: Request, values: dict) -> None:
+    """Pre-payment adapter for `/portfolio/evaluate`."""
+    _parse_and_validate_positions(
+        values["body"].positions,
+        None,
+        getattr(request.state, "request_id", None),
+    )
+
+
+def _validate_compare_values(request: Request, values: dict) -> None:
+    """Pre-payment adapter for `/portfolio/compare` — both sides, in order."""
+    request_id = getattr(request.state, "request_id", None)
+    body = values["body"]
+    _parse_and_validate_positions(body.left, "left", request_id)
+    _parse_and_validate_positions(body.right, "right", request_id)
+
+
 # ---------------------------------------------------------------------------
 # Evaluate endpoint — aggregate helpers
 # ---------------------------------------------------------------------------
@@ -602,63 +740,15 @@ def _evaluation_notes(
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
+@pre_payment_semantic_validator(_validate_evaluate_values)
 def evaluate_portfolio(body: EvaluatePortfolioRequest, request: Request):
     request_id = getattr(request.state, "request_id", None)
 
     # --- Step 1: Parse and validate all positions before any DB access ---
-    parsed: list[tuple[str, str, float]] = []
-    seen: set[tuple[str, str]] = set()
-
-    for pos in body.positions:
-        try:
-            s, ex = parse_symbol_exchange(pos.symbol_exchange)
-        except ValueError as ve:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "request_id": request_id,
-                    "error": "invalid_input",
-                    "message": str(ve),
-                },
-            )
-
-        key = (s, ex)
-        if key in seen:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "request_id": request_id,
-                    "error": "duplicate_positions",
-                    "message": f"Duplicate position: {s}-{ex}",
-                },
-            )
-        seen.add(key)
-
-        if pos.weight <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "request_id": request_id,
-                    "error": "invalid_weights",
-                    "message": f"Weight for {s}-{ex} must be > 0, got {pos.weight}",
-                },
-            )
-
-        parsed.append((s, ex, pos.weight))
-
-    weight_sum = sum(w for _, _, w in parsed)
-    if not (1.0 - _WEIGHT_SUM_TOLERANCE <= weight_sum <= 1.0 + _WEIGHT_SUM_TOLERANCE):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "request_id": request_id,
-                "error": "invalid_weights",
-                "message": (
-                    f"Weights must sum to 1.0 (±{_WEIGHT_SUM_TOLERANCE}), "
-                    f"got {round(weight_sum, 6)}"
-                ),
-            },
-        )
+    # Shared with the pre-payment validator registered on this endpoint, which
+    # has already rejected an unservable position list before any rail was
+    # touched.  `side=None` keeps this endpoint's unlabelled error contract.
+    parsed = _parse_and_validate_positions(body.positions, None, request_id)
 
     engine = get_engine()
 
@@ -917,76 +1007,6 @@ class ComparePortfolioRequest(BaseModel):
 # Compare endpoint — private helpers
 # ---------------------------------------------------------------------------
 
-def _parse_and_validate_positions(
-    positions: list[EvaluatePortfolioPosition],
-    side: str,
-    request_id: object,
-) -> list[tuple[str, str, float]]:
-    """
-    Parse and validate one side of a compare request.
-    Raises HTTPException with "side" in detail on any failure.
-    Returns list of (symbol, exchange, weight) tuples.
-    """
-    parsed: list[tuple[str, str, float]] = []
-    seen: set[tuple[str, str]] = set()
-
-    for pos in positions:
-        try:
-            s, ex = parse_symbol_exchange(pos.symbol_exchange)
-        except ValueError as ve:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "request_id": request_id,
-                    "error": "invalid_input",
-                    "side": side,
-                    "message": str(ve),
-                },
-            )
-
-        key = (s, ex)
-        if key in seen:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "request_id": request_id,
-                    "error": "duplicate_positions",
-                    "side": side,
-                    "message": f"Duplicate position in {side}: {s}-{ex}",
-                },
-            )
-        seen.add(key)
-
-        if pos.weight <= 0:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "request_id": request_id,
-                    "error": "invalid_weights",
-                    "side": side,
-                    "message": f"Weight for {s}-{ex} must be > 0, got {pos.weight}",
-                },
-            )
-
-        parsed.append((s, ex, pos.weight))
-
-    weight_sum = sum(w for _, _, w in parsed)
-    if not (1.0 - _WEIGHT_SUM_TOLERANCE <= weight_sum <= 1.0 + _WEIGHT_SUM_TOLERANCE):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "request_id": request_id,
-                "error": "invalid_weights",
-                "side": side,
-                "message": (
-                    f"Weights for {side} must sum to 1.0 (±{_WEIGHT_SUM_TOLERANCE}), "
-                    f"got {round(weight_sum, 6)}"
-                ),
-            },
-        )
-
-    return parsed
-
 
 def _evaluate_positions_helper(
     parsed: list[tuple[str, str, float]],
@@ -1240,6 +1260,7 @@ def _build_comparison_notes(
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
+@pre_payment_semantic_validator(_validate_compare_values)
 def compare_portfolios(body: ComparePortfolioRequest, request: Request):
     request_id = getattr(request.state, "request_id", None)
 

@@ -515,6 +515,55 @@ def _extract_x402_amount_native(payload: dict[str, Any]) -> Decimal | None:
 
 
 # =========================================================
+# AMOUNT SUFFICIENCY
+#
+# One definition of the minimum-charge rule, shared by optional validation and
+# by enforcement.
+#
+# `VALIDATE_AGENT_PAY_HEADERS` used to be the only thing standing between an
+# underpaid artifact and the facilitator: with validation off, nothing compared
+# the presented amount to the quoted price, and enforcement went straight to
+# verify and settle.  An economic minimum must not be switchable by an optional
+# validation flag, so `enforce_x402_payment` applies this same helper before it
+# contacts the facilitator, whatever the flag says.
+# =========================================================
+
+INSUFFICIENT_PAYMENT_AMOUNT_ERROR = "insufficient_payment_amount"
+
+
+def x402_required_amount_atomic(required_amount_usd: Decimal) -> Decimal:
+    """The quoted price as an atomic token amount, in the token's decimals."""
+    if not isinstance(required_amount_usd, Decimal):
+        required_amount_usd = Decimal(str(required_amount_usd))
+    return Decimal(_to_atomic_units(required_amount_usd, X402_DEFAULT_TOKEN_DECIMALS))
+
+
+def x402_insufficient_amount_detail(
+    payment_amount_native: Decimal | None,
+    required_amount_usd: Decimal,
+) -> str | None:
+    """
+    The rejection detail for an underpaid artifact, or `None` if acceptable.
+
+    `None` for an amount at or above the requirement, and `None` when the
+    artifact carries no amount this layer can read — an unreadable amount is not
+    evidence of underpayment, and the facilitator remains the authority on
+    whether the payload actually pays.  Presenting *less* than the quoted price
+    is the one thing decidable here, so it is the one thing rejected here.
+    """
+    if payment_amount_native is None:
+        return None
+
+    required_amount_atomic = x402_required_amount_atomic(required_amount_usd)
+    if payment_amount_native < required_amount_atomic:
+        return (
+            f"Presented payment amount {payment_amount_native} is less than "
+            f"required amount {required_amount_atomic}."
+        )
+    return None
+
+
+# =========================================================
 # VALIDATION
 # =========================================================
 
@@ -568,18 +617,15 @@ def validate_x402_payment(
 
         amount_native = _extract_x402_amount_native(payload)
 
-    required_amount_atomic = Decimal(
-        _to_atomic_units(required_amount_usd, X402_DEFAULT_TOKEN_DECIMALS)
+    insufficient_detail = x402_insufficient_amount_detail(
+        amount_native, required_amount_usd
     )
 
-    if amount_native is not None and amount_native < required_amount_atomic:
+    if insufficient_detail is not None:
         return X402ValidationResult(
             valid=False,
-            error_code="insufficient_payment_amount",
-            error_detail=(
-                f"Presented payment amount {amount_native} is less than "
-                f"required amount {required_amount_atomic}."
-            ),
+            error_code=INSUFFICIENT_PAYMENT_AMOUNT_ERROR,
+            error_detail=insufficient_detail,
             payment_signature=artifact,
             payment_payload=payload,
             payment_reference=payment_reference,
