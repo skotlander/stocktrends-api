@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from discovery.inference_semantics import openapi_inference_extension
+from discovery.endpoint_metadata import get_endpoint_metadata
 from discovery.provenance import AI_CONTEXT_PROVENANCE_TEXT, data_provenance, provenance_reference
 from discovery.service_meta import (
     SERVICE_CONTACT_EMAIL,
@@ -16,14 +17,21 @@ from discovery.service_meta import (
     SERVICE_OPENAPI_GUIDANCE,
     SERVICE_POSITIONING,
 )
+from discovery.x402_discovery import (
+    CANONICAL_DISCOVERY_PATH,
+    CANONICAL_DISCOVERY_URL,
+    X402_DISCOVERY_ALIASES,
+    build_x402_discovery,
+)
 from api.routing import (
     assert_payment_boundary_complete,
     install_payment_execution_boundary,
 )
 from middleware.request_id import RequestIdMiddleware
-from middleware.api_key import ApiKeyMiddleware
+from middleware.api_key import ApiKeyMiddleware, is_public_api_path
 from middleware.request_logger import RequestLoggerMiddleware
 from middleware.metering import MeteringMiddleware
+from payments.policy_provider import get_effective_endpoint_payment_policy
 
 from routers.instruments import router as instruments_router
 from routers.prices import router as prices_router
@@ -60,6 +68,7 @@ FREE_METERED_V1_PATHS = {
 
 HTTP_METHODS = {"get", "post", "put", "patch", "delete", "options", "head"}
 DISCOVERY_START_HERE = "/v1/ai/tools"
+DISCOVERY_X402 = CANONICAL_DISCOVERY_PATH
 DISCOVERY_SECONDARY = "/v1/ai/context"
 DISCOVERY_DOCS = "/v1/docs"
 DISCOVERY_OPENAPI = "/v1/openapi.json"
@@ -101,6 +110,7 @@ def is_protected_v1_path(path: str) -> bool:
 
 def _discovery_links() -> dict[str, str]:
     return {
+        "x402_discovery": DISCOVERY_X402,
         "start_here": DISCOVERY_START_HERE,
         "secondary": DISCOVERY_SECONDARY,
         "docs": DISCOVERY_DOCS,
@@ -115,6 +125,7 @@ def _absolute_url(path: str) -> str:
 def _root_discovery_links() -> dict[str, str]:
     return {
         "developer_portal": SERVICE_DEVELOPER_DOCS_URL,
+        "x402_discovery": CANONICAL_DISCOVERY_URL,
         "start_here": _absolute_url(DISCOVERY_START_HERE),
         # Backward-compatible alias for clients that consumed the original root shape.
         "secondary": _absolute_url(DISCOVERY_SECONDARY),
@@ -197,6 +208,36 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
         "type": "http",
         "scheme": "bearer",
     }
+
+    security_schemes["X402PaymentSignature"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": "PAYMENT-SIGNATURE",
+        "description": "Canonical x402 v2 payment proof supplied when retrying a challenged request.",
+    }
+
+    security_schemes["X402LegacyPayment"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Payment",
+        "description": "Legacy/compatibility x402 payment proof accepted by the runtime.",
+    }
+
+    mpp_security_headers = {
+        "MPPAgentId": "X-StockTrends-Agent-Id",
+        "MPPPaymentMethod": "X-StockTrends-Payment-Method",
+        "MPPPaymentNetwork": "X-StockTrends-Payment-Network",
+        "MPPPaymentReference": "X-StockTrends-Payment-Reference",
+        "MPPPaymentAmount": "X-StockTrends-Payment-Amount",
+        "MPPPaymentChannelId": "X-StockTrends-Payment-Channel-Id",
+    }
+    for scheme_name, header_name in mpp_security_headers.items():
+        security_schemes[scheme_name] = {
+            "type": "apiKey",
+            "in": "header",
+            "name": header_name,
+            "description": "Part of the canonical MPP session authorization header set.",
+        }
 
     # Agent headers
     parameters["StockTrendsAgentId"] = {
@@ -299,10 +340,58 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
             if method not in HTTP_METHODS:
                 continue
 
-            operation["security"] = [
-                {"ApiKeyAuth": []},
-                {"BearerAuth": []},
-            ]
+            external_path = f"/v1{path}"
+            endpoint_policy = get_effective_endpoint_payment_policy(
+                external_path,
+                method.upper(),
+            )
+            if endpoint_policy is None and is_public_api_path(external_path):
+                operation["security"] = []
+            elif endpoint_policy is None:
+                operation["security"] = [
+                    {"ApiKeyAuth": []},
+                    {"BearerAuth": []},
+                ]
+            else:
+                operation_security = []
+                if endpoint_policy.allows_subscription:
+                    operation_security.extend(
+                        [{"ApiKeyAuth": []}, {"BearerAuth": []}]
+                    )
+                if "x402" in endpoint_policy.machine_payment_rails:
+                    operation_security.extend(
+                        [
+                            {"X402PaymentSignature": []},
+                            {"X402LegacyPayment": []},
+                        ]
+                    )
+                if "mpp" in endpoint_policy.machine_payment_rails:
+                    operation_security.append(
+                        {scheme_name: [] for scheme_name in mpp_security_headers}
+                    )
+                operation["security"] = operation_security
+                payment_extension = {
+                    "requires_payment": True,
+                    "supported_rails": list(endpoint_policy.allowed_rails),
+                    "pricing_rule_id": endpoint_policy.pricing_rule_id,
+                    "pricing_catalog_url": "https://api.stocktrends.com/v1/pricing/catalog",
+                    "x402_discovery_url": CANONICAL_DISCOVERY_URL,
+                    "anonymous_challenge_supported": (
+                        "x402" in endpoint_policy.machine_payment_rails
+                    ),
+                    "serviceable_request_required_before_challenge": True,
+                }
+                if "x402" in endpoint_policy.machine_payment_rails:
+                    payment_extension["x402_version"] = 2
+                operation["x-stocktrends-payment"] = payment_extension
+
+            endpoint_metadata = get_endpoint_metadata(external_path, method.upper())
+            if endpoint_metadata and isinstance(
+                endpoint_metadata.get("safe_example_request"), dict
+            ):
+                operation["x-stocktrends-safe-example-request"] = endpoint_metadata[
+                    "safe_example_request"
+                ]
 
             if path.startswith("/stim") or path.startswith("/indicators") or path.startswith("/prices") or path.startswith("/selections") or path.startswith("/stwr") or path.startswith("/agents") or path.startswith("/agent/screener") or path.startswith("/market") or path.startswith("/decision") or path.startswith("/portfolio") or path.startswith("/stocktrends") or path.startswith("/breadth/sector/") or path.startswith("/intelligence/guidance") or path.startswith("/intelligence/research") or path in ("/leadership/summary/latest", "/leadership/rotation/history", "/pricing", "/pricing/catalog", "/workflows", "/cost-estimate"):
                 _ensure_parameter_refs(operation, agent_refs + payment_refs)
@@ -323,8 +412,8 @@ app.add_exception_handler(StarletteHTTPException, _discovery_http_exception_hand
 def root():
     return {
         "message": (
-            "Use the canonical OpenAPI contract for machine-readable API discovery; "
-            "use start_here for Stock Trends task and workflow discovery."
+            "Use x402_discovery for payable-resource discovery, start_here for task "
+            "discovery, and the canonical OpenAPI contract for exact request schemas."
         ),
         "description": APP_DESCRIPTION,
         "provenance_reference": provenance_reference(),
@@ -346,6 +435,14 @@ def root():
     }
 
 
+@app.get(X402_DISCOVERY_ALIASES[0], include_in_schema=False)
+@app.get(X402_DISCOVERY_ALIASES[1], include_in_schema=False)
+@app.get(X402_DISCOVERY_ALIASES[2], include_in_schema=False)
+@app.get(X402_DISCOVERY_ALIASES[3], include_in_schema=False)
+def x402_discovery():
+    return JSONResponse(build_x402_discovery())
+
+
 @app.get("/llms.txt", include_in_schema=False)
 def llms_txt():
     return FileResponse("static/llms.txt", media_type="text/plain")
@@ -359,12 +456,27 @@ def ai_plugin():
             "name_for_model": "stock_trends_api",
             "description_for_human": APP_DESCRIPTION,
             "description_for_model": (
-                f"{APP_DESCRIPTION} Start with /v1/ai/tools, then use /v1/workflows, "
+                f"{APP_DESCRIPTION} Start with /.well-known/x402 for payable resources, "
+                "then use /v1/ai/tools and /v1/workflows, "
                 "/v1/pricing/catalog, /v1/pricing, /v1/instruments/lookup, /v1/instruments/resolve, "
                 "/v1/stwr/reports/catalog, and /v1/meta/* planning helpers before paid execution. "
-                "Inspect x402 402 stocktrends_preview metadata before payment. Authentication or "
+                "Construct a serviceable request before expecting an execution-time 402. Authentication or "
                 "machine payment is required for protected data endpoints."
             ),
+            "x_stocktrends_discovery": {
+                "x402": CANONICAL_DISCOVERY_URL,
+                "tools": "https://api.stocktrends.com/v1/ai/tools",
+                "openapi": "https://api.stocktrends.com/v1/openapi.json",
+                "workflows": "https://api.stocktrends.com/v1/workflows",
+                "pricing_catalog": "https://api.stocktrends.com/v1/pricing/catalog",
+            },
+            "x_stocktrends_access": {
+                "public_discovery_requires_api_key": False,
+                "subscription_auth": ["X-API-Key", "Authorization: Bearer"],
+                "machine_payment_rails": ["x402", "mpp"],
+                "x402_proof_headers": ["PAYMENT-SIGNATURE", "X-Payment"],
+                "serviceable_request_required_before_challenge": True,
+            },
             "data_provenance": data_provenance(),
             "auth": {
                 "type": "api_key",

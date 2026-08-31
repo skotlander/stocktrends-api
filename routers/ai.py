@@ -1014,7 +1014,9 @@ def ai_context():
             "future_provider_compatibility": "Future Causal AI providers should integrate through the same inference contract.",
         },
         "discovery_entrypoints": {
-            "primary_machine_readable": "/v1/ai/tools",
+            "primary_machine_readable": "/.well-known/x402",
+            "x402_payment_resources": "/.well-known/x402",
+            "task_and_tool_discovery": "/v1/ai/tools",
             "secondary_explanatory": "/v1/ai/context",
             "provider_agnostic_inference_contract": "/v1/meta/inference",
             "stim_provider_profile": "/v1/meta/stim",
@@ -1468,6 +1470,7 @@ def ai_context():
         },
         "recommended_starting_paths": {
             "autonomous_agent_discovery": [
+                "/.well-known/x402",
                 "/v1/ai/context",
                 "/v1/workflows",
                 "/v1/pricing/catalog",
@@ -1509,6 +1512,7 @@ def ai_context():
         },
         "endpoint_groups": {
             "discovery": [
+                "/.well-known/x402",
                 "/v1/ai/tools",
                 "/v1/ai/context",
                 "/v1/ai/proof/market-edge",
@@ -1576,6 +1580,7 @@ def ai_context():
         },
         "access_model": {
             "public_discovery": [
+                "/.well-known/x402",
                 "/v1/ai/tools",
                 "/v1/ai/context",
                 "/v1/ai/proof/market-edge",
@@ -1617,7 +1622,7 @@ def ai_context():
             "note": "Use the live pricing catalog and API response headers as the authoritative source of endpoint pricing and payment requirements."
         },
         "usage_guidance": [
-            "Start with /v1/ai/tools as the primary machine-readable manifest for agent discovery.",
+            "Start with /.well-known/x402 for payable-resource discovery, then use /v1/ai/tools for task and tool discovery.",
             "Use /v1/ai/context as the secondary explanatory endpoint for dataset and endpoint-family context.",
             "Before calling premium endpoints, call /v1/ai/proof/market-edge (no auth required) to inspect signal structure and confirm field schemas before purchasing access.",
             "Use /v1/docs and /v1/openapi.json for exact request and response contracts.",
@@ -1657,6 +1662,7 @@ def ai_context():
                 "/v1/stim/latest?symbol_exchange=IBM-N"
             ],
             "agent": [
+                "/.well-known/x402",
                 "/v1/ai/tools",
                 "/v1/ai/context",
                 "/v1/pricing/catalog",
@@ -1667,6 +1673,7 @@ def ai_context():
         "openapi": "https://api.stocktrends.com/v1/openapi.json",
         "llms_txt": "https://api.stocktrends.com/llms.txt",
         "ai_plugin": "https://api.stocktrends.com/.well-known/ai-plugin.json",
+        "x402_discovery": "https://api.stocktrends.com/.well-known/x402",
         "dataset_manifest": "https://api.stocktrends.com/ai-dataset.json",
         "tools_manifest": "https://api.stocktrends.com/v1/ai/tools",
         "license": "https://stocktrends.com/stock-trends-data-license",
@@ -1692,7 +1699,8 @@ _RECOMMENDED_WORKFLOW_IDS = {"portfolio_build", "symbol_decision", "regime_analy
     summary="MCP tools manifest",
     description=(
         "Public, non-metered. Returns the Stock Trends API as an MCP/Bazaar-compatible "
-        "tools manifest and primary machine-readable entry point for agents. Exposes "
+        "task/tool manifest for agents. Use /.well-known/x402 first for payable-resource "
+        "discovery. Exposes "
         "confirmed real endpoints only. Costs reference the STC model; use "
         "/v1/pricing/catalog for authoritative live values. "
         "Workflows are exposed in a simplified format; use /v1/workflows for live per-step costs."
@@ -1712,7 +1720,9 @@ def ai_tools():
         "provenance_summary": AI_CONTEXT_PROVENANCE_TEXT,
         "data_provenance": data_provenance(),
         "discovery_entrypoints": {
-            "primary_machine_readable": "/v1/ai/tools",
+            "primary_machine_readable": "/.well-known/x402",
+            "x402_payment_resources": "/.well-known/x402",
+            "task_and_tool_discovery": "/v1/ai/tools",
             "secondary_explanatory": "/v1/ai/context",
             "provider_agnostic_inference_contract": "/v1/meta/inference",
             "stim_provider_profile": "/v1/meta/stim",
@@ -1726,26 +1736,28 @@ def ai_tools():
             "auth_required": True,
             "supported_rails": ["subscription", "x402", "mpp"],
             "expected_flow": [
+                "fetch /.well-known/x402 to discover payable resources and safe requests",
                 "fetch /v1/ai/tools",
                 "fetch /v1/workflows to choose a task-level strategy",
                 "fetch /v1/pricing/catalog to resolve live STC costs",
                 "fetch /v1/pricing to understand payment rails and headers",
-                "call /v1/agent/screener/top with auth header",
-                "if x402 rail: receive HTTP 402 challenge and inspect stocktrends_preview before paying",
-                "retry with X-StockTrends-Payment-* headers to complete payment",
+                "construct the published serviceable request",
+                "if using anonymous x402: receive HTTP 402 after request validation",
+                "pay and retry with PAYMENT-SIGNATURE or X-Payment proof",
             ],
         },
         "quickstart": [
-            {"step": 1, "action": "fetch", "path": "/v1/ai/tools", "note": "Primary machine-readable discovery. This endpoint."},
-            {"step": 2, "action": "fetch", "path": "/v1/workflows", "note": "Choose a strategy and endpoint sequence for the task."},
-            {"step": 3, "action": "fetch", "path": "/v1/pricing/catalog", "note": "Resolve live STC costs for each endpoint. Public under current API behavior."},
-            {"step": 4, "action": "fetch", "path": "/v1/pricing", "note": "Inspect payment rails, identity headers, and x402/MPP guidance."},
-            {"step": 5, "action": "call", "path": "/v1/agent/screener/top", "note": "First premium endpoint. Auth required. x402 and subscription supported."},
+            {"step": 1, "action": "fetch", "path": "/.well-known/x402", "note": "Discover payable resources, runtime rails, request schemas, and canonical safe examples."},
+            {"step": 2, "action": "fetch", "path": "/v1/ai/tools", "note": "Choose a task-level API tool."},
+            {"step": 3, "action": "fetch", "path": "/v1/openapi.json", "note": "Confirm the exact request contract and access alternatives."},
+            {"step": 4, "action": "fetch", "path": "/v1/workflows", "note": "Choose a strategy and endpoint sequence for the task."},
+            {"step": 5, "action": "fetch", "path": "/v1/pricing/catalog", "note": "Resolve the current STC cost from the pricing source of truth."},
+            {"step": 6, "action": "call", "path": "/v1/agent/screener/top", "note": "Submit the published serviceable request; anonymous x402 callers then receive the execution-time challenge."},
         ],
         "recommended_first_workflows": recommended_workflows,
         "agent_onboarding_notes": [
             "Do not hardcode STC costs. Fetch /v1/pricing/catalog at agent startup.",
-            "Prefer /v1/ai/tools as the primary machine-readable entrypoint.",
+            "Use /.well-known/x402 for payment-resource discovery and /v1/ai/tools for task/tool discovery.",
             "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
             "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
             "Use /v1/meta/inference for the provider-agnostic inference contract; use /v1/meta/stim for the current ST-IM baseline provider profile.",
@@ -1754,7 +1766,7 @@ def ai_tools():
             "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and rails.",
             "Use /v1/docs or /v1/openapi.json for exact request/response contracts.",
             "Paid endpoint entries list their supported rails; current agent-pay endpoints support subscription, x402, and mpp.",
-            "For x402, the HTTP 402 stocktrends_preview is the final pre-payment surface for an otherwise-serviceable request: inspect it to confirm purpose, inputs, response shape, supported rails, and cost before paying. Read input schemas from /v1/ai/tools or /v1/openapi.json first - a request must be serviceable before a 402 is emitted.",
+            "For x402, construct a serviceable request from /.well-known/x402 and /v1/openapi.json before expecting an execution-time 402. The 402 stocktrends_preview is a final confirmation, not the schema-discovery mechanism.",
             "Deterministically invalid input is rejected before any payment challenge: a malformed symbol_exchange, a missing required parameter combination, an unsupported sort/exchange/trend value, or a semantically incomplete body returns a 400 or 422 input error rather than a 402. Pricing context headers remain on that error, so the price is still discoverable once the request is corrected.",
         ],
         "tools": tools,
@@ -1857,7 +1869,7 @@ def ai_tools():
             ),
         },
         "notes": [
-            "Start with /v1/ai/tools as the primary machine-readable entry point for agents.",
+            "Start with /.well-known/x402 for payable-resource discovery, then use /v1/ai/tools for task and tool discovery.",
             "Use /v1/workflows to choose a strategy, then /v1/pricing/catalog to budget each endpoint.",
             "Use /v1/instruments/lookup and /v1/instruments/resolve to produce symbol_exchange values before paid symbol workflows.",
             "Use /v1/stwr/reports/catalog and /v1/meta/* endpoints as planning helpers, not side documentation.",

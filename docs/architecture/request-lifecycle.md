@@ -15,6 +15,13 @@ positioned after every rejection the system can reach without doing paid work,
 so that no deterministic client-input failure or route-miss condition can move
 money. Steps 6 through 9 exist for that reason and must not be reordered.
 
+Resource discovery occurs outside this paid execution lifecycle. Anonymous
+agents use `/.well-known/x402` to discover payment-governed resources, canonical
+safe requests, runtime-supported rails, and STC pricing-rule references without
+executing a resource. A `402` is an execution-time challenge for an otherwise
+serviceable request; it is not the canonical mechanism for discovering a
+resource or learning its input schema. See `x402-discovery.md`.
+
 ---
 
 ## Step-by-Step Lifecycle
