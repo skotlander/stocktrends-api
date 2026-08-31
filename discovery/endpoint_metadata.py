@@ -40,7 +40,8 @@ DEVELOPER_PORTAL_URL = "https://developer.stocktrends.com/"
 AI_CONTEXT_URL = "https://api.stocktrends.com/v1/ai/context"
 TOOLS_MANIFEST_URL = "https://api.stocktrends.com/v1/ai/tools"
 WORKFLOWS_URL = "https://api.stocktrends.com/v1/workflows"
-PRICING_CATALOG_URL = "https://api.stocktrends.com/v1/pricing/catalog"
+PUBLIC_API_BASE_URL = "https://api.stocktrends.com"
+PRICING_CATALOG_URL = f"{PUBLIC_API_BASE_URL}/v1/pricing/catalog"
 COMPACT_SAFE_EXAMPLE_MAX_BYTES = 384
 
 # ---------------------------------------------------------------------------

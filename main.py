@@ -9,7 +9,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from discovery.inference_semantics import openapi_inference_extension
-from discovery.endpoint_metadata import get_endpoint_metadata
+from discovery.endpoint_metadata import (
+    PRICING_CATALOG_URL,
+    PUBLIC_API_BASE_URL,
+    get_endpoint_metadata,
+)
 from discovery.provenance import AI_CONTEXT_PROVENANCE_TEXT, data_provenance, provenance_reference
 from discovery.service_meta import (
     SERVICE_CONTACT_EMAIL,
@@ -35,7 +39,8 @@ from middleware.api_key import (
 )
 from middleware.request_logger import RequestLoggerMiddleware
 from middleware.metering import MeteringMiddleware
-from payments.policy_provider import get_effective_endpoint_payment_policy
+import payments.policy_provider as payment_policy
+import payments.x402_contract as x402_contract
 from payments.mpp import MPP_PAYMENT_CHANNEL_ID_HEADERS, MPP_REQUIRED_HEADERS
 
 from routers.instruments import router as instruments_router
@@ -80,13 +85,11 @@ DISCOVERY_X402 = CANONICAL_DISCOVERY_PATH
 DISCOVERY_SECONDARY = "/v1/ai/context"
 DISCOVERY_DOCS = "/v1/docs"
 DISCOVERY_OPENAPI = "/v1/openapi.json"
-PUBLIC_API_BASE_URL = "https://api.stocktrends.com"
 X402_BROWSER_ALLOWED_ORIGINS = ["https://developer.stocktrends.com"]
 X402_BROWSER_ALLOWED_HEADERS = [
     "Authorization",
     "Content-Type",
-    "Payment-Signature",
-    "X-Payment",
+    *x402_contract.X402_PROOF_HEADERS,
     "X-StockTrends-Agent-Id",
     "X-StockTrends-Agent-Type",
     "X-StockTrends-Agent-Vendor",
@@ -200,8 +203,34 @@ def _mpp_security_scheme_name(header_name: str) -> str:
     return "MPP" + "".join(_canonical_header_name(header_name).split("-"))
 
 
+def _x402_security_scheme_name(header_name: str) -> str:
+    normalized = header_name.lower()
+    if normalized == "payment-signature":
+        return "X402PaymentSignature"
+    if normalized == "x-payment":
+        return "X402LegacyPayment"
+    return "X402PaymentProof" + "".join(
+        character for character in header_name.title() if character.isalnum()
+    )
+
+
 def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
-    if v1_app.openapi_schema:
+    runtime_policy = payment_policy.get_runtime_payment_policy_config()
+    policy_fingerprint = payment_policy.payment_policy_contract_fingerprint(
+        runtime_policy
+    )
+    payment_contract_key = (
+        policy_fingerprint,
+        x402_contract.x402_contract_fingerprint(),
+        tuple(MPP_REQUIRED_HEADERS),
+        tuple(MPP_PAYMENT_CHANNEL_ID_HEADERS),
+        INTERNAL_OBSERVABILITY_SECRET_HEADER,
+    )
+    if (
+        v1_app.openapi_schema
+        and getattr(v1_app.state, "openapi_payment_contract_key", None)
+        == payment_contract_key
+    ):
         return v1_app.openapi_schema
 
     openapi_schema = get_openapi(
@@ -245,19 +274,20 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
         ),
     }
 
-    security_schemes["X402PaymentSignature"] = {
-        "type": "apiKey",
-        "in": "header",
-        "name": "PAYMENT-SIGNATURE",
-        "description": "Canonical x402 v2 payment proof supplied when retrying a challenged request.",
+    x402_security_schemes_by_header = {
+        header_name: _x402_security_scheme_name(header_name)
+        for header_name in x402_contract.X402_PROOF_HEADERS
     }
-
-    security_schemes["X402LegacyPayment"] = {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-Payment",
-        "description": "Legacy/compatibility x402 payment proof accepted by the runtime.",
-    }
+    for header_name, scheme_name in x402_security_schemes_by_header.items():
+        security_schemes[scheme_name] = {
+            "type": "apiKey",
+            "in": "header",
+            "name": header_name,
+            "description": (
+                "Runtime-recognized x402 payment proof supplied when retrying "
+                "an otherwise serviceable challenged request."
+            ),
+        }
 
     mpp_required_headers = tuple(
         _canonical_header_name(header_name) for header_name in MPP_REQUIRED_HEADERS
@@ -380,7 +410,8 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                 continue
 
             external_path = f"/v1{path}"
-            endpoint_policy = get_effective_endpoint_payment_policy(
+            endpoint_policy = payment_policy.get_effective_endpoint_payment_policy_from_config(
+                runtime_policy,
                 external_path,
                 method.upper(),
             )
@@ -402,8 +433,8 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                 if "x402" in endpoint_policy.machine_payment_rails:
                     operation_security.extend(
                         [
-                            {"X402PaymentSignature": []},
-                            {"X402LegacyPayment": []},
+                            {scheme_name: []}
+                            for scheme_name in x402_security_schemes_by_header.values()
                         ]
                     )
                 if "mpp" in endpoint_policy.machine_payment_rails:
@@ -423,7 +454,7 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                     "requires_payment": True,
                     "supported_rails": list(endpoint_policy.allowed_rails),
                     "pricing_rule_id": endpoint_policy.pricing_rule_id,
-                    "pricing_catalog_url": "https://api.stocktrends.com/v1/pricing/catalog",
+                    "pricing_catalog_url": PRICING_CATALOG_URL,
                     "x402_discovery_url": CANONICAL_DISCOVERY_URL,
                     "anonymous_challenge_supported": (
                         "x402" in endpoint_policy.machine_payment_rails
@@ -431,7 +462,13 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                     "serviceable_request_required_before_challenge": True,
                 }
                 if "x402" in endpoint_policy.machine_payment_rails:
-                    payment_extension["x402_version"] = 2
+                    payment_extension["x402_version"] = x402_contract.X402_VERSION
+                    payment_extension["x402_proof_headers"] = list(
+                        x402_contract.X402_PROOF_HEADERS
+                    )
+                    payment_extension["x402_security_schemes_by_header"] = dict(
+                        x402_security_schemes_by_header
+                    )
                 if "mpp" in endpoint_policy.machine_payment_rails:
                     payment_extension["mpp"] = {
                         "authorization_model": "session",
@@ -466,6 +503,8 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                 operation.update(inference_extension)
 
     v1_app.openapi_schema = openapi_schema
+    v1_app.state.openapi_payment_policy_fingerprint = policy_fingerprint
+    v1_app.state.openapi_payment_contract_key = payment_contract_key
     return openapi_schema
 
 
@@ -505,7 +544,7 @@ def root():
 @app.get(X402_DISCOVERY_ALIASES[2], include_in_schema=False)
 @app.get(X402_DISCOVERY_ALIASES[3], include_in_schema=False)
 def x402_discovery():
-    return JSONResponse(build_x402_discovery())
+    return JSONResponse(build_x402_discovery(strict=False))
 
 
 @app.get("/llms.txt", include_in_schema=False)

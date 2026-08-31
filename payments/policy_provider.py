@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -664,8 +665,9 @@ def _derive_allowed_rails_for_endpoint(
 def _build_effective_endpoint_policy(
     path: str,
     method: str | None,
+    config: RuntimePaymentPolicyConfig | None = None,
 ) -> EffectiveEndpointPaymentPolicy | None:
-    config = get_runtime_payment_policy_config()
+    config = config or get_runtime_payment_policy_config()
     allowed_rails = _derive_allowed_rails_for_endpoint(config, path, method)
     if allowed_rails is None:
         return None
@@ -925,6 +927,73 @@ def get_effective_endpoint_payment_policy(
     method: str | None = None,
 ) -> EffectiveEndpointPaymentPolicy | None:
     return _build_effective_endpoint_policy(path, method)
+
+
+def get_effective_endpoint_payment_policy_from_config(
+    config: RuntimePaymentPolicyConfig,
+    path: str,
+    method: str | None = None,
+) -> EffectiveEndpointPaymentPolicy | None:
+    """Project one endpoint policy from an already-consistent snapshot."""
+    return _build_effective_endpoint_policy(path, method, config)
+
+
+def payment_policy_contract_fingerprint(
+    config: RuntimePaymentPolicyConfig | None = None,
+) -> str:
+    """Fingerprint runtime semantics published by discovery and OpenAPI.
+
+    Refresh timestamps are intentionally excluded. An unchanged control-plane
+    refresh therefore retains the OpenAPI cache, while any effective access,
+    rail, or pricing-rule change invalidates it.
+    """
+    config = config or get_runtime_payment_policy_config()
+    endpoint_contracts = []
+    for policy in sorted(
+        config.endpoint_payment_policies,
+        key=lambda item: (item.path_pattern, item.method, item.endpoint_id),
+    ):
+        effective = get_effective_endpoint_payment_policy_from_config(
+            config,
+            policy.path_pattern,
+            policy.method,
+        )
+        endpoint_contracts.append(
+            {
+                "path": policy.path_pattern,
+                "method": policy.method.upper(),
+                "configured_allowed_rails": list(policy.allowed_rails),
+                "effective_allowed_rails": list(
+                    effective.allowed_rails if effective else ()
+                ),
+                "machine_payment_rails": list(
+                    effective.machine_payment_rails if effective else ()
+                ),
+                "machine_payments_enabled": policy.machine_payments_enabled,
+                "allows_subscription": bool(
+                    effective and effective.allows_subscription
+                ),
+                "pricing_rule_id": (
+                    effective.pricing_rule_id if effective else policy.pricing_rule_id
+                ),
+            }
+        )
+
+    payload = {
+        "source": config.source,
+        "version": config.version,
+        "environment": config.environment,
+        "enabled_environment_rails": list(config.enabled_environment_rails),
+        "endpoint_contracts": endpoint_contracts,
+        "free_metered_paths": sorted(config.free_metered_paths),
+        "agent_pay_path_prefixes": sorted(config.agent_pay_path_prefixes),
+        "agent_pay_auth_bypass_methods": sorted(
+            config.agent_pay_auth_bypass_methods
+        ),
+        "enforcement_path_prefixes": sorted(config.enforcement_path_prefixes),
+    }
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def get_allowed_payment_rails_for_path(

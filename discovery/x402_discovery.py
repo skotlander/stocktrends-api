@@ -9,38 +9,28 @@ intentionally referenced through the live STC catalog rather than duplicated.
 from __future__ import annotations
 
 import copy
+import logging
 from typing import Any
 
 from discovery.endpoint_metadata import (
     AI_CONTEXT_URL,
     PRICING_CATALOG_URL,
+    PUBLIC_API_BASE_URL,
     SERVICE_NAME,
     TOOLS_MANIFEST_URL,
     WORKFLOWS_URL,
     build_input_schema,
     get_endpoint_metadata,
 )
-from payments.policy_provider import (
-    get_effective_endpoint_payment_policy,
-    get_runtime_payment_policy_config,
-)
-from payments.x402 import (
-    X402_DEFAULT_ASSET_TRANSFER_METHOD,
-    X402_DEFAULT_NETWORK,
-    X402_DEFAULT_SCHEME,
-    X402_DEFAULT_TOKEN,
-    X402_DEFAULT_TOKEN_DECIMALS,
-    X402_DEFAULT_TOKEN_NAME,
-    X402_DEFAULT_TOKEN_VERSION,
-    X402_SELLER_ADDRESS,
-)
+import payments.policy_provider as payment_policy
+import payments.x402_contract as x402_contract
 from services.intelligence_artifact_availability import (
     match_paid_intelligence_artifact_route,
 )
 
+logger = logging.getLogger("stocktrends_api.x402_discovery")
 
 DISCOVERY_SCHEMA = "stocktrends.x402-discovery.v1"
-PUBLIC_API_BASE_URL = "https://api.stocktrends.com"
 CANONICAL_DISCOVERY_PATH = "/.well-known/x402"
 CANONICAL_DISCOVERY_URL = f"{PUBLIC_API_BASE_URL}{CANONICAL_DISCOVERY_PATH}"
 CANONICAL_OPENAPI_URL = f"{PUBLIC_API_BASE_URL}/v1/openapi.json"
@@ -60,6 +50,109 @@ DISCOVERY_EXCEPTIONS: dict[tuple[str, str], str] = {}
 class X402DiscoveryCompletenessError(RuntimeError):
     """Raised when runtime payment policy cannot be represented safely."""
 
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: str = "resource_contract_unrepresentable",
+        method: str | None = None,
+        path: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.error_code = error_code
+        self.method = method
+        self.path = path
+
+
+_ALLOWED_PRICING_FIELDS = {
+    "source",
+    "pricing_rule_id",
+    "catalog_url",
+    "live_cost_included",
+}
+_FORBIDDEN_RESOURCE_PRICE_FIELDS = {
+    "stc_cost",
+    "price",
+    "price_stc",
+    "price_usd",
+    "amount_usd",
+    "effective_price_usd",
+    "unit_price",
+    "cost",
+    "cost_usd",
+    "cost_per_request",
+    "request_price",
+}
+
+
+def _completeness_error(
+    code: str,
+    method: str,
+    path: str,
+    detail: str,
+) -> X402DiscoveryCompletenessError:
+    return X402DiscoveryCompletenessError(
+        f"{method} {path} {detail}",
+        error_code=code,
+        method=method,
+        path=path,
+    )
+
+
+def validate_discovery_resource_pricing_contract(resource: dict[str, Any]) -> None:
+    """Reject duplicated endpoint prices while allowing canonical references."""
+    method = str(resource.get("method") or "UNKNOWN")
+    path = str(resource.get("path") or "<unknown>")
+    allowed_reference_fields = {"pricing_rule_id", "pricing_catalog_url", "pricing"}
+    forbidden = sorted(
+        key
+        for key in resource
+        if key in _FORBIDDEN_RESOURCE_PRICE_FIELDS
+        or (
+            key not in allowed_reference_fields
+            and (
+                key.startswith("price_")
+                or key.startswith("cost_")
+                or key.endswith("_price")
+                or key.endswith("_cost")
+                or key.endswith("_price_usd")
+                or key.endswith("_cost_usd")
+                or key.endswith("_amount_usd")
+            )
+        )
+    )
+    if forbidden:
+        raise _completeness_error(
+            "duplicated_endpoint_price",
+            method,
+            path,
+            f"publishes forbidden service-price fields: {', '.join(forbidden)}",
+        )
+
+    pricing = resource.get("pricing")
+    if not isinstance(pricing, dict):
+        raise _completeness_error(
+            "missing_pricing_reference",
+            method,
+            path,
+            "has no canonical pricing reference",
+        )
+    unexpected = sorted(set(pricing).difference(_ALLOWED_PRICING_FIELDS))
+    if unexpected:
+        raise _completeness_error(
+            "duplicated_endpoint_price",
+            method,
+            path,
+            f"publishes non-reference pricing fields: {', '.join(unexpected)}",
+        )
+    if pricing.get("live_cost_included") is not False:
+        raise _completeness_error(
+            "duplicated_endpoint_price",
+            method,
+            path,
+            "must declare live_cost_included=false",
+        )
+
 
 def _absolute_url(path: str) -> str:
     return f"{PUBLIC_API_BASE_URL}{path}"
@@ -67,62 +160,86 @@ def _absolute_url(path: str) -> str:
 
 def _x402_payment_metadata() -> dict[str, Any]:
     metadata: dict[str, Any] = {
-        "version": 2,
-        "scheme": X402_DEFAULT_SCHEME,
-        "network": X402_DEFAULT_NETWORK,
+        "version": x402_contract.X402_VERSION,
+        "scheme": x402_contract.X402_DEFAULT_SCHEME,
+        "network": x402_contract.X402_DEFAULT_NETWORK,
         "asset": {
-            "address": X402_DEFAULT_TOKEN,
-            "name": X402_DEFAULT_TOKEN_NAME,
-            "version": X402_DEFAULT_TOKEN_VERSION,
-            "decimals": X402_DEFAULT_TOKEN_DECIMALS,
-            "transfer_method": X402_DEFAULT_ASSET_TRANSFER_METHOD,
+            "address": x402_contract.X402_DEFAULT_TOKEN,
+            "name": x402_contract.X402_DEFAULT_TOKEN_NAME,
+            "version": x402_contract.X402_DEFAULT_TOKEN_VERSION,
+            "decimals": x402_contract.X402_DEFAULT_TOKEN_DECIMALS,
+            "transfer_method": x402_contract.X402_DEFAULT_ASSET_TRANSFER_METHOD,
         },
-        "proof_headers": ["PAYMENT-SIGNATURE", "X-Payment"],
+        "proof_headers": list(x402_contract.X402_PROOF_HEADERS),
     }
-    if X402_SELLER_ADDRESS:
-        metadata["pay_to"] = X402_SELLER_ADDRESS
+    if x402_contract.X402_SELLER_ADDRESS:
+        metadata["pay_to"] = x402_contract.X402_SELLER_ADDRESS
     return metadata
 
 
-def _resource_from_policy(policy: Any) -> dict[str, Any]:
+def _resource_from_policy(policy: Any, config: Any) -> dict[str, Any]:
     method = policy.method.upper()
     path = policy.path_pattern
     metadata = get_endpoint_metadata(path, method)
     if metadata is None:
-        raise X402DiscoveryCompletenessError(
-            f"{method} {path} is payment-governed but has no endpoint metadata"
+        raise _completeness_error(
+            "missing_endpoint_metadata",
+            method,
+            path,
+            "is payment-governed but has no endpoint metadata",
         )
 
     safe_example = metadata.get("safe_example_request")
     if not isinstance(safe_example, dict):
-        raise X402DiscoveryCompletenessError(
-            f"{method} {path} is payment-governed but has no safe example"
+        raise _completeness_error(
+            "missing_safe_example",
+            method,
+            path,
+            "is payment-governed but has no safe example",
         )
     if safe_example.get("method") != method:
-        raise X402DiscoveryCompletenessError(
-            f"{method} {path} safe example declares a different method"
+        raise _completeness_error(
+            "safe_example_method_mismatch",
+            method,
+            path,
+            "safe example declares a different method",
         )
     example_path = safe_example.get("path")
     if not isinstance(example_path, str) or not example_path.startswith("/v1/"):
-        raise X402DiscoveryCompletenessError(
-            f"{method} {path} safe example has no executable v1 path"
+        raise _completeness_error(
+            "safe_example_path_invalid",
+            method,
+            path,
+            "safe example has no executable v1 path",
         )
 
     metadata_rule_id = metadata.get("pricing_rule_id")
     if metadata_rule_id and metadata_rule_id != policy.pricing_rule_id:
-        raise X402DiscoveryCompletenessError(
-            f"{method} {path} metadata pricing rule {metadata_rule_id!r} does not "
-            f"match runtime policy {policy.pricing_rule_id!r}"
+        raise _completeness_error(
+            "pricing_rule_mismatch",
+            method,
+            path,
+            f"metadata pricing rule {metadata_rule_id!r} does not match runtime "
+            f"policy {policy.pricing_rule_id!r}",
         )
 
-    effective_policy = get_effective_endpoint_payment_policy(path, method)
+    effective_policy = payment_policy.get_effective_endpoint_payment_policy_from_config(
+        config,
+        path,
+        method,
+    )
     if effective_policy is None:
-        raise X402DiscoveryCompletenessError(
-            f"{method} {path} is configured but has no effective runtime policy"
+        raise _completeness_error(
+            "missing_effective_policy",
+            method,
+            path,
+            "is configured but has no effective runtime policy",
         )
     supported_rails = list(effective_policy.allowed_rails)
     anonymous_x402 = "x402" in supported_rails
-    availability_gated = match_paid_intelligence_artifact_route(method, path) is not None
+    availability_gated = (
+        match_paid_intelligence_artifact_route(method, example_path) is not None
+    )
 
     resource: dict[str, Any] = {
         "method": method,
@@ -175,12 +292,18 @@ def _resource_from_policy(policy: Any) -> dict[str, Any]:
             resource[field] = copy.deepcopy(metadata[field])
     if anonymous_x402:
         resource["x402"] = _x402_payment_metadata()
+    validate_discovery_resource_pricing_contract(resource)
     return resource
 
 
-def build_x402_discovery() -> dict[str, Any]:
-    """Build the side-effect-free manifest from canonical runtime sources."""
-    config = get_runtime_payment_policy_config()
+def build_x402_discovery(*, strict: bool = True) -> dict[str, Any]:
+    """Build discovery from all endpoint policies in one runtime snapshot.
+
+    ``strict=True`` is the architectural/CI contract. Runtime HTTP serving uses
+    ``strict=False`` so one remotely introduced defect degrades one resource
+    rather than collapsing the entire public discovery endpoint.
+    """
+    config = payment_policy.get_runtime_payment_policy_config()
     resources: list[dict[str, Any]] = []
     exceptions: list[dict[str, str]] = []
 
@@ -192,13 +315,44 @@ def build_x402_discovery() -> dict[str, Any]:
         exception_reason = DISCOVERY_EXCEPTIONS.get(key)
         if exception_reason:
             exceptions.append(
-                {"method": key[0], "path": key[1], "reason": exception_reason}
+                {
+                    "method": key[0],
+                    "path": key[1],
+                    "error_code": "documented_discovery_exception",
+                    "reason": exception_reason,
+                }
             )
             continue
-        resources.append(_resource_from_policy(policy))
+        try:
+            resources.append(_resource_from_policy(policy, config))
+        except Exception as exc:
+            if strict:
+                raise
+            error_code = getattr(
+                exc,
+                "error_code",
+                "resource_contract_unrepresentable",
+            )
+            exceptions.append(
+                {
+                    "method": key[0],
+                    "path": key[1],
+                    "error_code": str(error_code),
+                    "reason": "resource_contract_unrepresentable",
+                }
+            )
+            logger.error(
+                "Omitting unrepresentable x402 discovery resource %s %s (%s)",
+                key[0],
+                key[1],
+                error_code,
+                exc_info=True,
+            )
 
     return {
         "schema": DISCOVERY_SCHEMA,
+        "complete": not exceptions,
+        "membership": "all_endpoint_payment_policies_with_effective_remaining_rails",
         "canonical_url": CANONICAL_DISCOVERY_URL,
         "compatibility_aliases": [_absolute_url(path) for path in X402_DISCOVERY_ALIASES],
         "service": {
@@ -212,7 +366,7 @@ def build_x402_discovery() -> dict[str, Any]:
             "ai_context_url": AI_CONTEXT_URL,
         },
         "x402": {
-            "versions_supported": [2],
+            "versions_supported": [x402_contract.X402_VERSION],
             "payment": _x402_payment_metadata(),
         },
         "request_lifecycle": {
