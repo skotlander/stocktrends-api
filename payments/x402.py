@@ -23,6 +23,17 @@ from discovery.endpoint_metadata import (
     build_compact_bazaar_extension,
     get_resource_description,
 )
+import payments.x402_contract as x402_contract
+from payments.x402_contract import (
+    X402_DEFAULT_ASSET_TRANSFER_METHOD,
+    X402_DEFAULT_NETWORK,
+    X402_DEFAULT_SCHEME,
+    X402_DEFAULT_TOKEN,
+    X402_DEFAULT_TOKEN_DECIMALS,
+    X402_DEFAULT_TOKEN_NAME,
+    X402_DEFAULT_TOKEN_VERSION,
+    X402_SELLER_ADDRESS,
+)
 
 
 logger = logging.getLogger("stocktrends_api.x402")
@@ -40,20 +51,6 @@ X402_FACILITATOR_URL = os.getenv(
 X402_FACILITATOR_API_KEY = os.getenv("X402_FACILITATOR_API_KEY")
 X402_FACILITATOR_API_SECRET = os.getenv("X402_FACILITATOR_API_SECRET")
 
-X402_DEFAULT_NETWORK = os.getenv("X402_DEFAULT_NETWORK", "eip155:8453")
-X402_DEFAULT_SCHEME = os.getenv("X402_DEFAULT_SCHEME", "exact")
-X402_DEFAULT_TOKEN = os.getenv(
-    "X402_DEFAULT_TOKEN",
-    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-)
-X402_DEFAULT_TOKEN_NAME = os.getenv("X402_DEFAULT_TOKEN_NAME", "USDC")
-X402_DEFAULT_TOKEN_VERSION = os.getenv("X402_DEFAULT_TOKEN_VERSION", "2")
-X402_DEFAULT_ASSET_TRANSFER_METHOD = os.getenv(
-    "X402_DEFAULT_ASSET_TRANSFER_METHOD",
-    "eip3009",
-)
-X402_DEFAULT_TOKEN_DECIMALS = int(os.getenv("X402_DEFAULT_TOKEN_DECIMALS", "6"))
-X402_SELLER_ADDRESS = os.getenv("X402_SELLER_ADDRESS", "")
 X402_TIMEOUT_SECONDS = float(os.getenv("X402_TIMEOUT_SECONDS", "10"))
 X402_API_BASE_URL = os.getenv("X402_API_BASE_URL", "").rstrip("/")
 X402_CHALLENGE_MODE_HEADER = "X-StockTrends-Challenge-Mode"
@@ -310,7 +307,7 @@ def build_x402_requirements(
 
     # Registry-backed Bazaar metadata keeps v2 discovery construction in one place.
     return {
-        "x402Version": 2,
+        "x402Version": x402_contract.X402_VERSION,
         # V2 canonical resource identity (ResourceInfo) — separate from accepts entries.
         "resource": resource_info,
         "accepts": [
@@ -403,6 +400,11 @@ def build_x402_challenge(
 # HEADER / PAYMENT DETECTION
 # =========================================================
 
+def _get_header(headers, canonical_name: str):
+    """Read a canonical header from Starlette Headers or a plain mapping."""
+    return headers.get(canonical_name) or headers.get(canonical_name.lower())
+
+
 def is_x402_payment_method(headers_or_payment_method) -> bool:
     if headers_or_payment_method is None:
         return False
@@ -415,10 +417,7 @@ def is_x402_payment_method(headers_or_payment_method) -> bool:
     if isinstance(payment_method, str) and payment_method.strip().lower() == "x402":
         return True
 
-    if headers.get("payment-signature"):
-        return True
-
-    if headers.get("x-payment"):
+    if any(_get_header(headers, name) for name in x402_contract.X402_PROOF_HEADERS):
         return True
 
     auth = headers.get("authorization", "")
@@ -431,27 +430,19 @@ def is_x402_payment_method(headers_or_payment_method) -> bool:
 def has_payment_signature(headers) -> bool:
     if headers is None:
         return False
-    return bool(
-        headers.get("payment-signature")
-        or headers.get("x-payment")
-    )
+    return any(_get_header(headers, name) for name in x402_contract.X402_PROOF_HEADERS)
 
 
 def extract_payment_signature(headers) -> Optional[str]:
     if headers is None:
         return None
 
-    value = headers.get("payment-signature")
-    if value:
-        value = value.strip()
+    for header_name in x402_contract.X402_PROOF_HEADERS:
+        value = _get_header(headers, header_name)
         if value:
-            return value
-
-    value = headers.get("x-payment")
-    if value:
-        value = value.strip()
-        if value:
-            return value
+            value = value.strip()
+            if value:
+                return value
 
     return None
 
@@ -730,7 +721,9 @@ def verify_with_facilitator(
         )
 
     request_body = {
-        "x402Version": int(payment_payload.get("x402Version", 2)),
+        "x402Version": int(
+            payment_payload.get("x402Version", x402_contract.X402_VERSION)
+        ),
         "paymentPayload": payment_payload,
         "paymentRequirements": normalized_requirements,
     }
@@ -818,7 +811,9 @@ def settle_with_facilitator(
         )
 
     request_body = {
-        "x402Version": int(payment_payload.get("x402Version", 2)),
+        "x402Version": int(
+            payment_payload.get("x402Version", x402_contract.X402_VERSION)
+        ),
         "paymentPayload": payment_payload,
         "paymentRequirements": normalized_requirements,
     }

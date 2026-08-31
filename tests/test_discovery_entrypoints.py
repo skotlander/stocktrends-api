@@ -25,6 +25,7 @@ def _expected_not_found_payload(path: str) -> dict[str, str]:
     return {
         "detail": "Not Found",
         "requested_path": path,
+        "x402_discovery": "/.well-known/x402",
         "start_here": "/v1/ai/tools",
         "secondary": "/v1/ai/context",
         "docs": "/v1/docs",
@@ -45,11 +46,12 @@ def test_root_guides_to_canonical_openapi_and_task_discovery(client):
     assert response.status_code == 200
     body = response.json()
     assert body["message"] == (
-        "Use the canonical OpenAPI contract for machine-readable API discovery; "
-        "use start_here for Stock Trends task and workflow discovery."
+        "Use x402_discovery for payable-resource discovery, start_here for task "
+        "discovery, and the canonical OpenAPI contract for exact request schemas."
     )
     assert "Autonomous portfolio intelligence API for AI agents" in body["description"]
     assert body["developer_portal"] == "https://developer.stocktrends.com/"
+    assert body["x402_discovery"] == "https://api.stocktrends.com/.well-known/x402"
     assert body["start_here"] == "https://api.stocktrends.com/v1/ai/tools"
     assert body["secondary_context"] == "https://api.stocktrends.com/v1/ai/context"
     assert body["secondary"] == "https://api.stocktrends.com/v1/ai/context"

@@ -29,6 +29,78 @@ ALLOWED_SUBSCRIPTION_STATUSES = {"active", "trialing"}
 logger = logging.getLogger("stocktrends_api.auth")
 
 
+TRULY_PUBLIC_PATHS = frozenset({
+    "/",
+    "/index.html",
+    "/llms.txt",
+    "/ai-dataset.json",
+    "/tools.json",
+    "/sitemap.xml",
+    "/robots.txt",
+    "/docs",
+    "/v1/docs",
+    "/v1/docs/",
+    "/openapi.json",
+    "/v1/openapi.json",
+    "/v1/openapi.js",
+    "/health",
+    "/v1/pricing",
+    "/v1/pricing/catalog",
+    "/v1/cost-estimate",
+    "/v1/instruments/lookup",
+    "/v1/instruments/resolve",
+    "/v1/stwr/reports/catalog",
+    "/v1/stocktrends/portfolios",
+    "/v1/meta/indicators",
+    "/v1/meta/inference",
+    "/v1/meta/stim",
+    "/v1/meta/stwr",
+    "/v1/leadership/definitions",
+    "/v1/selections/stim-select/outcomes/summary",
+    "/v1/intelligence/discovery",
+    "/v1/intelligence/editorial/latest/preview",
+    "/v1/workflows",
+    "/v1/ai/context",
+    "/v1/ai/tools",
+    "/v1/ai/proof/market-edge",
+})
+
+TRULY_PUBLIC_PREFIXES = (
+    "/dataset/",
+    "/.well-known/",
+    "/v1/docs/",
+)
+
+INTERNAL_API_KEY_BYPASS_PREFIXES = (
+    "/v1/observability/",
+)
+
+CUSTOMER_API_KEY_BYPASS_PREFIXES = (
+    *TRULY_PUBLIC_PREFIXES,
+    *INTERNAL_API_KEY_BYPASS_PREFIXES,
+)
+
+
+def is_truly_public_api_path(path: str) -> bool:
+    """Return whether the operation is genuinely public/free."""
+    return (
+        path in TRULY_PUBLIC_PATHS
+        or is_public_stocktrends_path(path)
+        or is_public_intelligence_path(path)
+        or any(path.startswith(prefix) for prefix in TRULY_PUBLIC_PREFIXES)
+    )
+
+
+def is_internal_admin_api_path(path: str) -> bool:
+    """Return whether customer auth is bypassed for a separate internal gate."""
+    return any(path.startswith(prefix) for prefix in INTERNAL_API_KEY_BYPASS_PREFIXES)
+
+
+def bypasses_customer_api_key(path: str) -> bool:
+    """Return whether ApiKeyMiddleware must defer access control downstream."""
+    return is_truly_public_api_path(path) or is_internal_admin_api_path(path)
+
+
 def hash_api_key(raw_key: str) -> str:
     return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()
 
@@ -56,56 +128,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
 
-        self.public_paths = {
-            "/",
-            "/index.html",
-            "/llms.txt",
-            "/ai-dataset.json",
-            "/tools.json",
-            "/sitemap.xml",
-            "/robots.txt",
-            "/docs",
-            "/v1/docs",
-            "/v1/docs/",
-            "/openapi.json",
-            "/v1/openapi.json",
-            "/v1/openapi.js",
-            "/health",
-            "/v1/pricing",
-            "/v1/pricing/catalog",
-            "/v1/cost-estimate",
-            "/v1/instruments/lookup",
-            "/v1/instruments/resolve",
-            "/v1/stwr/reports/catalog",
-            "/v1/stocktrends/portfolios",
-            "/v1/meta/indicators",
-            "/v1/meta/inference",
-            "/v1/meta/stim",
-            "/v1/meta/stwr",
-            "/v1/leadership/definitions",
-            "/v1/selections/stim-select/outcomes/summary",
-            "/v1/intelligence/discovery",
-            "/v1/intelligence/editorial/latest/preview",
-            # Workflow catalog is public discovery — no auth required.
-            "/v1/workflows",
-            # Discovery endpoints — public like /v1/docs and /v1/openapi.json.
-            "/v1/ai/context",
-            "/v1/ai/tools",
-            # Free proof-of-value endpoint for autonomous agent discovery.
-            "/v1/ai/proof/market-edge",
-        }
-
-        self.public_prefixes = [
-            "/dataset/",
-            "/.well-known/",
-            # Swagger UI sub-paths (oauth2-redirect, etc.) are public doc assets.
-            "/v1/docs/",
-            # Observability endpoints are internal/admin-only, guarded by
-            # INTERNAL_OBSERVABILITY_SECRET in the router layer.  They must
-            # not be gated by customer API keys — internal tooling has no
-            # customer API key to present.
-            "/v1/observability/",
-        ]
+        self.public_paths = set(TRULY_PUBLIC_PATHS)
+        self.customer_api_key_bypass_prefixes = list(
+            CUSTOMER_API_KEY_BYPASS_PREFIXES
+        )
 
     def _is_agent_pay_candidate(self, request: Request) -> bool:
         path = request.url.path
@@ -259,12 +285,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         request.state.quota_limit = None
 
         # Public routes
-        if (
-            path in self.public_paths
-            or is_public_stocktrends_path(path)
-            or is_public_intelligence_path(path)
-            or any(path.startswith(prefix) for prefix in self.public_prefixes)
-        ):
+        if bypasses_customer_api_key(path):
             return await call_next(request)
 
         # OPTIONS preflight requests are handled by CORSMiddleware (outermost).

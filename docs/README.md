@@ -65,6 +65,9 @@ Defines **how the system works**
 * `request-lifecycle.md`
   -> step-by-step request flow
 
+* `x402-discovery.md`
+  -> separation of payable-resource discovery from paid execution
+
 ---
 
 ### `/operations/`

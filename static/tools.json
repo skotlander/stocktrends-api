@@ -34,6 +34,7 @@
     ]
   },
   "base_url": "https://api.stocktrends.com/v1",
+  "x402_discovery": "https://api.stocktrends.com/.well-known/x402",
   "openapi": "https://api.stocktrends.com/v1/openapi.json",
   "docs": "https://api.stocktrends.com/v1/docs",
   "ai_tools": "https://api.stocktrends.com/v1/ai/tools",
@@ -55,7 +56,7 @@
     {
       "name": "ai_context",
       "title": "AI Context",
-      "description": "Returns dataset structure, indicator definitions, coverage, usage guidance, and discovery links for agents. Use after /v1/ai/tools as the secondary explanatory entry point.",
+      "description": "Returns dataset structure, indicator definitions, coverage, usage guidance, and discovery links for agents. Use after /.well-known/x402 and /v1/ai/tools as the secondary explanatory entry point.",
       "method": "GET",
       "path": "/ai/context",
       "auth_required": false,
@@ -1349,7 +1350,7 @@
     }
   ],
   "usage_guidance": [
-    "Start with /v1/ai/tools as the primary machine-readable discovery entrypoint.",
+    "Start with /.well-known/x402 for payable-resource discovery, then use /v1/ai/tools for task and tool discovery.",
     "Call /v1/ai/proof/market-edge (no auth) to preview signal field structure before purchasing access.",
     "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
     "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
@@ -1358,7 +1359,7 @@
     "Fetch /v1/pricing/catalog at agent startup to resolve live STC costs — do not hardcode.",
     "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and supported rails.",
     "Use /v1/cost-estimate before expensive workflows.",
-    "For x402, the HTTP 402 stocktrends_preview is the final pre-payment surface for an otherwise-serviceable request: inspect it to confirm purpose, inputs, response shape, pricing_rule_id, cost, rails, and related endpoints before paying. It is not how to discover which parameters an endpoint accepts - read /v1/ai/tools or /v1/openapi.json for input schemas first, because a request must be serviceable before a 402 is emitted.",
+    "For x402, construct a serviceable request from /.well-known/x402 and /v1/openapi.json before expecting an execution-time 402. Inspect the 402 stocktrends_preview as a final confirmation for that already-serviceable request; it is not the schema-discovery mechanism. Use /v1/ai/tools or /v1/openapi.json for exact input schemas.",
     "Deterministically invalid input is rejected before any payment challenge: a malformed symbol_exchange, a missing required parameter combination, an unsupported sort/exchange/trend value, or a semantically incomplete body returns a 400 or 422 input error rather than a 402. Pricing context headers remain on that error, so the price is still discoverable once the request is corrected.",
     "For paid Intelligence artifacts, 402 previews and payment challenges are emitted only after the API confirms a matching exported artifact is serveable; unavailable artifacts return 503 or 404 with no paid rails advertised.",
     "Use decision and portfolio endpoints for high-value actionable outputs.",

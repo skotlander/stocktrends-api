@@ -9,6 +9,7 @@ from payments.x402 import (
     X402_CHALLENGE_MODE_HEADER,
     build_x402_challenge,
     build_x402_requirements,
+    extract_payment_signature,
     extract_x402_payment_context,
     has_payment_signature,
     settle_with_facilitator,
@@ -159,7 +160,7 @@ def enforce_x402_payment(
             payment_amount_native=normalized_payment_amount_native,
         )
 
-    payment_signature = headers.get("payment-signature") or headers.get("x-payment")
+    payment_signature = extract_payment_signature(headers)
 
     verify_result = verify_with_facilitator(
         payment_signature=payment_signature,

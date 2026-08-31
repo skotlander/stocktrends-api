@@ -602,8 +602,9 @@ class TestInternalAuthModel:
     def test_valid_customer_api_key_alone_returns_403(self, client, monkeypatch):
         """
         A valid customer API key without the internal secret must not grant access.
-        The endpoint is in public_prefixes so the API key middleware bypasses it —
-        but _require_internal_secret() still gates the route.
+        The endpoint is in the internal API-key-bypass prefixes, so customer
+        API-key middleware bypasses it — but _require_internal_secret() still
+        gates the route.
         Env var is unset here to prove API key alone is never sufficient.
         """
         monkeypatch.delenv("INTERNAL_OBSERVABILITY_SECRET", raising=False)

@@ -13,10 +13,10 @@ _RECENT_REQUESTS_LIMIT = 10
 
 # Environment variable that must be set to enable this endpoint.
 # When unset the endpoint responds 403 to every request regardless of headers.
-_SECRET_ENV_VAR = "INTERNAL_OBSERVABILITY_SECRET"
+INTERNAL_OBSERVABILITY_SECRET_ENV_VAR = "INTERNAL_OBSERVABILITY_SECRET"
 
 # Header the caller must present with the matching value.
-_SECRET_HEADER = "x-internal-secret"
+INTERNAL_OBSERVABILITY_SECRET_HEADER = "X-Internal-Secret"
 
 
 def _require_internal_secret(request: Request) -> None:
@@ -27,8 +27,8 @@ def _require_internal_secret(request: Request) -> None:
     (not module load) so it can be set/cleared by tests without restarting.
 
     Access model:
-    - /v1/observability/ is in api_key.py public_prefixes → customer API key
-      auth is bypassed entirely for observability paths.
+    - /v1/observability/ is an internal API-key-bypass prefix in api_key.py →
+      customer API-key auth is bypassed entirely for observability paths.
     - This function is the only auth layer.  A valid API key alone is not
       sufficient; the internal secret must be present and correct.
     - When the env var is unset the endpoint is disabled (403).
@@ -40,11 +40,11 @@ def _require_internal_secret(request: Request) -> None:
     - Until persistent tenant identity is added to MPP economics rows,
       exposing the endpoint at all requires it to be internal-only.
     """
-    secret = os.getenv(_SECRET_ENV_VAR)
+    secret = os.getenv(INTERNAL_OBSERVABILITY_SECRET_ENV_VAR)
     if not secret:
         raise HTTPException(status_code=403, detail="Observability endpoint is disabled")
 
-    presented = request.headers.get(_SECRET_HEADER, "")
+    presented = request.headers.get(INTERNAL_OBSERVABILITY_SECRET_HEADER, "")
     if not presented or presented != secret:
         raise HTTPException(status_code=403, detail="Internal access only")
 

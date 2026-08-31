@@ -48,6 +48,12 @@ The API is designed for:
 
 ## Machine-Readable Resources
 
+Canonical x402 payable-resource discovery (no API key, no paid execution):
+https://api.stocktrends.com/.well-known/x402
+
+Compatibility aliases expose the same JSON at `/.well-known/x402.json`,
+`/.well-known/x402-discovery`, and `/.well-known/x402-services.json`.
+
 Canonical LLM descriptor:
 https://api.stocktrends.com/llms.txt
 
@@ -276,44 +282,50 @@ Securities are ranked by prob13wk descending — the probability of exceeding th
 
 Recommended order for discovery and integration:
 
-1. `GET /ai/tools`
-   Primary machine-readable discovery. Fetch this first for the tools manifest, quickstart, recommended first call, and agent onboarding notes.
+1. `GET /.well-known/x402`
+   Discover payable resources, runtime-supported rails, canonical safe requests, and pricing-rule references without executing paid work.
 
-2. `GET /ai/proof/market-edge`
+2. `GET /ai/tools`
+   Task and tool discovery. Use this for workflow-oriented capability selection.
+
+3. `GET /ai/proof/market-edge`
    No auth required. Preview synthetic signal structure, confirm field schemas (trend codes, RSI baseline 100, vol_tag values), and understand the value proposition before purchasing access.
 
-3. `GET /ai/context`
+4. `GET /ai/context`
    Secondary explanatory entrypoint. Understand dataset structure, terminology, indicator logic, and endpoint groups.
 
-4. `GET /workflows`
+5. `GET /openapi.json`
+   Confirm exact request contracts, parameter locations, access alternatives, and safe-example extensions.
+
+6. `GET /workflows`
    Choose task-level strategy, endpoint sequence, inputs, supported rails, and per-step pricing_rule_id
 
-5. `GET /pricing/catalog`
+7. `GET /pricing/catalog`
    Discover live pricing metadata and concrete endpoint costs
 
-6. `GET /pricing`
+8. `GET /pricing`
    Understand payment identity, agent identity, accepted headers, x402, subscription, and MPP rails
 
-7. `GET /cost-estimate`
+9. `GET /cost-estimate`
    Estimate workflow cost before execution where appropriate
 
-8. Construct a serviceable request
+10. Construct a serviceable request
 
    Use the input schema from step 1 (or the canonical OpenAPI document) to
    build a request the endpoint can actually answer. Deterministically invalid
    input is rejected with a `400`/`422` input error before any payment
    challenge is issued, so a 402 is only reachable with a serviceable request.
 
-9. Start with a high-value premium endpoint:
+11. Start with a high-value premium endpoint:
    * `GET /agent/screener/top`
 
-9. Expand into decision and portfolio workflows:
+12. Expand into decision and portfolio workflows:
    * `POST /decision/evaluate-symbol`
    * `POST /portfolio/construct`
    * `POST /portfolio/evaluate`
    * `POST /portfolio/compare`
 
-10. Add supporting market intelligence:
+13. Add supporting market intelligence:
    * `GET /market/regime/latest`
    * `GET /breadth/sector/latest`
    * `GET /leadership/summary/latest`
@@ -328,6 +340,7 @@ The Stock Trends API supports multiple access modes.
 
 Publicly accessible resources include:
 
+* `GET /.well-known/x402` (and its compatibility aliases)
 * `GET /v1/ai/tools`
 * `GET /v1/ai/context`
 * `GET /v1/ai/proof/market-edge`
@@ -377,12 +390,12 @@ Use x402 when:
 
 Typical pattern:
 
-1. Read the endpoint's input schema from `/ai/tools` or the canonical OpenAPI
-   document, and its current cost from `/pricing/catalog`
-2. Call the premium endpoint with an otherwise-serviceable request
-3. Receive HTTP 402 with payment requirements
-4. Submit the required payment
-5. Retry the same request with payment proof headers
+1. Discover the resource and canonical safe request from `/.well-known/x402`
+2. Confirm the exact contract in `/v1/openapi.json` and current STC cost in `/v1/pricing/catalog`
+3. Call the premium endpoint with an otherwise-serviceable request
+4. Receive HTTP 402 with payment requirements
+5. Submit the required payment
+6. Retry the same request with `PAYMENT-SIGNATURE` or compatibility `X-Payment` proof
 
 Important: the 402 challenge is the final pre-payment surface for a request the
 endpoint could actually serve. It is not how you discover which parameters an

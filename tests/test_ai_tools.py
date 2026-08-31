@@ -130,15 +130,18 @@ def test_ai_tools_notes_is_non_empty_list():
     assert len(result["notes"]) > 0
 
 
-def test_ai_tools_notes_prioritize_tools_manifest():
+def test_ai_tools_notes_prioritize_x402_then_tools_manifest():
     result = ai_tools()
-    assert result["notes"][0].startswith("Start with /v1/ai/tools")
+    assert result["notes"][0].startswith("Start with /.well-known/x402")
+    assert "/v1/ai/tools" in result["notes"][0]
 
 
-def test_ai_context_discovery_entrypoints_prioritize_ai_tools():
+def test_ai_context_discovery_entrypoints_prioritize_x402_resources():
     result = ai_context()
     assert result["discovery_entrypoints"] == {
-        "primary_machine_readable": "/v1/ai/tools",
+        "primary_machine_readable": "/.well-known/x402",
+        "x402_payment_resources": "/.well-known/x402",
+        "task_and_tool_discovery": "/v1/ai/tools",
         "secondary_explanatory": "/v1/ai/context",
         "provider_agnostic_inference_contract": "/v1/meta/inference",
         "stim_provider_profile": "/v1/meta/stim",
@@ -147,19 +150,26 @@ def test_ai_context_discovery_entrypoints_prioritize_ai_tools():
     }
 
 
-def test_ai_context_discovery_lists_put_ai_tools_first():
+def test_ai_context_discovery_lists_put_x402_then_ai_tools_first():
     result = ai_context()
-    assert result["endpoint_groups"]["discovery"][0] == "/v1/ai/tools"
-    assert result["access_model"]["public_discovery"][0] == "/v1/ai/tools"
-    assert result["recommended_first_flows"]["agent"][:2] == [
+    assert result["endpoint_groups"]["discovery"][:2] == [
+        "/.well-known/x402",
         "/v1/ai/tools",
-        "/v1/ai/context",
+    ]
+    assert result["access_model"]["public_discovery"][:2] == [
+        "/.well-known/x402",
+        "/v1/ai/tools",
+    ]
+    assert result["recommended_first_flows"]["agent"][:2] == [
+        "/.well-known/x402",
+        "/v1/ai/tools",
     ]
 
 
-def test_ai_context_usage_guidance_references_primary_tools_manifest():
+def test_ai_context_usage_guidance_references_x402_and_tools_manifest():
     result = ai_context()
-    assert result["usage_guidance"][0].startswith("Start with /v1/ai/tools")
+    assert result["usage_guidance"][0].startswith("Start with /.well-known/x402")
+    assert "/v1/ai/tools" in result["usage_guidance"][0]
     assert "/v1/ai/context" in result["usage_guidance"][1]
 
 
@@ -863,7 +873,9 @@ def test_discovery_entrypoints_in_ai_tools():
     """ai_tools must expose discovery_entrypoints mirroring ai_context."""
     result = ai_tools()
     de = result["discovery_entrypoints"]
-    assert de["primary_machine_readable"] == "/v1/ai/tools"
+    assert de["primary_machine_readable"] == "/.well-known/x402"
+    assert de["x402_payment_resources"] == "/.well-known/x402"
+    assert de["task_and_tool_discovery"] == "/v1/ai/tools"
     assert de["secondary_explanatory"] == "/v1/ai/context"
     assert de["docs"] == "/v1/docs"
     assert de["openapi"] == "/v1/openapi.json"
@@ -910,7 +922,7 @@ def test_quickstart_is_ordered_steps():
         assert "step" in step
         assert "action" in step
         assert "path" in step
-        assert step["path"].startswith("/v1/")
+        assert step["path"].startswith(("/v1/", "/.well-known/"))
 
 
 def test_recommended_first_workflows_subset_of_registry():
