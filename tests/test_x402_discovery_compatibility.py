@@ -4,6 +4,7 @@ from collections import Counter
 from decimal import Decimal
 
 from fastapi.testclient import TestClient
+from starlette.datastructures import Headers
 
 import main
 import middleware.api_key as api_key_module
@@ -19,8 +20,17 @@ from discovery.x402_discovery import (
     X402_DISCOVERY_ALIASES,
     build_x402_discovery,
 )
-from middleware.api_key import is_public_api_path
+from middleware.api_key import (
+    is_internal_admin_api_path,
+    is_truly_public_api_path,
+)
+from payments.mpp import MPP_PAYMENT_CHANNEL_ID_HEADERS, MPP_REQUIRED_HEADERS
 from payments.policy_provider import get_effective_endpoint_payment_policy
+from payments.x402 import (
+    extract_payment_signature,
+    has_payment_signature,
+    is_x402_payment_method,
+)
 from services.intelligence_artifact_availability import (
     match_paid_intelligence_artifact_route,
 )
@@ -201,13 +211,22 @@ def test_openapi_security_payment_extensions_and_safe_examples_agree_with_runtim
     assert schemes["X402PaymentSignature"]["name"] == "PAYMENT-SIGNATURE"
     assert schemes["X402LegacyPayment"]["name"] == "X-Payment"
 
+    for scheme_name in ("X402PaymentSignature", "X402LegacyPayment"):
+        proof_header = schemes[scheme_name]["name"]
+        runtime_headers = Headers({proof_header: "test-payment-proof"})
+        assert is_x402_payment_method(runtime_headers) is True
+        assert has_payment_signature(runtime_headers) is True
+        assert extract_payment_signature(runtime_headers) == "test-payment-proof"
+
     for path, path_item in schema["paths"].items():
         external_path = f"/v1{path}"
         for method, operation in path_item.items():
             if method not in main.HTTP_METHODS:
                 continue
             policy = get_effective_endpoint_payment_policy(external_path, method.upper())
-            if policy is None and is_public_api_path(external_path):
+            if policy is None and is_internal_admin_api_path(external_path):
+                assert operation["security"] == [{"InternalSecretAuth": []}]
+            elif policy is None and is_truly_public_api_path(external_path):
                 assert operation["security"] == []
             elif policy is None:
                 assert operation["security"] == [
@@ -230,6 +249,118 @@ def test_openapi_security_payment_extensions_and_safe_examples_agree_with_runtim
                 assert operation["x-stocktrends-safe-example-request"] == metadata[
                     "safe_example_request"
                 ]
+
+
+def test_observability_openapi_and_runtime_require_internal_secret_independently(
+    monkeypatch,
+):
+    """A customer-key bypass is not a public-access classification."""
+    _stub_request_logging(monkeypatch)
+    monkeypatch.setenv("INTERNAL_OBSERVABILITY_SECRET", "internal-test-secret")
+
+    def valid_customer_api_key(_self, _path: str, _raw_key: str):
+        return True, {
+            "api_key_id": "customer-key-id",
+            "customer_id": "customer-id",
+            "subscription_id": "subscription-id",
+            "plan_code": "pro",
+            "actor_type": "external_customer",
+            "monthly_quota": 1000,
+        }
+
+    monkeypatch.setattr(
+        api_key_module.ApiKeyMiddleware,
+        "_authenticate_api_key",
+        valid_customer_api_key,
+    )
+    main.v1.openapi_schema = None
+
+    with TestClient(main.app) as client:
+        schema = client.get("/v1/openapi.json").json()
+        missing_secret = client.get(
+            "/v1/observability/mpp/sessions/contract-test-channel"
+        )
+        customer_key_only = client.get(
+            "/v1/observability/mpp/sessions/contract-test-channel",
+            headers={"X-API-Key": "customer-key-does-not-grant-internal-access"},
+        )
+
+    assert schema["paths"]["/ai/tools"]["get"]["security"] == []
+    observability = schema["paths"][
+        "/observability/mpp/sessions/{payment_channel_id}"
+    ]["get"]
+    assert observability["security"] == [{"InternalSecretAuth": []}]
+    assert observability["security"] != []
+    assert schema["components"]["securitySchemes"]["InternalSecretAuth"] == {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Internal-Secret",
+        "description": (
+            "Internal/admin authentication for observability operations. "
+            "A customer API key does not satisfy this requirement."
+        ),
+    }
+    assert missing_secret.status_code == 403
+    assert missing_secret.json()["detail"] == "Internal access only"
+    assert customer_key_only.status_code == 403
+    assert customer_key_only.json()["detail"] == "Internal access only"
+
+
+def test_mpp_openapi_contract_is_derived_from_runtime_header_constants(monkeypatch):
+    _stub_request_logging(monkeypatch)
+    main.v1.openapi_schema = None
+    with TestClient(main.app) as client:
+        schema = client.get("/v1/openapi.json").json()
+
+    operation = schema["paths"]["/stim/latest"]["get"]
+    mpp = operation["x-stocktrends-payment"]["mpp"]
+    expected_required = {header.lower() for header in MPP_REQUIRED_HEADERS}
+    expected_channels = {
+        header.lower() for header in MPP_PAYMENT_CHANNEL_ID_HEADERS
+    }
+
+    assert {header.lower() for header in mpp["required_headers"]} == expected_required
+    assert {
+        header.lower()
+        for header in mpp["required_one_of"]["payment_channel_id_headers"]
+    } == expected_channels
+    assert (
+        mpp["canonical_payment_channel_id_header"].lower()
+        == MPP_PAYMENT_CHANNEL_ID_HEADERS[0]
+    )
+    assert {
+        header.lower() for header in mpp["legacy_payment_channel_id_headers"]
+    } == {header.lower() for header in MPP_PAYMENT_CHANNEL_ID_HEADERS[1:]}
+    assert mpp["uses_x402_challenge_flow"] is False
+
+    documented_headers = {
+        header.lower() for header in mpp["security_schemes_by_header"]
+    }
+    assert documented_headers == expected_required | expected_channels
+    assert "x-stocktrends-agent-id" not in documented_headers
+
+    schemes = schema["components"]["securitySchemes"]
+    for header, scheme_name in mpp["security_schemes_by_header"].items():
+        assert schemes[scheme_name]["name"] == header
+
+    required_scheme_names = {
+        mpp["security_schemes_by_header"][header]
+        for header in mpp["required_headers"]
+    }
+    channel_scheme_names = {
+        mpp["security_schemes_by_header"][header]
+        for header in mpp["required_one_of"]["payment_channel_id_headers"]
+    }
+    actual_mpp_alternatives = {
+        frozenset(requirement)
+        for requirement in operation["security"]
+        if set(requirement) & channel_scheme_names
+    }
+    expected_mpp_alternatives = {
+        frozenset(required_scheme_names | {channel_scheme})
+        for channel_scheme in channel_scheme_names
+    }
+    assert actual_mpp_alternatives == expected_mpp_alternatives
 
 
 def test_root_and_v1_openapi_remain_structurally_identical(monkeypatch):

@@ -29,7 +29,7 @@ ALLOWED_SUBSCRIPTION_STATUSES = {"active", "trialing"}
 logger = logging.getLogger("stocktrends_api.auth")
 
 
-PUBLIC_PATHS = frozenset({
+TRULY_PUBLIC_PATHS = frozenset({
     "/",
     "/index.html",
     "/llms.txt",
@@ -65,22 +65,40 @@ PUBLIC_PATHS = frozenset({
     "/v1/ai/proof/market-edge",
 })
 
-PUBLIC_PREFIXES = (
+TRULY_PUBLIC_PREFIXES = (
     "/dataset/",
     "/.well-known/",
     "/v1/docs/",
+)
+
+INTERNAL_API_KEY_BYPASS_PREFIXES = (
     "/v1/observability/",
 )
 
+CUSTOMER_API_KEY_BYPASS_PREFIXES = (
+    *TRULY_PUBLIC_PREFIXES,
+    *INTERNAL_API_KEY_BYPASS_PREFIXES,
+)
 
-def is_public_api_path(path: str) -> bool:
-    """Return the API-key layer's canonical public/free classification."""
+
+def is_truly_public_api_path(path: str) -> bool:
+    """Return whether the operation is genuinely public/free."""
     return (
-        path in PUBLIC_PATHS
+        path in TRULY_PUBLIC_PATHS
         or is_public_stocktrends_path(path)
         or is_public_intelligence_path(path)
-        or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES)
+        or any(path.startswith(prefix) for prefix in TRULY_PUBLIC_PREFIXES)
     )
+
+
+def is_internal_admin_api_path(path: str) -> bool:
+    """Return whether customer auth is bypassed for a separate internal gate."""
+    return any(path.startswith(prefix) for prefix in INTERNAL_API_KEY_BYPASS_PREFIXES)
+
+
+def bypasses_customer_api_key(path: str) -> bool:
+    """Return whether ApiKeyMiddleware must defer access control downstream."""
+    return is_truly_public_api_path(path) or is_internal_admin_api_path(path)
 
 
 def hash_api_key(raw_key: str) -> str:
@@ -110,8 +128,10 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
     def __init__(self, app):
         super().__init__(app)
 
-        self.public_paths = set(PUBLIC_PATHS)
-        self.public_prefixes = list(PUBLIC_PREFIXES)
+        self.public_paths = set(TRULY_PUBLIC_PATHS)
+        self.customer_api_key_bypass_prefixes = list(
+            CUSTOMER_API_KEY_BYPASS_PREFIXES
+        )
 
     def _is_agent_pay_candidate(self, request: Request) -> bool:
         path = request.url.path
@@ -265,12 +285,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         request.state.quota_limit = None
 
         # Public routes
-        if (
-            path in self.public_paths
-            or is_public_stocktrends_path(path)
-            or is_public_intelligence_path(path)
-            or any(path.startswith(prefix) for prefix in self.public_prefixes)
-        ):
+        if bypasses_customer_api_key(path):
             return await call_next(request)
 
         # OPTIONS preflight requests are handled by CORSMiddleware (outermost).

@@ -28,10 +28,15 @@ from api.routing import (
     install_payment_execution_boundary,
 )
 from middleware.request_id import RequestIdMiddleware
-from middleware.api_key import ApiKeyMiddleware, is_public_api_path
+from middleware.api_key import (
+    ApiKeyMiddleware,
+    is_internal_admin_api_path,
+    is_truly_public_api_path,
+)
 from middleware.request_logger import RequestLoggerMiddleware
 from middleware.metering import MeteringMiddleware
 from payments.policy_provider import get_effective_endpoint_payment_policy
+from payments.mpp import MPP_PAYMENT_CHANNEL_ID_HEADERS, MPP_REQUIRED_HEADERS
 
 from routers.instruments import router as instruments_router
 from routers.prices import router as prices_router
@@ -54,7 +59,10 @@ from routers.stocktrends_portfolios import router as stocktrends_portfolios_rout
 from routers.stocktrends_strategies import router as stocktrends_strategies_router
 from routers.intelligence import router as intelligence_router
 from routers.workflows import router as workflows_router
-from routers.observability import router as observability_router
+from routers.observability import (
+    INTERNAL_OBSERVABILITY_SECRET_HEADER,
+    router as observability_router,
+)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -174,6 +182,24 @@ def _ensure_parameter_refs(operation: dict, refs: list[str]) -> None:
             existing.append({"$ref": ref})
 
 
+def _canonical_header_name(header_name: str) -> str:
+    """Format case-insensitive runtime header constants for OpenAPI display."""
+    canonical_parts = {
+        "id": "Id",
+        "mpp": "MPP",
+        "stocktrends": "StockTrends",
+        "x": "X",
+    }
+    return "-".join(
+        canonical_parts.get(part, part.title())
+        for part in header_name.lower().split("-")
+    )
+
+
+def _mpp_security_scheme_name(header_name: str) -> str:
+    return "MPP" + "".join(_canonical_header_name(header_name).split("-"))
+
+
 def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
     if v1_app.openapi_schema:
         return v1_app.openapi_schema
@@ -209,6 +235,16 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
         "scheme": "bearer",
     }
 
+    security_schemes["InternalSecretAuth"] = {
+        "type": "apiKey",
+        "in": "header",
+        "name": INTERNAL_OBSERVABILITY_SECRET_HEADER,
+        "description": (
+            "Internal/admin authentication for observability operations. "
+            "A customer API key does not satisfy this requirement."
+        ),
+    }
+
     security_schemes["X402PaymentSignature"] = {
         "type": "apiKey",
         "in": "header",
@@ -223,20 +259,23 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
         "description": "Legacy/compatibility x402 payment proof accepted by the runtime.",
     }
 
-    mpp_security_headers = {
-        "MPPAgentId": "X-StockTrends-Agent-Id",
-        "MPPPaymentMethod": "X-StockTrends-Payment-Method",
-        "MPPPaymentNetwork": "X-StockTrends-Payment-Network",
-        "MPPPaymentReference": "X-StockTrends-Payment-Reference",
-        "MPPPaymentAmount": "X-StockTrends-Payment-Amount",
-        "MPPPaymentChannelId": "X-StockTrends-Payment-Channel-Id",
+    mpp_required_headers = tuple(
+        _canonical_header_name(header_name) for header_name in MPP_REQUIRED_HEADERS
+    )
+    mpp_channel_id_headers = tuple(
+        _canonical_header_name(header_name)
+        for header_name in MPP_PAYMENT_CHANNEL_ID_HEADERS
+    )
+    mpp_security_schemes_by_header = {
+        header_name: _mpp_security_scheme_name(header_name)
+        for header_name in (*mpp_required_headers, *mpp_channel_id_headers)
     }
-    for scheme_name, header_name in mpp_security_headers.items():
+    for header_name, scheme_name in mpp_security_schemes_by_header.items():
         security_schemes[scheme_name] = {
             "type": "apiKey",
             "in": "header",
             "name": header_name,
-            "description": "Part of the canonical MPP session authorization header set.",
+            "description": "Runtime-recognized MPP session authorization header.",
         }
 
     # Agent headers
@@ -345,7 +384,9 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                 external_path,
                 method.upper(),
             )
-            if endpoint_policy is None and is_public_api_path(external_path):
+            if endpoint_policy is None and is_internal_admin_api_path(external_path):
+                operation["security"] = [{"InternalSecretAuth": []}]
+            elif endpoint_policy is None and is_truly_public_api_path(external_path):
                 operation["security"] = []
             elif endpoint_policy is None:
                 operation["security"] = [
@@ -366,9 +407,17 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                         ]
                     )
                 if "mpp" in endpoint_policy.machine_payment_rails:
-                    operation_security.append(
-                        {scheme_name: [] for scheme_name in mpp_security_headers}
-                    )
+                    required_schemes = {
+                        mpp_security_schemes_by_header[header_name]: []
+                        for header_name in mpp_required_headers
+                    }
+                    for channel_header in mpp_channel_id_headers:
+                        operation_security.append(
+                            {
+                                **required_schemes,
+                                mpp_security_schemes_by_header[channel_header]: [],
+                            }
+                        )
                 operation["security"] = operation_security
                 payment_extension = {
                     "requires_payment": True,
@@ -383,6 +432,22 @@ def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
                 }
                 if "x402" in endpoint_policy.machine_payment_rails:
                     payment_extension["x402_version"] = 2
+                if "mpp" in endpoint_policy.machine_payment_rails:
+                    payment_extension["mpp"] = {
+                        "authorization_model": "session",
+                        "required_headers": list(mpp_required_headers),
+                        "required_one_of": {
+                            "payment_channel_id_headers": list(mpp_channel_id_headers),
+                        },
+                        "canonical_payment_channel_id_header": mpp_channel_id_headers[0],
+                        "legacy_payment_channel_id_headers": list(
+                            mpp_channel_id_headers[1:]
+                        ),
+                        "security_schemes_by_header": dict(
+                            mpp_security_schemes_by_header
+                        ),
+                        "uses_x402_challenge_flow": False,
+                    }
                 operation["x-stocktrends-payment"] = payment_extension
 
             endpoint_metadata = get_endpoint_metadata(external_path, method.upper())
