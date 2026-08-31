@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import ast
 import copy
+import threading
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from decimal import Decimal
 from pathlib import Path
@@ -14,6 +16,7 @@ from starlette.datastructures import Headers
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+import metering.logger as metering_logger_module
 import payments.enforcement as enforcement_module
 import payments.mpp_client as mpp_client_module
 import payments.policy_provider as policy_provider_module
@@ -35,6 +38,7 @@ from discovery.x402_discovery import (
     CANONICAL_DISCOVERY_URL,
     DISCOVERY_SCHEMA,
     X402DiscoveryCompletenessError,
+    X402DiscoverySystemicFailure,
     X402_DISCOVERY_ALIASES,
     build_x402_discovery,
     validate_discovery_resource_pricing_contract,
@@ -53,7 +57,12 @@ from payments.x402 import (
 from services.intelligence_artifact_availability import (
     match_paid_intelligence_artifact_route,
 )
-from support.payment_harness import rows_engine, x402_headers
+from support.payment_harness import (
+    payment_governed_routes,
+    rows_engine,
+    v1_path,
+    x402_headers,
+)
 
 
 _DISCOVERY_SOURCE = Path(x402_discovery_module.__file__)
@@ -64,6 +73,8 @@ _FORBIDDEN_DISCOVERY_CALLS = {
     "configured_intelligence_artifact_store",
     "get_engine",
     "get_metering_engine",
+    "log_api_request_economics",
+    "log_api_request_event",
     "settle_with_facilitator",
     "verify_with_facilitator",
     "void_mpp_authorization",
@@ -84,6 +95,8 @@ def _discovery_purity_violations(source: str) -> list[str]:
             or module.startswith("payments.mpp_client")
             or module.startswith("routers")
             or module.startswith("middleware.metering")
+            or module == "metering"
+            or module.startswith("metering.")
             or (
                 module.startswith("services")
                 and module != _ALLOWED_SERVICE_IMPORT
@@ -135,6 +148,18 @@ def _manifest_keys(manifest: dict) -> set[tuple[str, str]]:
     return represented
 
 
+def _assert_mounted_enforcement_surface_is_discoverable(manifest: dict) -> None:
+    enforced = {
+        (method, v1_path(route))
+        for route, method in payment_governed_routes()
+    }
+    missing = enforced.difference(_manifest_keys(manifest))
+    assert not missing, (
+        "mounted routes selected by runtime payment enforcement lack exact "
+        f"discovery contracts: {sorted(missing)}"
+    )
+
+
 def test_well_known_aliases_are_anonymous_equivalent_and_canonical(monkeypatch):
     _stub_request_logging(monkeypatch)
     payloads = []
@@ -172,6 +197,21 @@ def test_manifest_read_has_no_payment_data_or_artifact_side_effects(monkeypatch)
     monkeypatch.setattr(ai_router_module, "get_engine", poison("market_data"))
     monkeypatch.setattr(ai_router_module, "get_metering_engine", poison("pricing_db"))
     monkeypatch.setattr(
+        metering_logger_module,
+        "log_api_request_event",
+        poison("direct_request_event"),
+    )
+    monkeypatch.setattr(
+        metering_logger_module,
+        "log_api_request_economics",
+        poison("direct_request_economics"),
+    )
+    monkeypatch.setattr(
+        metering_logger_module,
+        "get_metering_engine",
+        poison("direct_metering_engine"),
+    )
+    monkeypatch.setattr(
         availability_module,
         "configured_intelligence_artifact_store",
         poison("artifact_store"),
@@ -194,6 +234,12 @@ def test_discovery_builder_dependency_firewall_is_structurally_enforced():
         + "\nimport payments.x402\ndef _mutation():\n"
         + "    payments.x402.verify_with_facilitator(None, None)\n"
     )
+    metering_mutation = (
+        source
+        + "\nfrom metering.logger import log_api_request_economics\n"
+        + "def _mutation():\n"
+        + "    log_api_request_economics({})\n"
+    )
     assert "forbidden import: db" in _discovery_purity_violations(db_mutation)
     assert "forbidden call: get_engine" in _discovery_purity_violations(db_mutation)
     assert "forbidden import: payments.x402" in _discovery_purity_violations(
@@ -201,6 +247,12 @@ def test_discovery_builder_dependency_firewall_is_structurally_enforced():
     )
     assert "forbidden call: verify_with_facilitator" in (
         _discovery_purity_violations(facilitator_mutation)
+    )
+    assert "forbidden import: metering.logger" in _discovery_purity_violations(
+        metering_mutation
+    )
+    assert "forbidden call: log_api_request_economics" in (
+        _discovery_purity_violations(metering_mutation)
     )
 
 
@@ -254,6 +306,32 @@ def test_manifest_reconciles_with_runtime_payment_governed_surface():
         assert resource["pricing_rule_id"] == policy.pricing_rule_id
         assert resource["supported_rails"] == list(policy.allowed_rails)
         assert resource["safe_example_request"]
+
+
+def test_mounted_payment_enforcement_surface_is_also_discoverable():
+    _assert_mounted_enforcement_surface_is_discoverable(build_x402_discovery())
+
+
+def test_prefix_only_enforcement_route_fails_discovery_completeness(
+    monkeypatch,
+):
+    baseline = policy_provider_module.get_runtime_payment_policy_config()
+    mutated = replace(
+        baseline,
+        enforcement_path_prefixes=(
+            *baseline.enforcement_path_prefixes,
+            "/v1/agents",
+        ),
+    )
+    monkeypatch.setattr(
+        policy_provider_module,
+        "get_runtime_payment_policy_config",
+        lambda *_args, **_kwargs: mutated,
+    )
+
+    manifest = build_x402_discovery()
+    with pytest.raises(AssertionError, match="lack exact discovery contracts"):
+        _assert_mounted_enforcement_surface_is_discoverable(manifest)
 
 
 def test_availability_classification_is_derived_from_existing_boundary():
@@ -545,6 +623,72 @@ def test_proof_header_contract_moves_runtime_openapi_and_manifest_together(
     assert extract_payment_signature(retained_header) == "retained-proof"
 
 
+def test_every_canonical_proof_header_reaches_all_machine_contract_consumers(
+    monkeypatch,
+    payment_harness,
+):
+    """Addition-direction guard: a new canonical header needs no consumer edits."""
+    monkeypatch.setattr(stim_router_module, "get_engine", lambda: rows_engine([]))
+    main.v1.openapi_schema = None
+
+    schema = payment_harness.client.get("/v1/openapi.json").json()
+    manifest = payment_harness.client.get(X402_DISCOVERY_ALIASES[0]).json()
+    plugin = payment_harness.client.get("/.well-known/ai-plugin.json").json()
+
+    openapi_headers = {
+        scheme.get("name")
+        for scheme in schema["components"]["securitySchemes"].values()
+        if scheme.get("name") in x402_contract_module.X402_PROOF_HEADERS
+    }
+    assert openapi_headers == set(x402_contract_module.X402_PROOF_HEADERS)
+    assert manifest["x402"]["payment"]["proof_headers"] == list(
+        x402_contract_module.X402_PROOF_HEADERS
+    )
+    assert plugin["x_stocktrends_access"]["x402_proof_headers"] == list(
+        x402_contract_module.X402_PROOF_HEADERS
+    )
+
+    for index, proof_header in enumerate(x402_contract_module.X402_PROOF_HEADERS):
+        probe = Headers({proof_header: "runtime-proof"})
+        assert is_x402_payment_method(probe) is True
+        assert has_payment_signature(probe) is True
+        assert extract_payment_signature(probe) == "runtime-proof"
+
+        cors = payment_harness.client.options(
+            "/.well-known/x402",
+            headers={
+                "Origin": "https://developer.stocktrends.com",
+                "Access-Control-Request-Method": "GET",
+                "Access-Control-Request-Headers": proof_header,
+            },
+        )
+        assert cors.status_code == 200
+        assert proof_header.lower() in cors.headers[
+            "access-control-allow-headers"
+        ].lower()
+
+        reference = f"canonical-proof-header-{index}"
+        paid_headers = x402_headers(reference=reference)
+        payment_proof = paid_headers.pop("X-Payment")
+        paid_headers[proof_header] = payment_proof
+        payment_harness.facilitator.reset()
+
+        paid = payment_harness.client.get(
+            "/v1/stim/latest?symbol_exchange=IBM-N",
+            headers=paid_headers,
+        )
+        assert paid.status_code != 402
+        assert paid.status_code in {200, 404}
+        assert payment_harness.facilitator.verify_count == 1
+        assert payment_harness.facilitator.settle_count == 1
+        assert payment_harness.facilitator.verify_calls[0][
+            "payment_signature"
+        ] == payment_proof
+        assert payment_harness.facilitator.settle_calls[0][
+            "payment_signature"
+        ] == payment_proof
+
+
 def test_strict_discovery_fails_but_runtime_manifest_degrades_per_resource(
     monkeypatch,
     payment_harness,
@@ -593,6 +737,59 @@ def test_strict_discovery_fails_but_runtime_manifest_degrades_per_resource(
     assert payment_harness.facilitator.verify_count == 0
     assert payment_harness.facilitator.settle_count == 0
     assert payment_harness.mpp.authorize_count == 0
+    assert payment_harness.logs.economics == []
+
+
+def test_all_runtime_resource_failures_surface_systemic_5xx(
+    monkeypatch,
+    payment_harness,
+):
+    def fail_every_resource(_policy, _config):
+        raise X402DiscoveryCompletenessError(
+            "forced systemic representation failure",
+            error_code="forced_systemic_failure",
+        )
+
+    monkeypatch.setattr(
+        x402_discovery_module,
+        "_resource_from_policy",
+        fail_every_resource,
+    )
+
+    with pytest.raises(X402DiscoverySystemicFailure):
+        build_x402_discovery(strict=False)
+
+    response = payment_harness.client.get(X402_DISCOVERY_ALIASES[0])
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "x402 discovery is temporarily unavailable"
+    }
+    assert payment_harness.facilitator.verify_count == 0
+    assert payment_harness.facilitator.settle_count == 0
+    assert payment_harness.mpp.authorize_count == 0
+    assert payment_harness.logs.economics == []
+
+
+def test_genuinely_empty_policy_configuration_is_complete_and_empty(
+    monkeypatch,
+    payment_harness,
+):
+    baseline = policy_provider_module.get_runtime_payment_policy_config()
+    empty = replace(baseline, endpoint_payment_policies=())
+    monkeypatch.setattr(
+        policy_provider_module,
+        "get_runtime_payment_policy_config",
+        lambda *_args, **_kwargs: empty,
+    )
+
+    response = payment_harness.client.get(X402_DISCOVERY_ALIASES[0])
+    assert response.status_code == 200
+    manifest = response.json()
+    assert manifest["complete"] is True
+    assert manifest["resources"] == []
+    assert manifest["discovery_exceptions"] == []
+    assert payment_harness.facilitator.verify_count == 0
+    assert payment_harness.facilitator.settle_count == 0
     assert payment_harness.logs.economics == []
 
 
@@ -721,6 +918,87 @@ def test_openapi_cache_tracks_semantic_runtime_policy_and_manifest(
         reversed_schema = client.get("/v1/openapi.json").json()
         assert len(generations) == 3
         assert reversed_schema["paths"]["/stim/latest"]["get"] == full_operation
+
+
+def test_openapi_contract_cache_update_is_atomic_under_concurrency(monkeypatch):
+    baseline = policy_provider_module.get_runtime_payment_policy_config()
+    target_path = "/v1/stim/latest"
+    subscription_only = replace(
+        baseline,
+        version="concurrency-subscription-only",
+        endpoint_payment_policies=tuple(
+            replace(
+                policy,
+                allowed_rails=("subscription",),
+                machine_payments_enabled=False,
+            )
+            if policy.path_pattern == target_path and policy.method == "GET"
+            else policy
+            for policy in baseline.endpoint_payment_policies
+        ),
+    )
+    current = {"config": baseline}
+    monkeypatch.setattr(
+        policy_provider_module,
+        "get_runtime_payment_policy_config",
+        lambda *_args, **_kwargs: current["config"],
+    )
+
+    original_get_openapi = main.get_openapi
+    old_generation_started = threading.Event()
+    release_old_generation = threading.Event()
+    new_request_attempted = threading.Event()
+    thread_context = threading.local()
+    generation_labels = []
+
+    def controlled_get_openapi(*args, **kwargs):
+        label = thread_context.label
+        generation_labels.append(label)
+        if label == "old":
+            old_generation_started.set()
+            assert release_old_generation.wait(timeout=5)
+        return original_get_openapi(*args, **kwargs)
+
+    def request_schema(label: str):
+        thread_context.label = label
+        if label == "new":
+            new_request_attempted.set()
+        return main.v1.openapi()
+
+    monkeypatch.setattr(main, "get_openapi", controlled_get_openapi)
+    main.v1.openapi_schema = None
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        old_future = executor.submit(request_schema, "old")
+        assert old_generation_started.wait(timeout=5)
+
+        current["config"] = subscription_only
+        new_future = executor.submit(request_schema, "new")
+        assert new_request_attempted.wait(timeout=5)
+        assert generation_labels == ["old"]
+
+        release_old_generation.set()
+        old_schema = old_future.result(timeout=5)
+        new_schema = new_future.result(timeout=5)
+
+    assert old_schema["paths"]["/stim/latest"]["get"][
+        "x-stocktrends-payment"
+    ]["supported_rails"] == ["subscription", "x402", "mpp"]
+    assert new_schema["paths"]["/stim/latest"]["get"][
+        "x-stocktrends-payment"
+    ]["supported_rails"] == ["subscription"]
+    assert generation_labels == ["old", "new"]
+
+    expected_fingerprint = policy_provider_module.payment_policy_contract_fingerprint(
+        subscription_only
+    )
+    assert main.v1.state.openapi_payment_policy_fingerprint == expected_fingerprint
+    assert main.v1.state.openapi_payment_contract_key[0] == expected_fingerprint
+    assert main.v1.openapi_schema is new_schema
+
+    thread_context.label = "current"
+    assert main.v1.openapi() is new_schema
+    assert generation_labels == ["old", "new"]
 
 
 def test_policy_fingerprint_ignores_refresh_time_but_tracks_semantics():

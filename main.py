@@ -1,5 +1,6 @@
 # main.py
 import logging
+import threading
 
 from fastapi import FastAPI, Request
 from fastapi.exception_handlers import http_exception_handler
@@ -24,6 +25,7 @@ from discovery.service_meta import (
 from discovery.x402_discovery import (
     CANONICAL_DISCOVERY_PATH,
     CANONICAL_DISCOVERY_URL,
+    X402DiscoverySystemicFailure,
     X402_DISCOVERY_ALIASES,
     build_x402_discovery,
 )
@@ -113,6 +115,7 @@ X402_BROWSER_EXPOSED_HEADERS = [
     "X-StockTrends-Selected-Payment-Rail",
     "X-StockTrends-STC-Cost",
 ]
+_OPENAPI_CONTRACT_CACHE_LOCK = threading.Lock()
 
 
 def is_protected_v1_path(path: str) -> bool:
@@ -215,6 +218,12 @@ def _x402_security_scheme_name(header_name: str) -> str:
 
 
 def apply_api_key_security_to_openapi(v1_app: FastAPI) -> dict:
+    with _OPENAPI_CONTRACT_CACHE_LOCK:
+        return _apply_api_key_security_to_openapi_locked(v1_app)
+
+
+def _apply_api_key_security_to_openapi_locked(v1_app: FastAPI) -> dict:
+    """Generate or reuse the schema while holding the contract-cache lock."""
     runtime_policy = payment_policy.get_runtime_payment_policy_config()
     policy_fingerprint = payment_policy.payment_policy_contract_fingerprint(
         runtime_policy
@@ -544,7 +553,13 @@ def root():
 @app.get(X402_DISCOVERY_ALIASES[2], include_in_schema=False)
 @app.get(X402_DISCOVERY_ALIASES[3], include_in_schema=False)
 def x402_discovery():
-    return JSONResponse(build_x402_discovery(strict=False))
+    try:
+        return JSONResponse(build_x402_discovery(strict=False))
+    except X402DiscoverySystemicFailure:
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "x402 discovery is temporarily unavailable"},
+        )
 
 
 @app.get("/llms.txt", include_in_schema=False)
@@ -578,7 +593,7 @@ def ai_plugin():
                 "public_discovery_requires_api_key": False,
                 "subscription_auth": ["X-API-Key", "Authorization: Bearer"],
                 "machine_payment_rails": ["x402", "mpp"],
-                "x402_proof_headers": ["PAYMENT-SIGNATURE", "X-Payment"],
+                "x402_proof_headers": list(x402_contract.X402_PROOF_HEADERS),
                 "serviceable_request_required_before_challenge": True,
             },
             "data_provenance": data_provenance(),

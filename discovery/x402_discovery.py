@@ -64,6 +64,10 @@ class X402DiscoveryCompletenessError(RuntimeError):
         self.path = path
 
 
+class X402DiscoverySystemicFailure(RuntimeError):
+    """Raised when runtime discovery cannot represent any governed resource."""
+
+
 _ALLOWED_PRICING_FIELDS = {
     "source",
     "pricing_rule_id",
@@ -306,6 +310,7 @@ def build_x402_discovery(*, strict: bool = True) -> dict[str, Any]:
     config = payment_policy.get_runtime_payment_policy_config()
     resources: list[dict[str, Any]] = []
     exceptions: list[dict[str, str]] = []
+    runtime_failure_count = 0
 
     for policy in sorted(
         config.endpoint_payment_policies,
@@ -328,6 +333,7 @@ def build_x402_discovery(*, strict: bool = True) -> dict[str, Any]:
         except Exception as exc:
             if strict:
                 raise
+            runtime_failure_count += 1
             error_code = getattr(
                 exc,
                 "error_code",
@@ -348,6 +354,19 @@ def build_x402_discovery(*, strict: bool = True) -> dict[str, Any]:
                 error_code,
                 exc_info=True,
             )
+
+    if (
+        config.endpoint_payment_policies
+        and not resources
+        and runtime_failure_count
+    ):
+        logger.critical(
+            "x402 discovery failed to represent every governed resource; "
+            "refusing to publish an empty successful manifest"
+        )
+        raise X402DiscoverySystemicFailure(
+            "No governed x402 discovery resources could be represented."
+        )
 
     return {
         "schema": DISCOVERY_SCHEMA,
