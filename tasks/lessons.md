@@ -244,3 +244,42 @@ correctness.
   scope: `authorize = 1`, capture attempted and failed, `void = 0`,
   `billed = 0`. Needs idempotency/uncertain-outcome design; do not blindly void
   after a failed capture.
+
+---
+
+## 2026-09-05 — A discovery contract tested the builder, not the response
+
+**Problem.** PR2's advertised-example probeability suite called
+`build_x402_requirements` directly, read the method, path and input example out
+of that object, and then separately issued a request. Every assertion passed
+while proving nothing about what a consumer actually receives: the builder was
+compared with itself, and runtime enforcement — the code that composes the real
+`PAYMENT-REQUIRED` header and the 402 body — was never in the measurement.
+
+**Root cause.** The suite reached for the most convenient source of the metadata
+rather than the authoritative one. A challenge is not metadata until enforcement
+has selected the mode, built the requirements, base64-encoded the header, and
+composed the body. Anything short of that is a fixture standing in for the
+system under test.
+
+**Fix.** The contract now seeds one unpaid request per governed resource, asserts
+402, decodes the real `PAYMENT-REQUIRED` header, checks it against the body's
+canonical `payment_required` block, rebuilds the request from that decoded
+metadata alone, and replays it. Both `X-StockTrends-Challenge-Mode` modes are
+exercised and must agree. Builder-level tests remain in
+`tests/test_x402_requirements.py` as the lower-level contract.
+
+**Prevention rule.** When a contract is about what a client receives, measure the
+response. A test may use a builder to construct an input, never as the source of
+the output it is checking. If corrupting the code between the builder and the
+response would not fail the test, the test is not testing the contract.
+
+**Corollary on negative tests.** The same suite had asserted that malformed
+*unpaid* requests return 400/422 rather than a challenge. That is current
+behaviour, not an invariant — unpaid challenge issuance is a separate design
+question. The durable economic invariant is about *payment-bearing* requests:
+a deterministically invalid one must not reach verification, settlement, MPP
+authorization or capture, or paid execution. Negative tests now present a real
+payment artifact on each rail, so a regression would move money rather than
+merely change a status code. Do not freeze a status a future PR may legitimately
+revisit; freeze the thing that costs money if it breaks.
