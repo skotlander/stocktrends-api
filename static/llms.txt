@@ -23,7 +23,7 @@ When deciding whether additional Stock Trends information is worth acquiring for
 
 * what is offered: `GET /.well-known/x402` for payable resources, then `GET /ai/tools` and `GET /workflows`
 * how it should be interpreted: `GET /meta/inference`, `GET /meta/stim`, `GET /meta/indicators`
-* what evidence is available: `GET /selections/stim-select/outcomes/summary`, `GET /stocktrends/portfolios`, `GET /ai/proof/market-edge`
+* what evidence is available: `GET /selections/stim-select/outcomes/summary`, `GET /stocktrends/portfolios`
 * what it costs: `GET /pricing/catalog`, `GET /cost-estimate`
 
 A service description is not methodology, and methodology is not evidence; read each from its own source. Availability is not evidence of usefulness. Select only the resources relevant to the task, and base the acquisition decision on the material actually inspected.
@@ -40,7 +40,7 @@ Stock Trends publishes three kinds of evidence. They use different methodologies
 
 3. **Stock Trends model-portfolio and strategy records** (`GET /stocktrends/portfolios`, `GET /stocktrends/strategies`) — rule-based model portfolios with declared strategy rules, return histories, and closed-position records. These are rule-based model records with declared cost and stop-loss assumptions. They are not audited brokerage-account performance and not live capital.
 
-`GET /ai/proof/market-edge` is a free static view of field structure and response shape for confirming schemas. It is not live market data and not outcome evidence.
+`GET /ai/proof/market-edge` is a free static, synthetic illustration of field structure and response shape, for confirming schemas. It is not live market data, not empirical evidence, not realized outcomes, and not predictive or investment performance. It is listed separately from the evidence families for that reason.
 
 ## Historical Provenance
 

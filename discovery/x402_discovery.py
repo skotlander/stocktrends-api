@@ -418,7 +418,6 @@ def build_x402_discovery(*, strict: bool = True) -> dict[str, Any]:
                 "what_evidence_exists": [
                     _absolute_url("/v1/selections/stim-select/outcomes/summary"),
                     _absolute_url("/v1/stocktrends/portfolios"),
-                    _absolute_url("/v1/ai/proof/market-edge"),
                 ],
                 "what_it_costs": [
                     PRICING_CATALOG_URL,
@@ -442,6 +441,16 @@ def build_x402_discovery(*, strict: bool = True) -> dict[str, Any]:
                 "This describes how to evaluate. It states no conclusion and "
                 "recommends acquiring nothing."
             ),
+            # Kept out of the evidence category on purpose: it illustrates shape,
+            # it does not measure anything.
+            "illustrative_capability_example": {
+                "endpoint": _absolute_url("/v1/ai/proof/market-edge"),
+                "shows": "response structure and how context layers compose",
+                "is_not": (
+                    "not empirical evidence, not realized outcomes, not predictive "
+                    "performance, and not investment performance"
+                ),
+            },
         },
         "x402": {
             "versions_supported": [x402_contract.X402_VERSION],

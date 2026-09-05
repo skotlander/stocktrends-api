@@ -64,8 +64,8 @@
     },
     {
       "name": "ai_proof_market_edge",
-      "title": "Proof of Value — Market Edge",
-      "description": "Free, non-metered, no auth required. Returns a static synthetic demonstration of Stock Trends signal structure, value proposition, and field schemas. Use this before purchasing access to confirm field names, trend codes, and RSI baseline semantics. Instruments use impossible synthetic symbols — not real tickers.",
+      "title": "Market Context — Static Schema Illustration",
+      "description": "Free, non-metered, no auth required. Returns a static synthetic illustration of Stock Trends response structure and field schemas. Use it to confirm field names, trend codes, and RSI baseline semantics. Instruments use impossible synthetic symbols — not real tickers. It measures nothing: not empirical evidence, not realized outcomes, and not predictive or investment performance.",
       "method": "GET",
       "path": "/ai/proof/market-edge",
       "auth_required": false,

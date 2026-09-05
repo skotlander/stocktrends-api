@@ -479,6 +479,19 @@ def test_root_discovery_names_the_public_evidence_resources(client):
         "/v1/selections/stim-select/outcomes/summary",
         "/v1/stocktrends/portfolios",
         "/v1/stocktrends/strategies",
-        "/v1/ai/proof/market-edge",
     ):
         assert f"https://api.stocktrends.com{path}" in body["evidence"]
+
+
+def test_root_lists_the_static_illustration_apart_from_evidence(client):
+    """
+    /v1/ai/proof/market-edge returns a static synthetic body. It shows a shape;
+    it measures nothing, so it is not an evidence resource. This assertion was
+    inverted in the reviewed implementation.
+    """
+    body = client.get("/").json()
+
+    assert "/v1/ai/proof/market-edge" not in json.dumps(body["evidence"])
+    assert body["illustrative_capability_example"] == (
+        "https://api.stocktrends.com/v1/ai/proof/market-edge"
+    )

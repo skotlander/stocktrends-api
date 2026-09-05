@@ -552,9 +552,11 @@ def root():
             _absolute_url("/v1/selections/stim-select/outcomes/summary"),
             _absolute_url("/v1/stocktrends/portfolios"),
             _absolute_url("/v1/stocktrends/strategies"),
-            _absolute_url("/v1/ai/proof/market-edge"),
         ],
         "evidence_map": _absolute_url("/v1/ai/context"),
+        # Listed apart from evidence: a static synthetic illustration of response
+        # structure, which measures nothing.
+        "illustrative_capability_example": _absolute_url("/v1/ai/proof/market-edge"),
         **_root_discovery_links(),
     }
 

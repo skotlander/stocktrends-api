@@ -1147,13 +1147,36 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         purpose="Review recent market regime transitions.",
         investment_agent_value="Helps agents understand whether current regime context is stable or changing.",
         workflow_role="Historical market context.",
-        optional_inputs={"limit": _limit_input("/v1/market/regime/history"), "start": copy.deepcopy(START_INPUT)},
+        optional_inputs={
+            "limit": _limit_input("/v1/market/regime/history"),
+            # The runtime parameter is `start_date`, not the `start` used by the
+            # symbol-scoped history endpoints. Publishing `start` here made the
+            # canonical x402 input schema disagree with the request the endpoint
+            # can actually answer.
+            "start_date": {
+                "type": "string",
+                "required": False,
+                "format": "date",
+                "example": "2025-01-03",
+                "description": (
+                    "Optional earliest weekdate to include, in YYYY-MM-DD format. This "
+                    "filters which weeks are eligible; the endpoint still returns at most "
+                    "`limit` weeks and returns the most recent eligible weeks, so it does "
+                    "not select an arbitrary historical window."
+                ),
+            },
+        },
         safe_example_request={"method": "GET", "path": "/v1/market/regime/history", "query": {"limit": 12}},
         response_shape=["history[].weekdate", "history[].regime", "history[].confidence", "history[].regime_score", "history[].bullish_pct", "history[].bearish_pct", "history[].avg_rsi", "history[].avg_mt_cnt", "history[].signal_count", "count", "limit", "start_date"],
         example_object={"count": 1, "history": [{"weekdate": "YYYY-MM-DD", "regime": "mixed", "regime_score": 0.0}]},
         output_summary="Recent weekly market regime sequence.",
         analytical_role=ROLE_MARKET_REGIME_CLASSIFIER,
-        notes=["Each row uses the same classification logic as /v1/market/regime/latest."],
+        notes=[
+            "Returns at most 52 weekly regime observations, most recent first.",
+            "start_date sets the earliest eligible weekdate; it does not shift a window backwards into history. Combined with the 52-week ceiling, this endpoint covers recent regime history rather than an arbitrary research period.",
+            "The applied_bounds block on the response reports the limit that was applied, the start_date in force, and whether the result was truncated.",
+            "Each row uses the same classification logic as /v1/market/regime/latest.",
+        ],
         related_endpoints=["/v1/market/regime/latest", "/v1/market/regime/forecast"],
         next_recommended_calls=["/v1/market/regime/forecast"],
         interpretation_guidance=REGIME_INTERPRETATION_GUIDANCE,

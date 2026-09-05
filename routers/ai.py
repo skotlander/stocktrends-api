@@ -743,6 +743,11 @@ _TOOL_TEMPLATES = [
 
 _REGISTRY_TOOL_TEMPLATE_OVERRIDES = frozenset({
     ("/v1/agent/screener/top", "GET"),
+    # The hand-authored template published an empty input schema, so the tools
+    # manifest advertised no parameters at all for regime history while the
+    # canonical registry carried `limit` and `start_date`. Let the registry win
+    # so all three machine surfaces state one contract.
+    ("/v1/market/regime/history", "GET"),
     ("/v1/indicators/latest", "GET"),
     ("/v1/indicators/history", "GET"),
     ("/v1/prices/latest", "GET"),
@@ -1818,9 +1823,19 @@ def ai_tools():
                 "what_evidence_exists": [
                     "/v1/selections/stim-select/outcomes/summary",
                     "/v1/stocktrends/portfolios",
-                    "/v1/ai/proof/market-edge",
                 ],
                 "what_it_costs": ["/v1/pricing/catalog", "/v1/cost-estimate"],
+            },
+            # Deliberately not an evidence category. This endpoint returns a
+            # static synthetic body illustrating response structure; it measures
+            # nothing and must not be read as an outcome or performance record.
+            "illustrative_capability_example": {
+                "endpoint": "/v1/ai/proof/market-edge",
+                "shows": "response structure and how context layers compose",
+                "is_not": (
+                    "not empirical evidence, not realized outcomes, not predictive "
+                    "performance, and not investment performance"
+                ),
             },
             "category_separation": (
                 "A service description is not methodology, and methodology is not "
@@ -1994,8 +2009,14 @@ def ai_tools():
 
 
 # ---------------------------------------------------------------------------
-# GET /v1/ai/proof/market-edge — free, non-metered, public proof-of-value
-# No auth, no DB calls, no billing record.  All data is synthetic/illustrative.
+# GET /v1/ai/proof/market-edge — free, non-metered, public schema illustration.
+# No auth, no DB calls, no billing record.  All data is synthetic.
+#
+# The path is retained for client compatibility, but this endpoint proves
+# nothing: it shows the shape of a response and how the context layers compose.
+# It measures no outcome, so it must not carry performance, edge, or timing
+# claims, and it is classified apart from the three real evidence families in
+# discovery/provenance.py.
 # ---------------------------------------------------------------------------
 
 _PROOF_CACHE_MAX_AGE = 3600  # seconds
@@ -2010,8 +2031,14 @@ _PROOF_STATIC_BODY: dict = {
     },
     "agent_guidance": {
         "purpose": (
-            "Demonstrates Stock Trends signal structure and value proposition "
-            "without requiring payment or authentication."
+            "Illustrates Stock Trends response structure and field semantics without "
+            "requiring payment or authentication."
+        ),
+        "classification": "illustrative_capability_example",
+        "is_not": (
+            "Not empirical evidence, not realized outcomes, not predictive performance, "
+            "and not investment performance. For measured evidence see the evidence "
+            "families published at /v1/ai/context."
         ),
         "next_steps": [
             {
@@ -2041,20 +2068,27 @@ _PROOF_STATIC_BODY: dict = {
     },
     "value_proposition": {
         "headline": (
-            "Stock Trends delivers processed, ranked, actionable signals — not raw prices."
+            "What a Stock Trends response contains: weekly classification state and "
+            "context layers, in structured JSON."
+        ),
+        "note": (
+            "This block describes composition, not benefit. Whether that composition is "
+            "useful for a task is for the caller to determine from the methodology and "
+            "evidence resources listed at /v1/ai/context."
         ),
         "differentiators": [
-            "Proprietary trend classification across 2000+ North American equities and ETFs",
-            "Weekly structured signals: trend state, trend persistence (trend_cnt), trend maturity (mt_cnt), relative strength (rsi), volume context (vol_tag)",
+            "Trend classification applied to North American equities and ETFs",
+            "Weekly structured fields: trend state, trend persistence (trend_cnt), trend maturity (mt_cnt), relative performance (rsi, baseline 100), volume context (vol_tag)",
             "ST-IM (Stock Trends Inference Model): forward return expectations and statistical distributions across 4, 13, and 40-week horizons",
-            "Sector breadth context for market regime detection",
-            "Agent-optimized structured JSON with consistent scoring fields",
+            "Sector breadth and leadership as cross-sectional context layers",
+            "Structured JSON with consistent field names across endpoints",
             "Multi-rail payments: subscription, x402 (per-request), MPP (session-based)",
         ],
         "vs_raw_price": (
-            "A raw price API returns a number. Stock Trends returns a ranked trend signal set, "
-            "regime context, and a structured workflow-ready response "
-            "— all in one call."
+            "A raw price API returns price fields. A Stock Trends response returns "
+            "classification state plus cross-sectional and regime context fields in the "
+            "same structure. This is a difference in response composition, not a claim "
+            "about results."
         ),
     },
     "market_snapshot": {
@@ -2126,23 +2160,29 @@ _PROOF_STATIC_BODY: dict = {
         {
             "signal_type": "bullish_trend_entry",
             "description": (
-                "Illustrative: instruments in bullish trend states (^+, ^-) with high "
-                "RSI and persistent trend_cnt represent top-ranked candidates in the screener."
+                "Illustrative only: shows how instruments in bullish trend states "
+                "(^+, ^-) with rsi above the 100 baseline and a persistent trend_cnt "
+                "appear in the screener ordering. No claim is made about what follows."
             ),
             "note": "Live ranked signals available via /v1/agent/screener/top.",
         },
         {
             "signal_type": "sector_rotation",
             "description": (
-                "Illustrative: sector breadth signals identify regime shifts "
-                "before they appear in index prices."
+                "Illustrative only: shows how sector breadth fields express "
+                "cross-sectional participation alongside a regime reading. Breadth "
+                "describes participation in the observed week; it is not a leading "
+                "indicator of index prices."
             ),
             "note": "Live sector context available via /v1/breadth/sector/latest.",
         },
     ],
     "sample_workflow": {
-        "name": "agent_market_edge",
-        "description": "Recommended workflow to extract signal edge from Stock Trends",
+        "name": "agent_market_context",
+        "description": (
+            "Illustrative call sequence showing how the endpoints compose. See "
+            "/v1/workflows for the maintained workflow registry with live costs."
+        ),
         "steps": [
             {
                 "step": 1,
@@ -2172,11 +2212,16 @@ _PROOF_STATIC_BODY: dict = {
         ],
     },
     "conversion_prompt": {
+        # Key name retained for response-shape compatibility. The content is
+        # access mechanics — how the rails work — not a prompt to buy.
+        "content_type": "access_mechanics",
         "action": (
-            "Access live signals by authenticating with a subscription API key, "
-            "or initiate per-request payment via x402 or a session via MPP."
+            "Live endpoints are reached with a subscription API key, a per-request x402 "
+            "payment, or an MPP session. This states how access works; it does not "
+            "recommend acquiring anything."
         ),
-        "start_here": "/v1/ai/tools",
+        "evaluate_before_deciding": "/v1/ai/context",
+        "start_here": "/.well-known/x402",
         "pricing": "/v1/pricing",
         "payment_methods": ["subscription", "x402", "mpp"],
         "payment_notes": {
@@ -2200,12 +2245,14 @@ _PROOF_STATIC_BODY: dict = {
 
 @router.get(
     "/proof/market-edge",
-    summary="Free proof-of-value endpoint for agent discovery",
+    summary="Free static schema illustration for agent discovery",
     description=(
-        "Public, non-metered. Returns a static, synthetic demonstration of Stock Trends "
-        "signal structure and value proposition. No authentication required. "
+        "Public, non-metered. Returns a static, synthetic illustration of Stock Trends "
+        "response structure and field semantics. No authentication required. "
         "No live or real-time market data is included — all instrument data is fictional. "
-        "Intended as a no-cost entry point for autonomous agents evaluating the API."
+        "This endpoint measures nothing: it is not empirical evidence, not realized "
+        "outcomes, and not predictive or investment performance. For measured evidence, "
+        "see the evidence families at /v1/ai/context."
     ),
 )
 def ai_proof_market_edge(response: Response) -> dict:

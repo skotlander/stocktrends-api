@@ -444,11 +444,12 @@ WORKFLOW_REGISTRY: list[dict] = [
             "Call GET /v1/meta/inference before interpreting any provider-specific inference output.",
             "Call GET /v1/meta/stim before interpreting ST-IM fields, if ST-IM history is used.",
             "Treat weekdate as the point-in-time key; each row describes the week it is keyed on.",
-            "Read applied_bounds on every history response to confirm the window and row limit actually applied.",
+            "Read applied_bounds on every history response to confirm the date bounds and row limit that were actually applied, and whether the result was truncated.",
+            "GET /v1/market/regime/history returns at most 52 recent weekly observations and start_date only raises the earliest eligible week; it does not page backwards. Do not assume it covers the chosen research period.",
             "If ST-IM Select outcome evidence is used, interpret it as an aggregate measurement of one stated signal rule over a stated population, not as a portfolio result, a forecast, or evidence about the broader classification layers.",
         ],
         "stock_trends_supplies": [
-            "Point-in-time weekly historical observations for the instrument, cross-sectional, market-regime and inference layers.",
+            "Point-in-time weekly historical observations for the instrument, cross-sectional, market-regime and inference layers, each bounded and each reporting its applied_bounds.",
             "Interpretation semantics and field definitions for those observations.",
             "Published evidence families, each carrying its own methodology and limitations, mapped at /v1/ai/context.",
             "weekdate as a consistent alignment key across all layers.",
@@ -461,7 +462,7 @@ WORKFLOW_REGISTRY: list[dict] = [
             "Enforce point-in-time discipline and avoid look-ahead leakage in that join.",
             "Define the existing baseline or feature set the comparison is against.",
             "Measure any incremental contribution over that baseline.",
-            "Examine stability across market regimes or other relevant contexts.",
+            "Examine stability across market regimes or other relevant contexts, supplying the researcher's own regime segmentation for any period the 52-week regime endpoint does not cover.",
             "Separate in-sample exploration from out-of-sample validation.",
             "Decide whether the measured contribution justifies recurring integration.",
         ],
@@ -525,8 +526,14 @@ WORKFLOW_REGISTRY: list[dict] = [
                 "step_id": "regime_history",
                 "endpoint": "GET /v1/market/regime/history",
                 "pricing_rule_id": "market_regime_history",
-                "description": "Retrieve historical market regime context for regime-conditioned evaluation of any measured relationship.",
-                "optional": False,
+                "description": (
+                    "Optionally retrieve recent market regime context. This endpoint "
+                    "returns at most 52 weekly regime observations and returns the most "
+                    "recent eligible weeks, so it covers recent regime history rather "
+                    "than an arbitrary research period. If the research interval predates "
+                    "that coverage, regime segmentation is the researcher's own work."
+                ),
+                "optional": True,
             },
             {
                 "step_id": "breadth_history",
