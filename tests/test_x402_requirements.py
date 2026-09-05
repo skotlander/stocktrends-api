@@ -56,13 +56,19 @@ _RICH_HEADER_PATHS = [
 _UNDICI_SAFE_HEADER_THRESHOLD_BYTES = 8192
 _COMPACT_DECODED_THRESHOLD_BYTES = 4096
 _EXPECTED_SERVICE_NAME = "Stock Trends Market Intelligence"
-_EXPECTED_SERVICE_TAGS = [
-    "finance",
-    "market-intelligence",
-    "equities",
-    "quantitative-finance",
-    "agentic",
-]
+# ResourceInfo tags are endpoint-aware, so the expectation is spelled out for
+# the endpoint these fixtures challenge rather than being a service constant.
+# The literal is deliberate: reading it back from the accessor under test would
+# assert nothing about what this endpoint actually advertises.
+_EXPECTED_RESOURCE_TAGS_BY_PATH = {
+    "/v1/market/regime/latest": [
+        "finance",
+        "equities",
+        "market-regime",
+        "regime-classification",
+        "market-context",
+    ],
+}
 _EXPECTED_ICON_URL = "https://developer.stocktrends.com/images/stmi-icon.png"
 
 
@@ -74,9 +80,13 @@ def _decoded_header_bytes(header_b64: str) -> int:
     return len(base64.b64decode(header_b64))
 
 
-def _assert_resource_service_identity(resource: dict[str, Any]) -> None:
+def _assert_resource_service_identity(
+    resource: dict[str, Any],
+    *,
+    path: str = _PATH,
+) -> None:
     assert resource["serviceName"] == _EXPECTED_SERVICE_NAME
-    assert resource["tags"] == _EXPECTED_SERVICE_TAGS
+    assert resource["tags"] == _EXPECTED_RESOURCE_TAGS_BY_PATH[path]
     assert resource["iconUrl"] == _EXPECTED_ICON_URL
 
 

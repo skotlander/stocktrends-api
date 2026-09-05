@@ -18,10 +18,10 @@ from cryptography.hazmat.primitives.serialization import load_pem_private_key
 from discovery.endpoint_metadata import (
     SERVICE_ICON_URL,
     SERVICE_NAME,
-    SERVICE_TAGS,
     build_bazaar_extension,
     build_compact_bazaar_extension,
     get_resource_description,
+    get_x402_resource_tags,
 )
 import payments.x402_contract as x402_contract
 from payments.x402_contract import (
@@ -295,7 +295,9 @@ def build_x402_requirements(
         "description": resource_description,
         "mimeType": mime_type,
         "serviceName": SERVICE_NAME,
-        "tags": list(SERVICE_TAGS),
+        # Endpoint-aware, and read from the canonical endpoint registry. Payment
+        # code must not carry a second path->tags table of its own.
+        "tags": get_x402_resource_tags(path, http_method),
         "iconUrl": SERVICE_ICON_URL,
     }
     extra["resource"] = dict(resource_info)

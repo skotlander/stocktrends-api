@@ -44,6 +44,13 @@ SERVICE_TAGS = [
     "quantitative-finance",
     "agentic",
 ]
+# x402 ResourceInfo carries a small, scarce tag budget that indexers read per
+# resource. Service identity travels on serviceName, so these slots describe
+# what one endpoint does rather than repeating the service-level taxonomy.
+# Two stable domain anchors keep the payable surface findable as a whole; the
+# remaining slots come from each endpoint's own `tags` in the registry below.
+X402_RESOURCE_TAG_LIMIT = 5
+X402_DOMAIN_ANCHOR_TAGS = ("finance", "equities")
 SERVICE_ICON_URL = "https://developer.stocktrends.com/images/stmi-icon.png"
 DEVELOPER_PORTAL_URL = "https://developer.stocktrends.com/"
 AI_CONTEXT_URL = "https://api.stocktrends.com/v1/ai/context"
@@ -485,6 +492,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         ],
         related_endpoints=["/v1/decision/evaluate-symbol", "/v1/portfolio/construct", "/v1/stim/latest"],
         next_recommended_calls=["/v1/decision/evaluate-symbol", "/v1/portfolio/construct"],
+        tags=["technical-analysis", "stock-screening", "trend-indicators"],
     ),
     "/v1/indicators/latest": _metadata(
         path="/v1/indicators/latest",
@@ -549,7 +557,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         analytical_role=ROLE_SYMBOL_SIGNAL_INTELLIGENCE,
         related_endpoints=["/v1/indicators/history", "/v1/stim/latest", "/v1/selections/history"],
         next_recommended_calls=["/v1/indicators/history", "/v1/stim/latest"],
-        tags=["indicators", "symbol", "signals"],
+        tags=["technical-analysis", "trend-analysis", "trend-indicators"],
     ),
     "/v1/indicators/history": _metadata(
         path="/v1/indicators/history",
@@ -616,7 +624,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         analytical_role=ROLE_SYMBOL_SIGNAL_INTELLIGENCE,
         related_endpoints=["/v1/indicators/latest", "/v1/stim/history", "/v1/prices/history"],
         next_recommended_calls=["/v1/stim/history", "/v1/decision/evaluate-symbol"],
-        tags=["indicators", "history", "signals"],
+        tags=["technical-analysis", "trend-analysis", "indicator-history"],
     ),
     "/v1/stim/latest": _metadata(
         path="/v1/stim/latest",
@@ -665,6 +673,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         inference_contract=INFERENCE_CONTRACT_METADATA,
         inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
         cognition_architecture=COGNITION_ARCHITECTURE_DOC,
+        tags=["probabilistic-returns", "forward-returns", "return-distribution"],
     ),
     "/v1/stim/history": _metadata(
         path="/v1/stim/history",
@@ -706,6 +715,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         inference_contract=INFERENCE_CONTRACT_METADATA,
         inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
         cognition_architecture=COGNITION_ARCHITECTURE_DOC,
+        tags=["probabilistic-returns", "forward-returns", "inference-history"],
     ),
     "/v1/prices/latest": _metadata(
         path="/v1/prices/latest",
@@ -730,6 +740,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["Stock Trends is not a raw price system; use prices as context for signal interpretation."],
         related_endpoints=["/v1/indicators/latest", "/v1/prices/history"],
         next_recommended_calls=["/v1/indicators/latest", "/v1/stim/latest"],
+        tags=["stock-market-data", "market-price", "trading-volume"],
     ),
     "/v1/prices/history": _metadata(
         path="/v1/prices/history",
@@ -754,6 +765,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["Use a bounded limit for autonomous workflows."],
         related_endpoints=["/v1/prices/latest", "/v1/indicators/history"],
         next_recommended_calls=["/v1/indicators/history"],
+        tags=["stock-market-data", "price-history", "market-price"],
     ),
     "/v1/selections/latest": _metadata(
         path="/v1/selections/latest",
@@ -789,6 +801,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         inference_contract=INFERENCE_CONTRACT_METADATA,
         inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
         cognition_architecture=COGNITION_ARCHITECTURE_DOC,
+        tags=["stock-selection", "probabilistic-ranking", "forward-returns"],
     ),
     "/v1/selections/history": _metadata(
         path="/v1/selections/history",
@@ -825,6 +838,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         inference_contract=INFERENCE_CONTRACT_METADATA,
         inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
         cognition_architecture=COGNITION_ARCHITECTURE_DOC,
+        tags=["stock-selection", "probabilistic-ranking", "selection-history"],
     ),
     "/v1/selections/stim-select/outcomes/summary": _metadata(
         path="/v1/selections/stim-select/outcomes/summary",
@@ -1069,6 +1083,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         inference_contract=INFERENCE_CONTRACT_METADATA,
         inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
         cognition_architecture=COGNITION_ARCHITECTURE_DOC,
+        tags=["stim-select", "stock-selection", "probabilistic-ranking"],
     ),
     "/v1/selections/published/history": _metadata(
         path="/v1/selections/published/history",
@@ -1112,6 +1127,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         inference_contract=INFERENCE_CONTRACT_METADATA,
         inference_provider=STIM_INFERENCE_PROVIDER_METADATA,
         cognition_architecture=COGNITION_ARCHITECTURE_DOC,
+        tags=["stim-select", "stock-selection", "selection-history"],
     ),
     "/v1/market/regime/latest": _metadata(
         path="/v1/market/regime/latest",
@@ -1134,6 +1150,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         related_endpoints=["/v1/market/regime/history", "/v1/market/regime/forecast"],
         next_recommended_calls=["/v1/market/regime/forecast", "/v1/decision/evaluate-symbol"],
         interpretation_guidance=REGIME_INTERPRETATION_GUIDANCE,
+        tags=["market-regime", "regime-classification", "market-context"],
     ),
     "/v1/market/regime/history": _metadata(
         path="/v1/market/regime/history",
@@ -1180,6 +1197,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         related_endpoints=["/v1/market/regime/latest", "/v1/market/regime/forecast"],
         next_recommended_calls=["/v1/market/regime/forecast"],
         interpretation_guidance=REGIME_INTERPRETATION_GUIDANCE,
+        tags=["market-regime", "regime-classification", "regime-history"],
     ),
     "/v1/market/regime/forecast": _metadata(
         path="/v1/market/regime/forecast",
@@ -1202,6 +1220,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["No ML is used; output is deterministic from recent regime scores."],
         related_endpoints=["/v1/market/regime/latest", "/v1/market/regime/history"],
         next_recommended_calls=["/v1/decision/evaluate-symbol", "/v1/portfolio/construct"],
+        tags=["market-regime", "regime-forecast", "market-outlook"],
     ),
     "/v1/decision/evaluate-symbol": _metadata(
         path="/v1/decision/evaluate-symbol",
@@ -1226,6 +1245,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["Fully deterministic; no ML."],
         related_endpoints=["/v1/market/regime/latest", "/v1/indicators/latest", "/v1/stim/latest"],
         next_recommended_calls=["/v1/portfolio/evaluate", "/v1/portfolio/construct"],
+        tags=["stock-evaluation", "stock-analysis", "decision-support"],
     ),
     "/v1/portfolio/construct": _metadata(
         path="/v1/portfolio/construct",
@@ -1303,6 +1323,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["Primary ranking is decision_score descending; ST-IM 13-week risk-adjusted return is a tiebreaker when available."],
         related_endpoints=["/v1/agent/screener/top", "/v1/portfolio/evaluate", "/v1/portfolio/compare"],
         next_recommended_calls=["/v1/portfolio/evaluate", "/v1/portfolio/compare"],
+        tags=["portfolio-construction", "portfolio-analysis", "decision-support"],
     ),
     "/v1/portfolio/evaluate": _metadata(
         path="/v1/portfolio/evaluate",
@@ -1347,6 +1368,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["Missing symbols are included with found=false and excluded from aggregates."],
         related_endpoints=["/v1/portfolio/construct", "/v1/portfolio/compare"],
         next_recommended_calls=["/v1/portfolio/compare"],
+        tags=["portfolio-evaluation", "portfolio-analysis", "decision-support"],
     ),
     "/v1/portfolio/compare": _metadata(
         path="/v1/portfolio/compare",
@@ -1412,6 +1434,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["Use after constructing a proposed alternative or reviewing a user-supplied allocation."],
         related_endpoints=["/v1/portfolio/evaluate", "/v1/portfolio/construct"],
         next_recommended_calls=["/v1/portfolio/evaluate"],
+        tags=["portfolio-comparison", "portfolio-evaluation", "portfolio-analysis"],
     ),
     "/v1/stwr/reports/latest": _metadata(
         path="/v1/stwr/reports/latest",
@@ -1448,6 +1471,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["Use /v1/stwr/reports/catalog to discover valid report codes before paying for a report."],
         related_endpoints=["/v1/stwr/reports/catalog", "/v1/stwr/reports/history"],
         next_recommended_calls=["/v1/indicators/latest", "/v1/stim/latest"],
+        tags=["stock-screening", "technical-analysis", "curated-report"],
     ),
     "/v1/stwr/reports/history": _metadata(
         path="/v1/stwr/reports/history",
@@ -1489,6 +1513,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         ],
         related_endpoints=["/v1/stwr/reports/latest", "/v1/indicators/history"],
         next_recommended_calls=["/v1/indicators/history"],
+        tags=["stock-screening", "technical-analysis", "report-history"],
     ),
     "/v1/breadth/sector/latest": _metadata(
         path="/v1/breadth/sector/latest",
@@ -1521,6 +1546,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         notes=["Use /v1/breadth/sector/history when trend analysis over multiple weeks is needed."],
         related_endpoints=["/v1/breadth/sector/history", "/v1/market/regime/latest"],
         next_recommended_calls=["/v1/market/regime/latest", "/v1/leadership/summary/latest"],
+        tags=["market-breadth", "sector-breadth", "sector-analysis"],
     ),
     "/v1/breadth/sector/history": _metadata(
         path="/v1/breadth/sector/history",
@@ -1556,6 +1582,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         ],
         related_endpoints=["/v1/breadth/sector/latest", "/v1/market/regime/history"],
         next_recommended_calls=["/v1/market/regime/latest", "/v1/leadership/summary/latest"],
+        tags=["market-breadth", "sector-breadth", "breadth-history"],
     ),
     "/v1/leadership/definitions": _metadata(
         path="/v1/leadership/definitions",
@@ -1715,7 +1742,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         ],
         related_endpoints=["/v1/breadth/sector/latest", "/v1/market/regime/latest", "/v1/leadership/rotation/history"],
         next_recommended_calls=["/v1/market/regime/latest", "/v1/indicators/latest"],
-        tags=["leadership", "breadth", "context"],
+        tags=["market-leadership", "relative-strength", "sector-analysis"],
     ),
     "/v1/leadership/rotation/history": _metadata(
         path="/v1/leadership/rotation/history",
@@ -1827,7 +1854,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         ],
         related_endpoints=["/v1/leadership/summary/latest", "/v1/breadth/sector/history", "/v1/market/regime/history"],
         next_recommended_calls=["/v1/market/regime/history", "/v1/indicators/history"],
-        tags=["leadership", "rotation", "history"],
+        tags=["sector-rotation", "market-leadership", "rotation-history"],
     ),
 }
 
@@ -1925,7 +1952,7 @@ _ENDPOINT_METADATA_BY_PATH.update(
                 "/v1/intelligence/guidance/{artifact_id}",
                 "/v1/intelligence/editorial/latest/preview",
             ],
-            tags=["intelligence", "published-artifacts", "market-guidance"],
+            tags=["market-guidance", "published-research", "market-outlook"],
         ),
         "/v1/intelligence/guidance/{artifact_id}": _metadata(
             path="/v1/intelligence/guidance/{artifact_id}",
@@ -1998,7 +2025,7 @@ _ENDPOINT_METADATA_BY_PATH.update(
                 "/v1/intelligence/discovery",
                 "/v1/intelligence/guidance/latest",
             ],
-            tags=["intelligence", "published-artifacts", "market-guidance"],
+            tags=["market-guidance", "published-research", "artifact-retrieval"],
         ),
         "/v1/intelligence/research/latest": _metadata(
             path="/v1/intelligence/research/latest",
@@ -2067,7 +2094,7 @@ _ENDPOINT_METADATA_BY_PATH.update(
                 "/v1/intelligence/research/{artifact_id}",
                 "/v1/intelligence/editorial/latest/preview",
             ],
-            tags=["intelligence", "published-artifacts", "market-research"],
+            tags=["market-research", "published-research", "market-analysis"],
         ),
         "/v1/intelligence/research/{artifact_id}": _metadata(
             path="/v1/intelligence/research/{artifact_id}",
@@ -2140,7 +2167,7 @@ _ENDPOINT_METADATA_BY_PATH.update(
                 "/v1/intelligence/discovery",
                 "/v1/intelligence/research/latest",
             ],
-            tags=["intelligence", "published-artifacts", "market-research"],
+            tags=["market-research", "published-research", "artifact-retrieval"],
         ),
     }
 )
@@ -2179,6 +2206,35 @@ def get_resource_description(path: str) -> str:
     if not entry:
         return _fallback_resource_description(path)
     return str(entry.get("resource_description") or _fallback_resource_description(path))
+
+
+def get_x402_resource_tags(path: str, method: str | None = None) -> list[str]:
+    """Return the x402 ResourceInfo tags for one concrete endpoint path.
+
+    This is the single accessor payment code may use for resource tags. The
+    endpoint half of the taxonomy lives in this registry beside the rest of an
+    endpoint's semantics; payment adapters consume it and never define it, so
+    there is one place where an endpoint's discovery meaning is decided.
+
+    Composition is the two stable domain anchors followed by the endpoint's own
+    capability tags, deduplicated in declaration order and capped at
+    ``X402_RESOURCE_TAG_LIMIT``. A path with no canonical metadata keeps the
+    previous service-level tags rather than publishing an empty tag list.
+    """
+    entry = _lookup_endpoint_metadata(path)
+    if entry is not None and method is not None and entry.get("method") != method.upper():
+        entry = None
+    if entry is None:
+        return list(SERVICE_TAGS)
+
+    endpoint_tags = [
+        tag for tag in entry.get("tags") or [] if isinstance(tag, str) and tag
+    ]
+    tags: list[str] = []
+    for tag in (*X402_DOMAIN_ANCHOR_TAGS, *endpoint_tags):
+        if tag not in tags:
+            tags.append(tag)
+    return tags[:X402_RESOURCE_TAG_LIMIT]
 
 
 def get_bazaar_output(path: str) -> dict[str, Any]:

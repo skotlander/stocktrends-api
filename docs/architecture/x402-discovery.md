@@ -36,6 +36,61 @@ A governed route that lacks canonical metadata or a safe example causes
 manifest construction and completeness tests to fail unless a deliberate,
 audited discovery exception is recorded.
 
+## Resource Tags
+
+x402 `ResourceInfo.tags` is a small per-resource budget that indexers read, so
+it describes one endpoint rather than repeating the service taxonomy. Service
+identity travels on `serviceName`, `iconUrl`, and the Bazaar `info` block.
+
+The composition is:
+
+* two stable domain anchors, `finance` and `equities`, so the payable surface
+  stays findable as a whole;
+* up to three endpoint-discriminating capability tags declared beside the rest
+  of that endpoint's semantics in `discovery.endpoint_metadata`.
+
+`discovery.endpoint_metadata.get_x402_resource_tags` is the only accessor
+payment code may use, and the registry is its authority: mutating an endpoint's
+canonical tags must change that endpoint's emitted `ResourceInfo` and no other.
+A second path-to-tags table inside payment code would drift from the registry
+that defines what an endpoint means. Tags are deliberate metadata, never derived
+from path tokenization at request time.
+
+Format limits for every emitted tag: a non-empty printable-ASCII string of at
+most 32 characters, unique within its resource, with at most five tags per
+resource. Every tag must be truthful under
+`docs/STOCK_TRENDS_SEMANTIC_CONTRACT.md` and must add discovery meaning; a
+generic term that every resource could carry wastes a scarce slot.
+
+Tag tuples are not required to be globally distinct. x402 imposes no such rule,
+and two endpoints may legitimately share the correct topical vocabulary. What is
+required is that every governed endpoint declares its own semantics rather than
+inheriting the generic category fallback, and that the payable surface never
+collapses back to one uniform service-level set.
+
+## Advertised-Example Probeability
+
+Discovery metadata must be sufficient, not merely present: a standards-aware
+consumer that reads the emitted representation has to be able to construct a
+request that runtime validation accepts.
+
+The contract is enforced against the **actual HTTP 402** runtime returns, not
+against a builder called in isolation. For every governed resource, a seeded
+unpaid request obtains a challenge in each `X-StockTrends-Challenge-Mode`; the
+real `PAYMENT-REQUIRED` header is decoded and checked against the response
+body's canonical `payment_required` block; the advertised method, materialized
+path and query or body are rebuilt from that decoded metadata alone; and the
+rebuilt request is replayed and must reach `402` with no facilitator call, no
+MPP control-plane call and no paid data access. Compact and full challenges must
+agree on callable request semantics and on `ResourceInfo`.
+
+Paid Intelligence artifact routes keep their availability boundary. A challenge
+for one is obtained only for an artifact that actually exists; the documented
+placeholder id a by-id route advertises reaches the artifact-not-found gate
+instead, and the identical route with a stored id reaches `402` — which is what
+distinguishes an absent artifact from an unserviceable example. Nothing forces
+an unavailable artifact to `402`.
+
 ## Discovery Is Not Execution
 
 Reading the manifest is public/free and must not:
