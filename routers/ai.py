@@ -36,10 +36,15 @@ from discovery.service_meta import (
 )
 from pricing.classifier import classify_request as _classify_request, NON_METERED_PATHS
 from payments.policy_provider import (
-    is_free_metered_path as _is_free_metered_path,
-    get_effective_endpoint_payment_policy as _get_endpoint_policy,
-    is_agent_pay_route as _is_agent_pay_route,
-    get_agent_pay_auth_bypass_methods as _get_agent_pay_bypass_methods,
+    get_runtime_payment_policy_config as _get_runtime_payment_policy_config,
+    is_free_metered_path_from_config as _is_free_metered_path,
+    get_effective_endpoint_payment_policy_from_config as _get_endpoint_policy,
+    is_agent_pay_route_from_config as _is_agent_pay_route,
+    get_agent_pay_auth_bypass_methods_from_config as _get_agent_pay_bypass_methods,
+)
+from payments.challenge import (
+    challenge_precondition_metadata as _challenge_precondition_metadata,
+    classify_early_challenge_route as _classify_early_challenge_route,
 )
 
 router = APIRouter(prefix="/ai", tags=["ai"])
@@ -69,7 +74,7 @@ _MANIFEST_PUBLIC_PATHS: frozenset = frozenset({
 })
 
 
-def _access_metadata(path: str, method: str = "GET") -> dict:
+def _access_metadata(path: str, method: str = "GET", policy_config=None) -> dict:
     """
     Derive auth_required, metered, pricing_rule_id, and supported_rails
     from the runtime classifier and policy sources.
@@ -90,6 +95,8 @@ def _access_metadata(path: str, method: str = "GET") -> dict:
       5. Auth-required non-metered     → None
       6. Free public                   → None
     """
+    config = policy_config or _get_runtime_payment_policy_config()
+
     decision = _classify_request(
         path=path,
         has_paid_auth=True,
@@ -97,9 +104,10 @@ def _access_metadata(path: str, method: str = "GET") -> dict:
         plan_code="pro",
         agent_identifier=None,
         method=method,
+        policy_config=config,
     )
 
-    endpoint_policy = _get_endpoint_policy(path, method.upper())
+    endpoint_policy = _get_endpoint_policy(config, path, method.upper())
 
     access_type = "free"
     requires_payment = False
@@ -110,19 +118,19 @@ def _access_metadata(path: str, method: str = "GET") -> dict:
         supported_rails = list(endpoint_policy.allowed_rails)
         access_type = "paid"
         requires_payment = bool(endpoint_policy.machine_payment_rails)
-    elif _is_free_metered_path(path):
+    elif _is_free_metered_path(config, path):
         # Tracked but not billed; rule is stable.
         pricing_rule_id = "default_free_metered"
         supported_rails = []
         access_type = "free_metered"
-    elif _is_agent_pay_route(path, method.upper()) and not endpoint_policy:
+    elif _is_agent_pay_route(config, path, method.upper()) and not endpoint_policy:
         # STIM prefix paths: the runtime rule ID depends on the caller's
         # access method (subscription vs agent-pay) so it cannot be
         # represented as a single static value. Use None to avoid drift.
         # Rails: subscription is always valid for paid callers; agent-pay
         # bypass methods come from the runtime config (not hardcoded).
         pricing_rule_id = None
-        agent_pay_rails = list(_get_agent_pay_bypass_methods(path, method.upper()))
+        agent_pay_rails = list(_get_agent_pay_bypass_methods(config, path, method.upper()))
         supported_rails = ["subscription"] + agent_pay_rails
         access_type = "paid"
         requires_payment = bool(agent_pay_rails)
@@ -142,7 +150,7 @@ def _access_metadata(path: str, method: str = "GET") -> dict:
         pricing_rule_id = None
         supported_rails = []
 
-    return {
+    access: dict = {
         "auth_required": path not in _MANIFEST_PUBLIC_PATHS,
         "metered": bool(decision.is_metered),
         "pricing_rule_id": pricing_rule_id,
@@ -150,6 +158,21 @@ def _access_metadata(path: str, method: str = "GET") -> dict:
         "access_type": access_type,
         "requires_payment": requires_payment,
     }
+
+    # Per-tool lifecycle, rendered from the same classifier the request path
+    # consults.  Published only where payment is actually required, so a free
+    # tool is not given a payment precondition it has no use for.
+    if requires_payment:
+        access["challenge_lifecycle"] = _challenge_precondition_metadata(
+            _classify_early_challenge_route(
+                path,
+                method.upper(),
+                endpoint_policy=endpoint_policy,
+                route_template=path,
+            )
+        )
+
+    return access
 
 
 # ---------------------------------------------------------------------------
@@ -915,8 +938,14 @@ def _build_tools() -> list:
     """
     result = []
     cost_map = _fetch_pricing_cost_map()
+    # One payment-policy snapshot for the whole manifest.  Reading policy per
+    # tool let a TTL refresh land mid-build, so one published manifest could
+    # describe some tools under one configuration and the rest under another.
+    policy_config = _get_runtime_payment_policy_config()
     for template in _TOOL_TEMPLATES:
-        meta = _access_metadata(template["endpoint"], template["method"])
+        meta = _access_metadata(
+            template["endpoint"], template["method"], policy_config=policy_config
+        )
         tool = {**template, **meta}
         tool = _with_input_location_metadata(tool)
         tool = _with_pricing_metadata(tool, cost_map)
@@ -1708,7 +1737,7 @@ def ai_context():
             "Use /v1/pricing/catalog to discover live pricing rules before calling premium endpoints.",
             "Use /v1/pricing to understand payment identity, agent identity, accepted headers, and supported rails.",
             "For x402, the HTTP 402 stocktrends_preview is the final pre-payment surface for an otherwise-serviceable request: inspect it to confirm purpose, inputs, response shape, related endpoints, pricing_rule_id, cost, and rails before paying. It is not the mechanism for discovering endpoint parameters — use /v1/ai/tools or /v1/openapi.json for input schemas first, then construct a serviceable request before paying.",
-            "Once a payment proof is presented, deterministically invalid input is rejected before any payment challenge or settlement: a malformed symbol_exchange, a missing required parameter combination, an unsupported sort/exchange/trend value, or a semantically incomplete body returns a 400 or 422 input error and nothing is verified or settled. An unpaid probe of a recognized payable resource is answered with the 402 challenge instead, so its payment and input contract is readable at the canonical resource URL. Pricing context headers remain on the input error, so the price is still discoverable once the request is corrected.",
+            "Once a payment proof is presented, deterministically invalid input is rejected before any payment challenge or settlement: a malformed symbol_exchange, a missing required parameter combination, an unsupported sort/exchange/trend value, or a semantically incomplete body returns a 400 or 422 input error and nothing is verified or settled. An unpaid probe of an eligible recognized fixed-price resource is answered with the 402 challenge instead, so its payment and input contract is readable at the canonical resource URL; availability-gated and parameterized resources are documented exceptions. Pricing context headers remain on the input error, so the price is still discoverable once the request is corrected.",
             "Use subscription access for persistent developer workflows and x402 for agent-native pay-per-request access.",
             "Start premium agent-pay workflows with /v1/agent/screener/top or /v1/stim/latest.",
             "Cache discovery and metadata responses where appropriate because the dataset updates weekly."
@@ -1882,7 +1911,7 @@ def ai_tools():
                 "fetch /v1/pricing/catalog to resolve live STC costs",
                 "fetch /v1/pricing to understand payment rails and headers",
                 "construct the published serviceable request",
-                "if using anonymous x402: receive HTTP 402 after request validation",
+                "if using anonymous x402: an eligible fixed-price resource returns the 402 payment contract even for a bare probe; availability-gated and parameterized resources resolve availability or path parameters first",
                 "pay and retry with PAYMENT-SIGNATURE or X-Payment proof",
             ],
         },
@@ -1892,7 +1921,7 @@ def ai_tools():
             {"step": 3, "action": "fetch", "path": "/v1/openapi.json", "note": "Confirm the exact request contract and access alternatives."},
             {"step": 4, "action": "fetch", "path": "/v1/workflows", "note": "Choose a strategy and endpoint sequence for the task."},
             {"step": 5, "action": "fetch", "path": "/v1/pricing/catalog", "note": "Resolve the current STC cost from the pricing source of truth."},
-            {"step": 6, "action": "call", "path": "/v1/agent/screener/top", "note": "Submit the published serviceable request; anonymous x402 callers then receive the execution-time challenge."},
+            {"step": 6, "action": "call", "path": "/v1/agent/screener/top", "note": "Submit the published serviceable request. Anonymous x402 callers receive the challenge; on an eligible fixed-price resource a bare probe already returns it, and each tool's access.challenge_lifecycle states which class it is."},
         ],
         "recommended_first_workflows": recommended_workflows,
         "agent_onboarding_notes": [
@@ -1908,7 +1937,7 @@ def ai_tools():
             "Use /v1/docs or /v1/openapi.json for exact request/response contracts.",
             "Paid endpoint entries list their supported rails; current agent-pay endpoints support subscription, x402, and mpp.",
             "For x402, construct a serviceable request from /.well-known/x402 and /v1/openapi.json before paying; an unpaid probe of a payable resource returns its 402 payment contract whether or not the request is complete. The 402 stocktrends_preview is a final confirmation, not the schema-discovery mechanism.",
-            "Once a payment proof is presented, deterministically invalid input is rejected before any payment challenge or settlement: a malformed symbol_exchange, a missing required parameter combination, an unsupported sort/exchange/trend value, or a semantically incomplete body returns a 400 or 422 input error and nothing is verified or settled. An unpaid probe of a recognized payable resource is answered with the 402 challenge instead, so its payment and input contract is readable at the canonical resource URL. Pricing context headers remain on the input error, so the price is still discoverable once the request is corrected.",
+            "Once a payment proof is presented, deterministically invalid input is rejected before any payment challenge or settlement: a malformed symbol_exchange, a missing required parameter combination, an unsupported sort/exchange/trend value, or a semantically incomplete body returns a 400 or 422 input error and nothing is verified or settled. An unpaid probe of an eligible recognized fixed-price resource is answered with the 402 challenge instead, so its payment and input contract is readable at the canonical resource URL; availability-gated and parameterized resources are documented exceptions. Pricing context headers remain on the input error, so the price is still discoverable once the request is corrected.",
         ],
         "tools": tools,
         "workflows": workflows,

@@ -8,6 +8,7 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 import middleware.metering as metering_module
+from middleware.metering import ResolvedPrice
 import pricing.classifier as classifier_module
 from api.routing import install_payment_execution_boundary
 from middleware.metering import MeteringMiddleware
@@ -104,8 +105,8 @@ def test_standard_x402_retry_without_stocktrends_method_logs_settled(monkeypatch
 
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *_args, **_kwargs: (Decimal("0.15"), Decimal("0.15")),
+        "resolve_request_pricing",
+        lambda *_args, **_kwargs: ResolvedPrice.priced(Decimal("0.15"), Decimal("0.15")),
     )
     monkeypatch.setattr(metering_module, "log_api_request_event", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(

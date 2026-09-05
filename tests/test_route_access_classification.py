@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+from middleware.metering import ResolvedPrice
 import pricing.classifier as classifier_module
 import routers.instruments as instruments_router
 import routers.workflows as workflows_router
@@ -65,8 +66,8 @@ def _stub_metering_side_effects(monkeypatch, *, cost: Decimal = Decimal("0")):
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *a, **kw: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *_args, **_kwargs: (cost, cost),
+        "resolve_request_pricing",
+        lambda *_args, **_kwargs: ResolvedPrice.priced(cost, cost),
     )
 
 

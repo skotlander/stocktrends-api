@@ -29,6 +29,10 @@ from discovery.service_meta import (
 )
 import payments.policy_provider as payment_policy
 import payments.x402_contract as x402_contract
+from payments.challenge import (
+    challenge_precondition_metadata,
+    classify_early_challenge_route,
+)
 from services.intelligence_artifact_availability import (
     match_paid_intelligence_artifact_route,
 )
@@ -265,6 +269,17 @@ def _resource_from_policy(policy: Any, config: Any) -> dict[str, Any]:
         "pricing_rule_id": effective_policy.pricing_rule_id,
         "supported_rails": supported_rails,
         "anonymous_x402_challenge_supported": anonymous_x402,
+        # Per-resource lifecycle, rendered from the same classifier the request
+        # path consults.  A global boolean cannot state this truthfully because
+        # availability-gated and parameterized resources are real exceptions.
+        "challenge_lifecycle": challenge_precondition_metadata(
+            classify_early_challenge_route(
+                path,
+                method,
+                endpoint_policy=effective_policy,
+                route_template=path,
+            )
+        ),
         "pricing_catalog_url": PRICING_CATALOG_URL,
         "pricing": {
             "source": "stc_pricing_catalog",
@@ -459,19 +474,27 @@ def build_x402_discovery(*, strict: bool = True) -> dict[str, Any]:
         "request_lifecycle": {
             # Challenge issuance and payment execution are separate halves of
             # the protocol, and only the second requires a serviceable request.
-            # A recognized fixed-price resource answers an unpaid probe of its
-            # canonical URL with the challenge, so the payment and input
-            # contract is readable without constructing a request first.
-            # Availability-gated resources are the documented exception; each
-            # resource entry states its own `possible_unpaid_statuses`.
-            "serviceable_request_required_before_challenge": False,
+            #
+            # The challenge precondition is deliberately NOT published as one
+            # global boolean: it is false for eligible recognized fixed-price
+            # resources and true for availability-gated and parameterized ones.
+            # Each resource carries its own `challenge_lifecycle` block, and the
+            # scope of the relaxed precondition is named rather than implied.
+            "serviceable_request_required_before_challenge_scope": (
+                "eligible recognized fixed-price resources only"
+            ),
+            "serviceable_request_required_before_challenge_for_fixed_price": False,
             "serviceable_request_required_before_settlement": True,
+            "per_resource_precondition_field": "resources[].challenge_lifecycle",
             "statement": (
                 "A 402 challenge quotes a price and describes a resource; it moves no "
-                "money. For a recognized fixed-price payable resource presented with no "
-                "payment proof, it is issued before application-input validation. "
-                "Routing, parsing, schema validation, and request-only semantic "
-                "validation all run before any payment verification or settlement."
+                "money. For an eligible recognized fixed-price payable resource presented "
+                "with no payment proof, it is issued before application-input validation. "
+                "Availability-gated resources resolve artifact availability first and may "
+                "answer 404 or 503 instead; parameterized resources have no bare canonical "
+                "URL to probe. Routing, parsing, schema validation, and request-only "
+                "semantic validation all run before any payment verification or settlement, "
+                "on every resource and every rail."
             ),
             "discovery_is_execution_free": True,
         },

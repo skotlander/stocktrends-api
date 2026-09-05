@@ -1101,6 +1101,8 @@ def test_33_both_issuance_points_compose_the_same_challenge(canonical_base_url):
     )
     assert gate_result.outcome == "challenge"
 
+    accepted = "subscription,x402,mpp"
+
     via_gate = decorate_x402_challenge(
         path=path,
         method=method,
@@ -1108,6 +1110,7 @@ def test_33_both_issuance_points_compose_the_same_challenge(canonical_base_url):
         payment_required_header=gate_result.payment_required_header,
         pricing_rule_id=rule,
         amount_usd=amount,
+        accepted_payment_methods=accepted,
         payment_network=gate_result.payment_network,
         payment_token=gate_result.payment_token,
     )
@@ -1116,6 +1119,7 @@ def test_33_both_issuance_points_compose_the_same_challenge(canonical_base_url):
         method=method,
         amount_usd=amount,
         pricing_rule_id=rule,
+        accepted_payment_methods=accepted,
     )
 
     assert via_early.body == via_gate.body
@@ -1191,37 +1195,106 @@ def test_34_challenge_issuance_cannot_reach_the_facilitator():
         )
 
 
-def test_35_payment_bearing_detection_covers_every_proof_carrier():
+def test_35_only_real_x402_proof_counts_as_payment():
     """
-    The discriminator the whole design turns on, asserted directly.
+    The discriminator the whole design turns on, stated exactly.
 
-    Erring narrow is the dangerous direction: a paying client misread as an
-    unpaid probe would be handed a challenge instead of its answer.
+    An earlier revision treated any descriptive Stock Trends payment header as
+    proof.  That was too broad in the direction that matters: a caller can name
+    a network, a token, an amount, a reference or a channel id while holding no
+    authorization at all, and such a caller is precisely the one that needs the
+    challenge.  Suppressing it handed them an input error instead of the payment
+    contract — the exact failure PR3 exists to remove.
+
+    Only the canonical x402 authorization carriers count, and this asserts the
+    guard resolves the same contract the facilitator path reads.
     """
-    from payments.challenge import is_payment_bearing
+    from payments.challenge import presents_x402_payment_proof
+    from payments.x402_contract import X402_PROOF_HEADERS
 
-    assert not is_payment_bearing({})
-    assert not is_payment_bearing(None)
-    assert not is_payment_bearing({"x-stocktrends-agent-id": "agent"})
+    # Nothing at all.
+    assert not presents_x402_payment_proof(None)
+    assert not presents_x402_payment_proof({})
+    assert not presents_x402_payment_proof({"x-stocktrends-agent-id": "agent"})
 
-    # Declaring a rail is not presenting payment.
-    assert not is_payment_bearing({"x-stocktrends-payment-method": "x402"})
+    # Descriptive metadata is not authorization.
+    for header in (
+        "X-StockTrends-Payment-Reference",
+        "X-StockTrends-Payment-Amount",
+        "X-StockTrends-Payment-Network",
+        "X-StockTrends-Payment-Token",
+        "X-StockTrends-Payment-Channel-Id",
+        "X-StockTrends-Payment-Method",
+    ):
+        assert not presents_x402_payment_proof({header: "something"}), (
+            f"{header} was treated as x402 payment proof; a caller that merely "
+            "describes a payment would have its challenge suppressed"
+        )
+        assert not presents_x402_payment_proof({header.lower(): "something"}), header
 
-    assert is_payment_bearing({"X-Payment": "artifact"})
-    assert is_payment_bearing({"x-payment": "artifact"})
-    assert is_payment_bearing({"PAYMENT-SIGNATURE": "sig"})
-    assert is_payment_bearing({"x-stocktrends-payment-reference": "ref"})
-    assert is_payment_bearing({"x-stocktrends-payment-amount": "150000"})
-    assert is_payment_bearing({"x-stocktrends-payment-network": "eip155:8453"})
-    assert is_payment_bearing({"x-stocktrends-payment-token": "0xtoken"})
-    assert is_payment_bearing({"x-stocktrends-payment-channel-id": "chan"})
-    assert is_payment_bearing({"authorization": "x402 something"})
+    # Every published proof carrier does count, in either casing.
+    assert X402_PROOF_HEADERS, "the proof-header contract is empty"
+    for header in X402_PROOF_HEADERS:
+        assert presents_x402_payment_proof({header: "artifact"}), header
+        assert presents_x402_payment_proof({header.lower(): "artifact"}), header
 
-    # Case-insensitively, because a plain mapping is not `Headers` and the
-    # dangerous direction is missing a header a paying client actually sent.
-    assert is_payment_bearing({"X-StockTrends-Payment-Reference": "ref"})
-    assert is_payment_bearing({"X-StockTrends-Payment-Channel-Id": "chan"})
-    assert is_payment_bearing({"Authorization": "x402 something"})
+    assert presents_x402_payment_proof({"authorization": "x402 artifact"})
+    assert presents_x402_payment_proof({"Authorization": "x402 artifact"})
+    assert not presents_x402_payment_proof({"authorization": "Bearer token"})
+
+
+def test_35b_the_guard_has_no_proof_header_list_of_its_own():
+    """
+    Structural guard: one definition of an x402 authorization carrier.
+
+    A second list inside the challenge layer would drift from the one the
+    facilitator path reads, and the drift would be invisible until a paying
+    client was handed a challenge or an unpaid one was handed an input error.
+
+    Asserted against executable code rather than the whole file, so prose that
+    *describes* the contract is allowed while a header literal the guard would
+    actually read is not.
+    """
+    import ast
+    import inspect
+
+    import payments.challenge as challenge_module
+
+    tree = ast.parse(inspect.getsource(challenge_module))
+
+    # Every docstring node, so prose can describe the contract freely.
+    docstrings = set()
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+            and node.body
+            and isinstance(node.body[0], ast.Expr)
+        ):
+            value = node.body[0].value
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                docstrings.add(id(value))
+
+    literals = [
+        node.value
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Constant)
+        and isinstance(node.value, str)
+        and id(node) not in docstrings
+    ]
+
+    joined = " ".join(literals).lower()
+    for header in ("x-payment", "payment-signature", "x-stocktrends-payment-"):
+        assert header not in joined, (
+            f"payments.challenge carries the header literal {header!r} in "
+            "executable code; the proof contract must come from payments.x402 "
+            "alone or the two definitions will drift"
+        )
+
+    guard_source = inspect.getsource(challenge_module.presents_x402_payment_proof)
+    assert "has_x402_payment_proof(" in guard_source, (
+        "the early-challenge guard no longer delegates to the canonical proof "
+        "predicate"
+    )
 
 
 def test_36_the_challenge_advertises_every_supported_rail(

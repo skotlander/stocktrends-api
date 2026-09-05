@@ -123,6 +123,27 @@ the same challenge. The classification of which routes are eligible, and why the
 paid Intelligence artifact routes are deliberately excluded, is documented in
 `request-lifecycle.md` step 4A.
 
+It is also not a universal claim, and is deliberately not published as one. Each
+resource carries a `challenge_lifecycle` block naming its class, rendered from
+the same runtime classifier:
+
+* **eligible fixed-price** — `serviceable_request_required_before_challenge:
+  false`; a bare canonical probe returns the challenge;
+* **availability-gated** — the artifact-availability boundary resolves first, so
+  an unpaid probe may legitimately answer `404` or `503`;
+* **parameterized resource** — no bare canonical URL exists to probe.
+
+`serviceable_request_required_before_settlement` is `true` on all three. The
+manifest's `request_lifecycle` block names the scope of the relaxed precondition
+rather than asserting a bare global boolean, and points at
+`resources[].challenge_lifecycle` for per-resource truth. The same block appears
+in the OpenAPI `x-stocktrends-payment` extension and in each `/v1/ai/tools`
+entry's `access` object.
+
+A fixed-price resource whose price cannot be resolved is refused with
+`503 pricing_unavailable` rather than challenged: the system does not publish a
+zero-amount payment requirement.
+
 A payment-bearing request is unaffected. It completes structural and semantic
 validation first, and a deterministically invalid one returns its existing
 `400`/`422` with nothing verified, settled, authorized or executed. The two

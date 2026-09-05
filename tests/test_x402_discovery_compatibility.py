@@ -16,6 +16,7 @@ from starlette.datastructures import Headers
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+from middleware.metering import ResolvedPrice
 import metering.logger as metering_logger_module
 import payments.enforcement as enforcement_module
 import payments.mpp_client as mpp_client_module
@@ -130,8 +131,8 @@ def _stub_request_logging(monkeypatch) -> None:
     monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *_a, **_kw: (Decimal("0"), Decimal("0")),
+        "resolve_request_pricing",
+        lambda *_a, **_kw: ResolvedPrice.priced(Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *_a, **_kw: None)
 
@@ -175,13 +176,21 @@ def test_well_known_aliases_are_anonymous_equivalent_and_canonical(monkeypatch):
     assert manifest["schema"] == DISCOVERY_SCHEMA
     assert manifest["canonical_url"] == CANONICAL_DISCOVERY_URL
     assert manifest["service"]["openapi_url"] == "https://api.stocktrends.com/v1/openapi.json"
-    # PR3: challenge issuance and payment execution are separate halves.
-    # Only the second requires a serviceable request, and the manifest must
-    # say so — claiming otherwise is what told x402 indexers that a bare
-    # probe of a canonical resource URL could not be challenged.
+    # PR3: challenge issuance and payment execution are separate halves, and
+    # only the second requires a serviceable request.  The relaxed precondition
+    # is published with its scope named rather than as a bare global boolean,
+    # because availability-gated and parameterized resources are real
+    # exceptions — see `test_pr3_lifecycle_parity.py` for the cross-surface
+    # contract.
     lifecycle = manifest["request_lifecycle"]
-    assert lifecycle["serviceable_request_required_before_challenge"] is False
+    assert lifecycle["serviceable_request_required_before_challenge_for_fixed_price"] is False
     assert lifecycle["serviceable_request_required_before_settlement"] is True
+    assert "fixed-price" in lifecycle["serviceable_request_required_before_challenge_scope"]
+    assert lifecycle["per_resource_precondition_field"] == "resources[].challenge_lifecycle"
+    assert "serviceable_request_required_before_challenge" not in lifecycle, (
+        "an unqualified global boolean cannot state a precondition that has "
+        "documented exceptions"
+    )
     assert manifest["payment_architecture"]["pricing_unit"] == "STC"
 
 

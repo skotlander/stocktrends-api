@@ -348,3 +348,157 @@ decision instead of inferring it. Paid Intelligence artifact routes stay exclude
 because they must confirm the artifact is serveable before quoting a price for
 it — the system does not sell what it cannot deliver — and prefix-governed paths
 with no exact policy stay excluded because prefix governance fixes no amount.
+
+
+---
+
+## 2026-09-05 — Codex review of PR3: five payment-integrity findings
+
+The independent adversarial review of the challenge/settlement separation found
+five defects. Three were introduced or exposed by PR3; two predate it. All are
+recorded together because they share one root shape: **a decision was derived
+from something adjacent to the fact it needed, rather than from the fact
+itself.**
+
+### 1. One request could mix two payment-policy snapshots
+
+**Problem.** Payment policy is control-plane fetched and TTL-cached. A single
+request read it 12 times — once per policy question. With a short TTL a refresh
+could land mid-request, so one `402` could quote a pricing rule and amount
+resolved under snapshot A while advertising rails resolved under snapshot B: a
+resource that existed in neither configuration.
+
+**Root cause.** Every policy accessor fetched "whatever is current now". Nothing
+in the design said a request had a configuration; coherence was left to the TTL
+being long enough, which is not a guarantee.
+
+**Fix.** `ApiKeyMiddleware` — the outermost layer that consults policy — binds
+exactly one `RuntimePaymentPolicyConfig` on `request.state`, and
+`MeteringMiddleware` reads that same object. `*_from_config` helpers let any
+policy question be asked of a held snapshot, and the existing convenience
+wrappers now delegate to them so there is one definition of each rule rather
+than two. Reads per request: 12 → 1.
+
+**Prevention rule.** If two decisions must agree, they must read the same object,
+not the same source. A cache TTL is a performance property, never a consistency
+guarantee. When a subsystem is configuration-driven, give the unit of work an
+explicit handle on its configuration and pass it down.
+
+### 2. Informational headers were treated as payment proof
+
+**Problem.** `is_payment_bearing()` counted `X-StockTrends-Payment-Network`,
+`-Token`, `-Amount`, `-Reference` and `-Channel-Id` as evidence of payment. A
+caller describing an intended payment while holding no authorization was routed
+down the payment-bearing path, where a bare canonical probe is answered with a
+`400` — reproducing the exact discovery failure PR3 exists to remove.
+
+**Root cause.** The guard was written to the question "does this request mention
+payment?" when the question that matters is "has this caller presented an
+authorization artifact?". Erring wide felt safe because the wide direction
+protects settlement — but this guard does not gate settlement, it gates
+*information*, and there the wide direction withholds.
+
+**Fix.** One canonical predicate, `payments.x402.has_x402_payment_proof`: the
+published `X402_PROOF_HEADERS` plus the supported `Authorization: x402 …` form,
+and nothing else. `payments.challenge` delegates to it and keeps no header list
+of its own; a structural test enforces that. MPP stays safe through the rail
+condition rather than through header sniffing.
+
+**Prevention rule.** Name the question the guard actually answers, then check
+which direction of error is dangerous *for that question*. "Fail safe" has no
+fixed direction — it depends on what the guard protects.
+
+### 3. A challenge was recorded as billable execution
+
+**Problem.** `api_request_logs.is_billable` came from `is_billable_request(decision)`,
+a pre-execution predicate. A challenge-only request — `402`, `success = 0`,
+`payment_status = pending`, `billed = 0`, no payment reference — was written with
+`is_billable = 1`.
+
+**Root cause.** Billability was derived from the request's *class* rather than
+from its *outcome*. Before PR3 that was merely imprecise; PR3 made challenges
+common, so the row became routinely false.
+
+**Fix.** `resolved_is_billable(decision, collected=...)` reads whether a rail
+actually collected — x402 settled, or MPP captured. On a direct machine-payment
+rail nothing else is billable. Subscription and free semantics are unchanged.
+This forced an ordering change: the request event is now built and logged *after*
+the MPP capture/void block, because that is where the MPP leg of the outcome is
+decided. Deriving it from the status code was explicitly rejected — a `402` is
+issued for a challenge, a replay and a settlement failure alike.
+
+**Prevention rule.** An accounting field must be written from the state it
+claims to describe. If that state is only known later in the request, move the
+write, not the definition.
+
+### 4. Published lifecycle guidance contradicted itself
+
+**Problem.** `/v1/ai/tools` still told agents a `402` arrives "after request
+validation", while `ai-plugin.json` published an unqualified global
+`serviceable_request_required_before_challenge: false`. Both were wrong in
+opposite directions, and neither could be right: the precondition is false for
+eligible fixed-price resources and true for availability-gated and
+parameterized ones.
+
+**Root cause.** A contract with real exceptions was published as a single
+boolean. A boolean cannot carry an exception, so whichever value it takes, some
+resource is misdescribed.
+
+**Fix.** `challenge_precondition_metadata` renders the runtime classification
+into a per-resource `challenge_lifecycle` block, published identically in the
+OpenAPI `x-stocktrends-payment` extension, `/.well-known/x402`
+`resources[]`, and each `/v1/ai/tools` entry. Global prose now names its scope
+("eligible recognized fixed-price resources") and points at the per-resource
+field. A test compares all three surfaces for one fixed-price, one
+availability-gated and one parameterized resource, and checks the published
+value against real runtime behaviour rather than against the generator.
+
+**Prevention rule.** Do not publish a global boolean for a property that has
+documented exceptions. Publish the classification, derived from the same code
+the runtime uses, and let global prose name its scope.
+
+### 5. An unresolved price became a zero-dollar payment requirement
+
+**Problem (pre-existing, elevated to a PR3 blocker).** A missing or inactive
+`api_pricing_rules` row, or a failed lookup, returned `(Decimal("0"),
+Decimal("0"))`. A payment-required resource then published a valid-looking `402`
+advertising `amount: 0` — and, worse, a caller presenting real payment proof
+during a pricing outage was **served paid data with a 200**.
+
+**Root cause.** `Decimal("0")` meant both "this costs nothing" and "this could
+not be priced". PR3 made it a blocker because classifying a route as
+"fixed-price challengeable" asserts a price exists, which naming a pricing rule
+does not establish.
+
+**Fix.** `resolve_request_pricing` returns a `ResolvedPrice` carrying an explicit
+`PriceResolution` (`RESOLVED`, `RULE_NOT_FOUND`, `LOOKUP_FAILED`,
+`NO_RULE_NAME`). `usable_for_machine_payment` requires resolution *and* a
+strictly positive amount. It is captured early as data but acted on only at the
+two points where money would otherwise move — the unpaid challenge path and the
+deferred gate — so a malformed payment-bearing request still receives its input
+error first. Failure is `503 pricing_unavailable`: no challenge, no
+`PAYMENT-REQUIRED` header, no rails advertised, no rail contacted, nothing
+served.
+
+**Prevention rule.** Never let one value carry both a measurement and the
+failure to obtain it. Return an explicit state. And separate "the policy names a
+price" from "a price was resolved" — the first is configuration, the second is a
+fact about this request.
+
+### Additional: a payment-required request with no enforceable rail
+
+**Problem.** Found while remediating finding 5, and pre-existing at `57b7437`.
+A caller sending `X-StockTrends-Payment-Method: <anything unsupported>` on a paid
+route resolved to rail `"none"`. The gate's enforcement branch runs only for
+`x402` and `mpp`, so the gate returned "proceed" and the endpoint **served paid
+data for nothing**.
+
+**Root cause.** The gate enumerated the rails it knew how to enforce and fell
+through for everything else, treating "no rail matched" as "nothing to enforce"
+rather than "nothing may be served".
+
+**Fix.** A payment-required request whose rail is neither `x402` nor `mpp` is
+refused with `402 unsupported_payment_rail`, listing the accepted methods.
+
+**Prevention rule.** In an enforcement path, an unmatched case is a refusal, not
+a pass. Write the fall-through before the branches.

@@ -1,11 +1,13 @@
 from dataclasses import dataclass
 import os
 
+from payments import policy_provider
 from payments.policy_provider import (
-    get_agent_pay_auth_bypass_methods,
-    get_effective_endpoint_payment_policy,
-    is_agent_pay_route,
-    is_free_metered_path,
+    RuntimePaymentPolicyConfig,
+    get_agent_pay_auth_bypass_methods_from_config,
+    get_effective_endpoint_payment_policy_from_config,
+    is_agent_pay_route_from_config,
+    is_free_metered_path_from_config,
     is_public_intelligence_path,
     is_public_stocktrends_path,
 )
@@ -223,9 +225,17 @@ def classify_request(
     plan_code: str | None = None,
     agent_identifier: str | None = None,
     method: str | None = None,
+    policy_config: RuntimePaymentPolicyConfig | None = None,
 ) -> PricingDecision:
     """
     Classify request into pricing / metering tiers.
+
+    `policy_config` is the payment-policy snapshot bound to the request.  Every
+    policy question below is answered against that one object, so a
+    classification cannot mix a pricing rule read under one snapshot with rails
+    or eligibility read under a newer one.  It is optional only for non-request
+    callers (tests, tooling), which get a single freshly-read snapshot instead
+    of one read per question.
 
     Lane B-aware STIM policy:
     - Public/static/docs paths are non-metered
@@ -238,6 +248,12 @@ def classify_request(
     - Non-/v1 probe traffic is never treated as paid API usage
     """
 
+    # Resolved through the module rather than a bound name so a caller that
+    # substitutes the policy provider's config is observed here too -- and so
+    # the fetch happens exactly once per classification rather than once per
+    # policy question.
+    config = policy_config or policy_provider.get_runtime_payment_policy_config()
+
     if path in NON_METERED_PATHS or is_public_stocktrends_path(path) or is_public_intelligence_path(path):
         return _free_decision()
 
@@ -247,17 +263,17 @@ def classify_request(
     if any(path.startswith(p) for p in NON_METERED_PREFIXES):
         return _free_decision()
 
-    if is_free_metered_path(path):
+    if is_free_metered_path_from_config(config, path):
         return _free_metered_decision()
 
-    endpoint_policy = get_effective_endpoint_payment_policy(path, method)
-    is_stim = is_agent_pay_route(path, method)
+    endpoint_policy = get_effective_endpoint_payment_policy_from_config(config, path, method)
+    is_stim = is_agent_pay_route_from_config(config, path, method)
     has_paid_plan = _is_paid_plan(plan_code)
     identified_agent = _is_identified_agent(agent_identifier)
     has_agent_payment_intent = _has_agent_payment_intent(
         payment_method_header,
         agent_identifier,
-        get_agent_pay_auth_bypass_methods(path, method),
+        get_agent_pay_auth_bypass_methods_from_config(config, path, method),
     )
     normalized_payment_method = _normalize_payment_method(payment_method_header)
 

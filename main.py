@@ -41,7 +41,10 @@ from middleware.api_key import (
 )
 from middleware.request_logger import RequestLoggerMiddleware
 from middleware.metering import MeteringMiddleware
-from payments.challenge import classify_early_challenge_route
+from payments.challenge import (
+    challenge_precondition_metadata,
+    classify_early_challenge_route,
+)
 import payments.policy_provider as payment_policy
 import payments.x402_contract as x402_contract
 from payments.mpp import MPP_PAYMENT_CHANNEL_ID_HEADERS, MPP_REQUIRED_HEADERS
@@ -469,25 +472,32 @@ def _apply_api_key_security_to_openapi_locked(v1_app: FastAPI) -> dict:
                     "anonymous_challenge_supported": (
                         "x402" in endpoint_policy.machine_payment_rails
                     ),
-                    # Per-operation, and derived from the same classifier the
-                    # runtime uses, so the published contract cannot claim a
-                    # precondition the request path does not apply.  False for a
-                    # recognized fixed-price resource, whose canonical URL is
-                    # challengeable before application-input validation; True
-                    # for one excluded from that path — an availability-gated
-                    # Intelligence artifact route, or a parameterized resource.
-                    # Settlement always requires a serviceable request, on every
-                    # route; that is
-                    # `serviceable_request_required_before_settlement`.
-                    "serviceable_request_required_before_challenge": not (
+                    # Per-operation, and rendered from the same classifier the
+                    # request path consults, so the published contract cannot
+                    # claim a precondition the runtime does not apply.  The
+                    # `challenge_lifecycle` block names the resource's class —
+                    # fixed-price, availability-gated or parameterized — so an
+                    # agent is never left inferring an exception from a global
+                    # boolean.
+                    **challenge_precondition_metadata(
                         classify_early_challenge_route(
                             external_path,
                             method.upper(),
                             endpoint_policy=endpoint_policy,
                             route_template=external_path,
-                        ).eligible
+                        )
                     ),
-                    "serviceable_request_required_before_settlement": True,
+                }
+                payment_extension["challenge_lifecycle"] = {
+                    key: payment_extension[key]
+                    for key in (
+                        "challenge_class",
+                        "serviceable_request_required_before_challenge",
+                        "serviceable_request_required_before_settlement",
+                        "bare_canonical_probe_returns_challenge",
+                        "availability_gate_precedes_challenge",
+                        "parameterized_resource",
+                    )
                 }
                 if "x402" in endpoint_policy.machine_payment_rails:
                     payment_extension["x402_version"] = x402_contract.X402_VERSION
@@ -611,8 +621,9 @@ def ai_plugin():
                 "then use /v1/ai/tools and /v1/workflows, "
                 "/v1/pricing/catalog, /v1/pricing, /v1/instruments/lookup, /v1/instruments/resolve, "
                 "/v1/stwr/reports/catalog, and /v1/meta/* planning helpers before paid execution. "
-                "An unpaid probe of a payable resource returns its 402 payment contract; construct a "
-                "serviceable request before paying. Authentication or "
+                "An unpaid probe of an eligible fixed-price payable resource returns its 402 payment "
+                "contract; availability-gated and parameterized resources resolve availability or "
+                "path parameters first. Construct a serviceable request before paying. Authentication or "
                 "machine payment is required for protected data endpoints."
             ),
             "x_stocktrends_discovery": {
@@ -627,8 +638,22 @@ def ai_plugin():
                 "subscription_auth": ["X-API-Key", "Authorization: Bearer"],
                 "machine_payment_rails": ["x402", "mpp"],
                 "x402_proof_headers": list(x402_contract.X402_PROOF_HEADERS),
-                "serviceable_request_required_before_challenge": False,
+                # Qualified deliberately: the relaxed precondition holds for
+                # recognized fixed-price resources, not universally.
+                # Availability-gated Intelligence artifact routes resolve
+                # availability first, and parameterized routes have no bare
+                # canonical URL to probe.  Per-resource truth is published in
+                # the OpenAPI `x-stocktrends-payment.challenge_lifecycle` block
+                # and in /.well-known/x402 `resources[].challenge_lifecycle`.
+                "serviceable_request_required_before_challenge_scope": (
+                    "eligible recognized fixed-price resources only"
+                ),
+                "serviceable_request_required_before_challenge_for_fixed_price": False,
                 "serviceable_request_required_before_settlement": True,
+                "per_resource_lifecycle": {
+                    "openapi": "https://api.stocktrends.com/v1/openapi.json",
+                    "x402_discovery": CANONICAL_DISCOVERY_URL,
+                },
             },
             "data_provenance": data_provenance(),
             "auth": {

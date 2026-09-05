@@ -410,11 +410,16 @@ It applies to a request that satisfies all of the following:
 
 * agent-pay enforcement is active and the request is payment-required;
 * the resolved rail is x402;
-* the request presents **no** payment authorization or proof — neither an x402
-  proof header (`X-Payment`, `PAYMENT-SIGNATURE`, `Authorization: x402 …`) nor
-  any `x-stocktrends-payment-*` material header. Naming a rail in
-  `x-stocktrends-payment-method` declares intent, not payment, and does not
-  count as payment-bearing;
+* the request presents **no** x402 payment authorization or proof, decided by
+  the single canonical predicate `payments.x402.has_x402_payment_proof`: the
+  published `X402_PROOF_HEADERS` (`PAYMENT-SIGNATURE`, `X-Payment`) plus the
+  supported `Authorization: x402 …` form, and nothing else. The descriptive
+  Stock Trends headers — `X-StockTrends-Payment-Network`, `-Token`, `-Amount`,
+  `-Reference`, `-Channel-Id` — are metadata, not authorization: a caller can
+  describe an intended payment while holding none, and that caller is exactly
+  the one that needs the challenge. Naming a rail in
+  `X-StockTrends-Payment-Method` is likewise intent, not payment. MPP stays safe
+  through the rail condition above rather than through header sniffing;
 * the path and method resolve to a real `APIRoute`, established from the
   application's own routers (`api/route_recognition.py`), never from a
   hand-written table;
@@ -431,9 +436,40 @@ No deferred payment gate is published for such a request: nothing would ever
 invoke it, and publishing one would make the finaliser read the challenge as a
 pre-gate rejection instead of the live `pending` a challenge is.
 
+**One payment-policy snapshot per request.** Payment policy is fetched from a
+control plane and cached with a TTL, so two reads inside one request can return
+two different snapshots. `ApiKeyMiddleware` -- the outermost layer that consults
+policy -- binds exactly one snapshot on `request.state`
+(`payment_policy_snapshot_for_request`), and `MeteringMiddleware` reads that same
+object. Every policy-dependent decision derives from it: anonymous agent-pay
+entry, free-metered classification, `classify_request`, the exact endpoint
+policy, enforcement scope, early-challenge eligibility, and the accepted rails a
+challenge advertises. Without this, one `402` could quote a pricing rule and
+amount chosen under snapshot A alongside rails chosen under snapshot B. The
+`*_from_config` helpers in `payments/policy_provider.py` exist so any policy
+question can be asked of a held snapshot; the convenience wrappers that read the
+current config are for non-request callers only.
+
+**A usable price is required, and is not implied by a pricing rule.** An
+endpoint policy naming `prices_history_paid` does not prove the catalogue row
+exists, is active, or is reachable. `resolve_request_pricing` returns a
+`ResolvedPrice` carrying an explicit `PriceResolution`, so a zero amount that
+came from a failed lookup is never mistaken for a resource that costs nothing.
+A direct machine-payment request requires `usable_for_machine_payment` -- resolved
+*and* strictly positive -- before a challenge is issued or any verification,
+settlement or MPP authorization runs. When it is not satisfied the request fails
+closed with `503 pricing_unavailable`: no challenge, no `PAYMENT-REQUIRED`
+header, no rail contacted, no data served, `payment_status = rejected`,
+`billed_amount_usd = 0`. See step 10.
+
 **Eligibility classification.** Implemented in `payments/challenge.py` as
 `EarlyChallengeClass`; every governed route resolves to exactly one class, and
-every exclusion is named rather than implied.
+every exclusion is named rather than implied. The publishable form of that
+classification is `challenge_precondition_metadata`, rendered into the OpenAPI
+`x-stocktrends-payment.challenge_lifecycle` block, `/.well-known/x402`
+`resources[].challenge_lifecycle`, and each `/v1/ai/tools` entry's
+`access.challenge_lifecycle`, so no published surface can state a precondition
+the runtime does not apply.
 
 * `fixed_price` — **eligible**. An exact `EndpointPaymentPolicy` governs the
   path and method, enables the x402 rail, and names a pricing rule, so the
@@ -543,6 +579,22 @@ service.
 The one-shot gate published in step 4 is invoked here, at the endpoint call
 boundary — after every rejection above, and before any paid work.
 
+Two fail-closed checks run first, in this order, and both are reached only
+because structural and semantic validation have already passed — so a malformed
+payment-bearing request still receives its input error rather than either of
+them:
+
+1. **Usable price.** If `ResolvedPrice.usable_for_machine_payment` is false, the
+   request is refused with `503 pricing_unavailable`. Nothing is verified,
+   settled, authorized or captured, and no paid work runs. A payment-required
+   resource must never be served because its price collapsed to zero.
+2. **Enforceable rail.** A payment-required request whose rail resolved to
+   neither `x402` nor `mpp` — which happens when a caller declares an
+   unsupported `X-StockTrends-Payment-Method` — is refused with
+   `402 unsupported_payment_rail` and the endpoint's accepted methods. There is
+   no rail to enforce, so there is nothing to serve. (Before this check such a
+   request fell through the gate and executed paid work unpaid.)
+
 System validates:
 
 * sufficient STC (subscription)
@@ -577,6 +629,15 @@ captured on success, or compensated.
 ---
 
 ### 13. Metering + Logging
+
+Both rows are written **after** MPP capture/void, not before it. `is_billable` on
+the `api_request_logs` row is `resolved_is_billable(...)`, derived from whether a
+rail actually collected rather than from the pre-execution `PricingDecision`, and
+the MPP leg of that is only decided by capture. On a direct machine-payment rail
+`is_billable` is `1` only for a settled x402 request or a captured MPP request;
+an issued challenge, a rejected artifact, a verification or settlement failure, a
+pre-gate input rejection, a failed authorization, a void and a failed capture are
+all `0`. Subscription and free semantics are unchanged.
 
 Record written to:
 

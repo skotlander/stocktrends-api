@@ -47,6 +47,7 @@ import middleware.metering as metering_module
 import payments.enforcement as enforcement_module
 import payments.mpp_client as mpp_client_module
 import pricing.classifier as classifier_module
+from middleware.metering import ResolvedPrice
 from payments.mpp_client import MppControlPlaneResult
 from payments.x402 import X402ValidationResult
 
@@ -563,8 +564,8 @@ def priced_at_unit_price(monkeypatch) -> None:
     """
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *_a, **_kw: (SENTINEL_UNIT_PRICE_USD, SENTINEL_STC_COST),
+        "resolve_request_pricing",
+        lambda *_a, **_kw: ResolvedPrice.priced(SENTINEL_UNIT_PRICE_USD, SENTINEL_STC_COST),
     )
 
 

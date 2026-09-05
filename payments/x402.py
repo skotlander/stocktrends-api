@@ -408,6 +408,14 @@ def _get_header(headers, canonical_name: str):
 
 
 def is_x402_payment_method(headers_or_payment_method) -> bool:
+    """
+    True when the caller is on the x402 rail — by declaration or by proof.
+
+    Deliberately broader than `has_x402_payment_proof`: naming x402 in
+    `X-StockTrends-Payment-Method` selects the rail without paying anything.
+    Use this to decide *which rail* a request is on; use
+    `has_x402_payment_proof` to decide whether it has actually paid.
+    """
     if headers_or_payment_method is None:
         return False
 
@@ -419,20 +427,43 @@ def is_x402_payment_method(headers_or_payment_method) -> bool:
     if isinstance(payment_method, str) and payment_method.strip().lower() == "x402":
         return True
 
-    if any(_get_header(headers, name) for name in x402_contract.X402_PROOF_HEADERS):
-        return True
-
-    auth = headers.get("authorization", "")
-    if isinstance(auth, str) and auth.lower().startswith("x402"):
-        return True
-
-    return False
+    return has_x402_payment_proof(headers)
 
 
 def has_payment_signature(headers) -> bool:
+    """True when a request carries an x402 proof header (`X402_PROOF_HEADERS`)."""
     if headers is None:
         return False
     return any(_get_header(headers, name) for name in x402_contract.X402_PROOF_HEADERS)
+
+
+def has_x402_payment_proof(headers) -> bool:
+    """
+    True when the request presents actual x402 payment authorization.
+
+    The canonical, single definition of "this caller has paid, or is trying to":
+    every supported carrier of an x402 authorization artifact, and nothing else.
+    That is the published proof-header contract (`X402_PROOF_HEADERS`, currently
+    `PAYMENT-SIGNATURE` and `X-Payment`) plus the supported
+    `Authorization: x402 …` form.
+
+    Descriptive Stock Trends payment headers — network, token, amount,
+    reference, channel id — are deliberately NOT proof.  A caller can state what
+    it intends to pay with while holding no authorization at all, and treating
+    that as payment would let an unpaid caller suppress the challenge it needs.
+    `X-StockTrends-Payment-Method` is likewise a rail declaration, not payment.
+
+    Any other layer asking "has this caller presented payment?" must call this
+    rather than assembling a second header list of its own.
+    """
+    if headers is None:
+        return False
+
+    if has_payment_signature(headers):
+        return True
+
+    auth = _get_header(headers, "Authorization") or ""
+    return isinstance(auth, str) and auth.strip().lower().startswith("x402")
 
 
 def extract_payment_signature(headers) -> Optional[str]:

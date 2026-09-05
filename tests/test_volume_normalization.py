@@ -17,6 +17,7 @@ from fastapi.testclient import TestClient
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+from middleware.metering import ResolvedPrice
 import payments.policy_provider as policy_provider
 import routers.prices as prices_router
 import routers.stwr as stwr_router
@@ -115,8 +116,8 @@ def patched_client(monkeypatch):
     monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *a, **kw: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *_a, **_kw: (Decimal("0"), Decimal("0")),
+        "resolve_request_pricing",
+        lambda *_a, **_kw: ResolvedPrice.priced(Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "_ENABLE_AGENT_PAY", False)
     monkeypatch.setattr(metering_module, "ENABLE_AGENT_PAY", False)
@@ -500,8 +501,8 @@ def free_client(monkeypatch):
     monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *a, **kw: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *_a, **_kw: (Decimal("0"), Decimal("0")),
+        "resolve_request_pricing",
+        lambda *_a, **_kw: ResolvedPrice.priced(Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "_ENABLE_AGENT_PAY", False)
     monkeypatch.setattr(metering_module, "ENABLE_AGENT_PAY", False)

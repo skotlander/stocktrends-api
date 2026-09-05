@@ -39,9 +39,19 @@ The asymmetry is the point:
     unpaid + incomplete          -> 402 challenge   (nothing verified or settled)
     payment-bearing + incomplete -> 400/422         (nothing verified or settled)
 
-Nothing in this module can move money.  It calls the pure challenge builder,
-the endpoint payment policy, and the static preview registry.  There is no
-facilitator call, no control-plane call, and no data access to reach.
+What this module does and does not do
+------------------------------------
+Nothing here performs a payment-rail operation or any paid market-data
+execution.  It calls the pure x402 challenge builder and the static endpoint
+preview registry, and it is handed the accepted payment methods its caller
+already resolved from the request's payment-policy snapshot.  There is no
+facilitator call, no MPP control-plane call, no database access and no endpoint
+execution.
+
+It deliberately performs no payment-policy lookup of its own.  Reading live
+policy here would let a challenge advertise rails from a newer configuration
+snapshot than the one that chose the request's pricing rule and amount, and
+would make a supposedly pure issuance layer perform configuration I/O.
 """
 
 from __future__ import annotations
@@ -53,11 +63,10 @@ from typing import Any
 
 from api.route_recognition import recognize_route
 from discovery.preview import get_endpoint_preview
-from payments.policy_provider import get_accepted_payment_methods_for_path
 from payments.x402 import (
     X402_CHALLENGE_MODE_HEADER,
     build_x402_challenge,
-    has_payment_signature,
+    has_x402_payment_proof,
 )
 from services.intelligence_artifact_availability import (
     match_paid_intelligence_artifact_route,
@@ -74,22 +83,6 @@ CHALLENGE_ERROR_DETAIL = "x402 payment required"
 #: answering a per-request challenge, and its callers always present payment
 #: material — so an MPP request is never an unpaid canonical probe.
 EARLY_CHALLENGE_RAIL = "x402"
-
-#: Stock Trends payment headers that constitute an attempt to pay rather than a
-#: declaration of intent.  `X-StockTrends-Payment-Method` is deliberately absent:
-#: naming a rail presents no authorization, and a caller that names x402 without
-#: an artifact is still unpaid.
-#:
-#: Given in canonical casing and matched case-insensitively.  Starlette's
-#: `Headers` is already case-insensitive, but a plain mapping is not, and the
-#: dangerous direction here is missing a header a paying client sent.
-_STOCKTRENDS_PAYMENT_MATERIAL_HEADERS = (
-    "X-StockTrends-Payment-Reference",
-    "X-StockTrends-Payment-Amount",
-    "X-StockTrends-Payment-Network",
-    "X-StockTrends-Payment-Token",
-    "X-StockTrends-Payment-Channel-Id",
-)
 
 
 class EarlyChallengeClass(str, Enum):
@@ -168,34 +161,29 @@ class X402Challenge:
     payment_token: str | None = None
 
 
-def is_payment_bearing(headers: Any) -> bool:
+def presents_x402_payment_proof(headers: Any) -> bool:
     """
-    True when the request presents payment authorization or proof of any kind.
+    The discriminator the early challenge turns on: has this caller paid?
 
-    The early challenge exists only for a request presenting none.  A request
-    carrying payment material must complete structural and semantic validation
-    before anything capable of moving money runs, which is precisely what the
-    deferred gate and its ordering guarantee.
+    Delegates to `payments.x402.has_x402_payment_proof`, which is the single
+    definition of an x402 authorization carrier — the published
+    `X402_PROOF_HEADERS` plus the supported `Authorization: x402 …` form.  This
+    module deliberately keeps no proof-header list of its own; a second list
+    would drift from the contract the facilitator path actually reads.
 
-    Deliberately broader than `has_payment_signature`.  A conformant x402 client
-    presents `X-Payment` or `PAYMENT-SIGNATURE`, while an MPP or Stock Trends
-    client authorizes through the private `x-stocktrends-payment-*` headers, and
-    a request carrying any of those is attempting to pay rather than probing.
-    Erring wide keeps a paying client on the validated path; erring narrow would
-    hand it a challenge in place of its answer.
+    An earlier revision of this guard also treated the descriptive Stock Trends
+    payment headers (network, token, amount, reference, channel id) as proof.
+    That was too broad: a caller can describe what it intends to pay with while
+    holding no authorization at all, and such a caller is precisely the one that
+    needs the challenge.  Naming a rail in `X-StockTrends-Payment-Method` is
+    likewise intent, not payment.
+
+    MPP stays safe without being named here.  The early-challenge guard requires
+    the *resolved rail* to be x402, and an MPP request declares `mpp` and
+    resolves to the MPP rail, so it is never intercepted — see
+    `EARLY_CHALLENGE_RAIL`.
     """
-    if headers is None:
-        return False
-
-    if has_payment_signature(headers):
-        return True
-
-    for name in _STOCKTRENDS_PAYMENT_MATERIAL_HEADERS:
-        if headers.get(name) or headers.get(name.lower()):
-            return True
-
-    authorization = headers.get("authorization") or headers.get("Authorization") or ""
-    return isinstance(authorization, str) and authorization.strip().lower().startswith("x402")
+    return has_x402_payment_proof(headers)
 
 
 def challenge_mode_from_headers(headers: Any) -> str | None:
@@ -293,6 +281,54 @@ def decide_early_challenge(
     )
 
 
+def challenge_precondition_metadata(decision: EarlyChallengeDecision) -> dict:
+    """
+    The publishable lifecycle contract for one resource, from its classification.
+
+    Every surface that tells an agent when a `402` becomes reachable — the
+    OpenAPI payment extension, the x402 discovery manifest, the tools manifest —
+    renders this same object, so none of them can describe a precondition the
+    runtime does not apply.  It is derived from `EarlyChallengeDecision`, which
+    is the same classifier the request path consults; it is deliberately not a
+    second hand-maintained list of paths.
+
+    A single global boolean cannot state this truthfully, because the exceptions
+    are real:
+
+    * a recognized fixed-price resource is challengeable at its bare canonical
+      URL, before application-input validation;
+    * an availability-gated resource resolves availability first and answers
+      `404`/`503` when the artifact is not serveable, so a challenge is not the
+      first thing a probe can expect;
+    * a parameterized resource has no bare canonical URL to probe at all.
+
+    Settlement is the invariant across all three: no resource verifies, settles
+    or captures against an unserviceable request.
+    """
+    challenge_class = decision.challenge_class
+    eligible = decision.eligible
+
+    return {
+        "challenge_class": challenge_class.value,
+        # False only where the runtime really will challenge a bare probe.
+        "serviceable_request_required_before_challenge": not eligible,
+        # True everywhere, on every rail, without exception.
+        "serviceable_request_required_before_settlement": True,
+        "bare_canonical_probe_returns_challenge": eligible,
+        "availability_gate_precedes_challenge": (
+            challenge_class is EarlyChallengeClass.AVAILABILITY_GATED
+        ),
+        # Read from the route template rather than from the winning class: a
+        # by-id Intelligence artifact route is availability-gated *and*
+        # parameterized, and reporting only the first would understate the
+        # second.  The class says why the resource is excluded from early
+        # challenge; the flags describe the resource.
+        "parameterized_resource": bool(
+            decision.route_template and "{" in decision.route_template
+        ),
+    }
+
+
 def decorate_x402_challenge(
     *,
     path: str,
@@ -301,6 +337,7 @@ def decorate_x402_challenge(
     payment_required_header: str,
     pricing_rule_id: str | None,
     amount_usd: Decimal,
+    accepted_payment_methods: str,
     payment_network: str | None = None,
     payment_token: str | None = None,
 ) -> X402Challenge:
@@ -312,14 +349,16 @@ def decorate_x402_challenge(
     differently.  A caller comparing a challenge it obtained before validation
     with one it obtained after must see the same payable contract.
 
+    `accepted_payment_methods` is supplied by the caller, resolved from the
+    request's own payment-policy snapshot.  Resolving it here instead would
+    read live policy during challenge composition, and a TTL refresh could then
+    pair one snapshot's rule and amount with another snapshot's rails inside a
+    single 402.
+
     The preview is schema-only metadata drawn from the static endpoint registry;
     it never contains live data and requires no data access to produce.
     """
-    accepted_methods = get_accepted_payment_methods_for_path(
-        path,
-        pricing_rule_id,
-        method=method,
-    )
+    accepted_methods = accepted_payment_methods
 
     # Shallow-copy so a cached or reused enforcement result is never mutated.
     body = dict(challenge_body)
@@ -349,6 +388,7 @@ def issue_x402_challenge(
     method: str,
     amount_usd: Decimal,
     pricing_rule_id: str | None,
+    accepted_payment_methods: str,
     challenge_mode: str | None = None,
 ) -> X402Challenge:
     """
@@ -381,6 +421,7 @@ def issue_x402_challenge(
         payment_required_header=payment_required_header,
         pricing_rule_id=pricing_rule_id,
         amount_usd=amount_usd,
+        accepted_payment_methods=accepted_payment_methods,
         payment_network=network,
         payment_token=token,
     )

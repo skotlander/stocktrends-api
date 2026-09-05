@@ -12,11 +12,12 @@ from sqlalchemy import text
 from db import get_auth_engine
 from metering.logger import log_auth_failure_event
 from payments.policy_provider import (
-    is_agent_pay_auth_candidate,
-    is_agent_pay_enforcement_path,
-    is_free_metered_path,
+    is_agent_pay_auth_candidate_from_config,
+    is_agent_pay_enforcement_path_from_config,
+    is_free_metered_path_from_config,
     is_public_intelligence_path,
     is_public_stocktrends_path,
+    payment_policy_snapshot_for_request,
 )
 from services.intelligence_artifact_availability import (
     check_intelligence_artifact_availability,
@@ -133,12 +134,18 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
             CUSTOMER_API_KEY_BYPASS_PREFIXES
         )
 
-    def _is_agent_pay_candidate(self, request: Request) -> bool:
+    def _is_agent_pay_candidate(self, request: Request, policy_snapshot) -> bool:
         path = request.url.path
         agent_id = _normalize_header(request.headers.get("x-stocktrends-agent-id"))
 
         payment_method = (_normalize_header(request.headers.get("x-stocktrends-payment-method")) or "").lower()
-        return is_agent_pay_auth_candidate(path, payment_method, agent_id, method=request.method)
+        return is_agent_pay_auth_candidate_from_config(
+            policy_snapshot,
+            path,
+            payment_method,
+            agent_id,
+            method=request.method,
+        )
 
     def _apply_agent_pay_context(self, request: Request) -> None:
         request.state.api_key_id = None
@@ -293,6 +300,13 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         if request.method == "OPTIONS":
             return await call_next(request)
 
+        # Bind the one payment-policy snapshot this request will use, before any
+        # policy-dependent decision is taken.  This middleware wraps
+        # MeteringMiddleware, so binding here makes anonymous agent-pay entry
+        # and payment enforcement provably answer to the same configuration;
+        # a TTL refresh mid-request can no longer split one request across two.
+        policy_snapshot = payment_policy_snapshot_for_request(request.state)
+
         availability = check_intelligence_artifact_availability(request.method, path)
         if availability is not None and not availability.available:
             request.state.auth_mode = "availability_gate"
@@ -304,7 +318,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
 
         # Free-metered routes:
         # allow anonymous access, but if an API key is supplied, resolve and attach customer context
-        if is_free_metered_path(path):
+        if is_free_metered_path_from_config(policy_snapshot, path):
             if raw_key:
                 ok, auth = self._authenticate_api_key(path, raw_key)
                 if not ok:
@@ -327,7 +341,7 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         # Lane B anonymous agent-pay entry:
         # allow through without an API key when the request clearly presents
         # as an agent payment attempt. Subscription callers can still use API keys normally.
-        if self._is_agent_pay_candidate(request):
+        if self._is_agent_pay_candidate(request, policy_snapshot):
             self._apply_agent_pay_context(request)
             return await call_next(request)
 
@@ -337,7 +351,9 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         # headers are present. is_agent_pay_enforcement_path() does not check ENABLE_AGENT_PAY
         # itself, so the guard is applied explicitly here.
         # API-key holders are unaffected — `not raw_key` ensures they continue to normal auth.
-        if _ENABLE_AGENT_PAY and not raw_key and is_agent_pay_enforcement_path(path, method=request.method):
+        if _ENABLE_AGENT_PAY and not raw_key and is_agent_pay_enforcement_path_from_config(
+            policy_snapshot, path, method=request.method
+        ):
             self._apply_agent_pay_context(request)
             return await call_next(request)
 

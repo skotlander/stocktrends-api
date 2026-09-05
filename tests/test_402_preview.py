@@ -37,6 +37,7 @@ from fastapi.testclient import TestClient
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+from middleware.metering import ResolvedPrice
 import pricing.classifier as classifier_module
 from payments.enforcement import PaymentEnforcementResult
 from discovery.preview import get_endpoint_preview, _PREVIEW_BY_PATH
@@ -132,8 +133,8 @@ def _stub_runtime(monkeypatch, *, enforce_result: PaymentEnforcementResult, path
     monkeypatch.setenv(STORE_ENV_VAR, str(_INTELLIGENCE_FIXTURE_ROOT))
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0.05"), Decimal("0.05")),
+        "resolve_request_pricing",
+        lambda *a, **kw: ResolvedPrice.priced(Decimal("0.05"), Decimal("0.05")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *a, **kw: None)
 
@@ -669,8 +670,8 @@ def test_paid_200_response_gets_no_store_cache_control(monkeypatch):
     monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *a, **kw: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0.05"), Decimal("0.05")),
+        "resolve_request_pricing",
+        lambda *a, **kw: ResolvedPrice.priced(Decimal("0.05"), Decimal("0.05")),
     )
 
     with TestClient(main.app) as client:
@@ -692,11 +693,19 @@ def client_x402_validation_failed(monkeypatch):
 
 
 def test_x402_validation_failed_no_preview(client_x402_validation_failed):
-    """validation_failed 402 must not include stocktrends_preview."""
+    """
+    validation_failed 402 must not include stocktrends_preview.
+
+    The request presents a real `X-Payment` artifact, not merely a reference
+    header: a validation failure is something only a caller that actually
+    presented payment can reach.  A metadata-only request is unpaid and is
+    answered with the challenge, which does carry the preview.
+    """
     response = client_x402_validation_failed.get(
         _KNOWN_PREVIEW_REQUEST,
         headers={
             "X-StockTrends-Payment-Method": "x402",
+            "X-Payment": "an-artifact-the-stubbed-rail-will-reject",
             "X-StockTrends-Payment-Reference": "0xsig",
         },
     )
@@ -722,6 +731,7 @@ def test_x402_replay_detected_no_preview(client_x402_replay):
         _KNOWN_PREVIEW_REQUEST,
         headers={
             "X-StockTrends-Payment-Method": "x402",
+            "X-Payment": "an-artifact-whose-reference-was-already-spent",
             "X-StockTrends-Payment-Reference": "0xdupe",
         },
     )

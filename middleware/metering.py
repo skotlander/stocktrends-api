@@ -1,17 +1,18 @@
 import json
+import logging
 import os
 import re
 import time
-import logging
 from dataclasses import dataclass
-from uuid import uuid4
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
+from enum import Enum
+from uuid import uuid4
 
+from fastapi import Request
 from sqlalchemy import text
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
-from fastapi import Request
 
 from api.routing import (
     BOUNDARY_NOT_CONSULTED_ERROR,
@@ -19,9 +20,9 @@ from api.routing import (
     is_payment_wrapped,
 )
 from metering.logger import (
-    log_api_request_event,
-    log_api_request_economics,
     get_metering_engine,
+    log_api_request_economics,
+    log_api_request_event,
 )
 from payments.challenge import (
     CHALLENGE_ERROR_CODE,
@@ -30,22 +31,23 @@ from payments.challenge import (
     challenge_mode_from_headers,
     decide_early_challenge,
     decorate_x402_challenge,
-    is_payment_bearing,
     issue_x402_challenge,
+    presents_x402_payment_proof,
 )
 from payments.enforcement import enforce_payment_rail
 from payments.policy_provider import (
-    get_accepted_payment_methods_for_path,
-    get_effective_endpoint_payment_policy,
-    is_agent_pay_enforcement_path,
+    get_accepted_payment_methods_for_path_from_config,
+    get_effective_endpoint_payment_policy_from_config,
+    is_agent_pay_enforcement_path_from_config,
+    payment_policy_snapshot_for_request,
 )
-from pricing.classifier import PricingDecision, classify_request
 from payments.x402 import (
+    X402_DEFAULT_TOKEN_DECIMALS,
+    encode_payment_response_header,
     is_x402_payment_method,
     validate_x402_payment,
-    encode_payment_response_header,
-    X402_DEFAULT_TOKEN_DECIMALS,
 )
+from pricing.classifier import PricingDecision, classify_request
 from services.intelligence_artifact_availability import (
     intelligence_artifact_availability_error_detail,
 )
@@ -220,13 +222,23 @@ def get_response_size_bytes(response) -> int | None:
 
 
 def get_accepted_payment_methods(
+    policy_snapshot,
     path: str,
     pricing_rule_id: str | None,
     *,
     method: str | None = None,
     enforced_payment_method: str | None = None,
 ) -> str:
-    return get_accepted_payment_methods_for_path(
+    """
+    Accepted methods for `path`, answered against the request's own snapshot.
+
+    `policy_snapshot` is required rather than defaulted: a call that quietly
+    read the current configuration could advertise rails from a newer snapshot
+    than the one that chose this request's pricing rule and amount, and the two
+    would appear together in a single 402.
+    """
+    return get_accepted_payment_methods_for_path_from_config(
+        policy_snapshot,
         path,
         pricing_rule_id,
         method=method,
@@ -363,6 +375,43 @@ def is_billable_request(decision) -> int:
     return 1
 
 
+def resolved_is_billable(decision, *, collected: bool) -> int:
+    """
+    Billability of the finished request, from what actually happened to it.
+
+    `is_billable_request` answers a pre-execution question — is this request in
+    a metered, access-granted, non-free class at all — and that is still the
+    baseline.  It cannot answer the question a direct machine-payment row needs,
+    because before execution nothing is known about whether a rail collected.
+
+    For a request on a direct machine-payment rail (`econ_payment_required`),
+    billability is collection: `collected` is set only where money actually
+    moved — x402 settled, or MPP captured.  So an issued challenge, a rejected
+    or malformed artifact, a facilitator verification or settlement failure, a
+    pre-gate input rejection, a failed MPP authorization, a voided
+    authorization, and a failed capture are all `0`, because each of them
+    collected nothing.  A settled x402 request and a captured MPP request are
+    `1`.
+
+    Subscription and free semantics are deliberately untouched: quota-backed
+    usage is billable on the existing rule regardless of collection, because
+    the collection happened at subscription time rather than per request.
+
+    Deliberately not derived from the response status.  A 402 is issued for a
+    challenge, a replay and a settlement failure alike, and a 200 can follow a
+    request that was never charged; status-code inference is exactly the
+    reasoning the settlement-ordering work rejected.
+    """
+    baseline = is_billable_request(decision)
+    if not baseline:
+        return 0
+
+    if decision.econ_payment_required == 1:
+        return 1 if collected else 0
+
+    return baseline
+
+
 def safe_decimal(value, default: str = "0"):
     if value is None:
         return Decimal(default)
@@ -414,11 +463,59 @@ def get_active_pricing_rule(rule_name: str | None) -> dict | None:
         return None
 
 
-def resolve_economic_amounts(rule_name: str | None) -> tuple[Decimal, Decimal]:
+class PriceResolution(str, Enum):
     """
-    Resolve what the priced operation is worth, from the pricing rule alone.
+    Whether a request's economics were actually resolved, and if not, why.
 
-    Returns `(unit_price_usd, stc_cost)`.
+    A pricing rule *name* is not a price.  An endpoint payment policy can name
+    `prices_history_paid` while the catalogue row is missing, deactivated, or
+    unreachable, and the amounts then collapse to zero — which is
+    indistinguishable, as a bare `Decimal("0")`, from a rule that genuinely
+    costs nothing.  Conflating the two is how a payment-required resource came
+    to be able to publish and enforce a zero-dollar x402 challenge.
+    """
+
+    #: The catalogue row was found and its amounts were read.
+    RESOLVED = "resolved"
+
+    #: No active pricing rule exists for that name.
+    RULE_NOT_FOUND = "pricing_rule_not_found"
+
+    #: The catalogue could not be consulted at all.
+    LOOKUP_FAILED = "pricing_lookup_failed"
+
+    #: There is no rule name to resolve — a free or unclassified path.
+    NO_RULE_NAME = "no_pricing_rule_name"
+
+
+#: Error code and client detail for a machine-payment request whose price could
+#: not be resolved.  Fails closed the same way the Intelligence artifact
+#: availability boundary does: the system does not quote, collect against, or
+#: serve a paid resource it cannot price.
+PRICING_UNAVAILABLE_ERROR = "pricing_unavailable"
+PRICING_UNAVAILABLE_DETAIL = (
+    "Pricing for this resource is temporarily unavailable, so no payment can be "
+    "quoted or accepted. No payment was taken and no data was served."
+)
+
+#: A payment-required request that named a payment method the system does not
+#: enforce.  Rail resolution yields "none", so there is no rail to verify or
+#: settle against — and therefore nothing that may be served.
+UNSUPPORTED_PAYMENT_RAIL_ERROR = "unsupported_payment_rail"
+UNSUPPORTED_PAYMENT_RAIL_DETAIL = (
+    "The requested payment method is not supported for this endpoint. Use one of "
+    "the accepted payment methods."
+)
+
+
+@dataclass(frozen=True)
+class ResolvedPrice:
+    """
+    The economics resolved for one request, with the resolution state explicit.
+
+    `unit_price_usd` and `stc_cost` are meaningful only when `resolution` is
+    `RESOLVED`; on every other state they are zero because nothing was read, and
+    that zero must never be mistaken for a price.
 
     There is deliberately no billed amount here.  `billed_amount_usd` records
     what a payment rail actually collected, which price lookup cannot know: it
@@ -426,14 +523,77 @@ def resolve_economic_amounts(rule_name: str | None) -> tuple[Decimal, Decimal]:
     catalogue.  Returning one from here is what previously let a list price be
     logged as a collected amount on requests that never paid.
     """
-    rule = get_active_pricing_rule(rule_name)
+
+    unit_price_usd: Decimal
+    stc_cost: Decimal
+    resolution: PriceResolution
+
+    @property
+    def resolved(self) -> bool:
+        return self.resolution is PriceResolution.RESOLVED
+
+    @property
+    def usable_for_machine_payment(self) -> bool:
+        """
+        True only when a direct machine-payment rail may act on this price.
+
+        Requires both a successful resolution and a strictly positive amount.
+        A zero amount is never usable here whatever produced it: challenging,
+        verifying, settling or authorizing against nothing is not a discount,
+        it is a payment-required resource being served for free.
+        """
+        return self.resolved and self.unit_price_usd > 0
+
+    @property
+    def failure_reason(self) -> str | None:
+        return None if self.resolved else self.resolution.value
+
+    @classmethod
+    def priced(cls, unit_price_usd: Decimal, stc_cost: Decimal) -> "ResolvedPrice":
+        """A successfully resolved price.  Used by tests to stub economics."""
+        return cls(unit_price_usd, stc_cost, PriceResolution.RESOLVED)
+
+    @classmethod
+    def unresolved(cls, resolution: PriceResolution) -> "ResolvedPrice":
+        return cls(Decimal(0), Decimal(0), resolution)
+
+
+def resolve_request_pricing(rule_name: str | None) -> ResolvedPrice:
+    """
+    Resolve what the priced operation is worth, from the pricing rule alone.
+
+    The single place a request's economics are read, and the single place the
+    difference between "this costs nothing" and "this could not be priced" is
+    established.  Callers that must move money consult
+    `usable_for_machine_payment`; callers that only record economics read the
+    amounts.
+    """
+    if not rule_name:
+        return ResolvedPrice.unresolved(PriceResolution.NO_RULE_NAME)
+
+    try:
+        rule = get_active_pricing_rule(rule_name)
+    except Exception:
+        logger.exception("Pricing rule lookup raised for %s", rule_name)
+        return ResolvedPrice.unresolved(PriceResolution.LOOKUP_FAILED)
+
     if not rule:
-        return Decimal("0"), Decimal("0")
+        # `get_active_pricing_rule` returns None both for "no active row" and
+        # for a swallowed lookup error; it logs which.  Either way there is no
+        # price, and the machine-payment guard treats them identically.
+        return ResolvedPrice.unresolved(PriceResolution.RULE_NOT_FOUND)
 
     unit_price_usd = safe_decimal(rule.get("cost_per_request"), "0")
-    stc_cost = unit_price_usd
+    return ResolvedPrice.priced(unit_price_usd, unit_price_usd)
 
-    return unit_price_usd, stc_cost
+
+def resolve_economic_amounts(rule_name: str | None) -> tuple[Decimal, Decimal]:
+    """
+    Amounts-only view of `resolve_request_pricing`, for callers that record
+    economics without deciding whether money may move.
+    """
+    resolved = resolve_request_pricing(rule_name)
+    return resolved.unit_price_usd, resolved.stc_cost
 
 
 def x402_settled_amount_usd(
@@ -548,6 +708,38 @@ def challenge_econ_payment_fields(
         "payment_method": payment_method,
         "payment_network": payment_network,
         "payment_token": payment_token,
+        "payment_amount_native": None,
+        "payment_amount_usd": None,
+        "payment_reference": None,
+    }
+
+
+def _record_pricing_unavailable(
+    gate_state,
+    *,
+    decision,
+    resolved_price: ResolvedPrice,
+    payment_method_header: str | None,
+) -> None:
+    """
+    Record a machine-payment request refused because it could not be priced.
+
+    Terminal and non-consuming, exactly like any other denial before payment
+    execution: `rejected` keeps it out of the billing runbook's
+    `presented`/`covered` usage queries, `collected` stays False so nothing is
+    billed, and `accepted_methods` is `none` because no rail can be offered for
+    a resource we cannot quote.  Deliberately not `pending`: `pending` means a
+    challenge was issued and the agent may still pay, and neither is true here.
+    """
+    gate_state.rejected = True
+    gate_state.accepted_methods = "none"
+    gate_state.event_error_code = PRICING_UNAVAILABLE_ERROR
+    gate_state.event_notes = resolved_price.failure_reason
+    gate_state.econ_payment_fields = {
+        "payment_status": "rejected",
+        "payment_method": payment_method_header or decision.econ_payment_method,
+        "payment_network": None,
+        "payment_token": None,
         "payment_amount_native": None,
         "payment_amount_usd": None,
         "payment_reference": None,
@@ -907,8 +1099,8 @@ def is_payment_reference_used(payment_reference: str) -> bool:
         return False
 
 
-def _path_matches_enforcement_scope(path: str, method: str | None) -> bool:
-    return is_agent_pay_enforcement_path(path, method)
+def _path_matches_enforcement_scope(policy_snapshot, path: str, method: str | None) -> bool:
+    return is_agent_pay_enforcement_path_from_config(policy_snapshot, path, method)
 
 
 def _caller_matches_test_allowlist(request: Request) -> bool:
@@ -930,14 +1122,20 @@ def _caller_matches_test_allowlist(request: Request) -> bool:
     return False
 
 
-def should_enforce_agent_pay_for_request(request: Request, path: str, method: str | None, decision) -> bool:
+def should_enforce_agent_pay_for_request(
+    request: Request,
+    path: str,
+    method: str | None,
+    decision,
+    policy_snapshot,
+) -> bool:
     if not ENABLE_AGENT_PAY or not ENFORCE_AGENT_PAY:
         return False
 
     if decision.econ_payment_required != 1:
         return False
 
-    if not _path_matches_enforcement_scope(path, method):
+    if not _path_matches_enforcement_scope(policy_snapshot, path, method):
         return False
 
     if not _caller_matches_test_allowlist(request):
@@ -967,6 +1165,7 @@ def build_request_event(
     latency_ms: int,
     response,
     decision,
+    is_billable: int,
     payment_rail: str,
     payment_method: str | None,
     payment_network: str | None = None,
@@ -1002,7 +1201,7 @@ def build_request_event(
         "user_agent": request.headers.get("user-agent"),
         "referer": request.headers.get("referer"),
         "is_metered": decision.is_metered,
-        "is_billable": is_billable_request(decision),
+        "is_billable": is_billable,
         "payment_rail": payment_rail,
         "payment_method": payment_method,
         "payment_network": payment_network,
@@ -1062,6 +1261,21 @@ class MeteringMiddleware(BaseHTTPMiddleware):
         path = request.url.path
         method = request.method
         query_string = str(request.url.query)
+
+        # The one payment-policy snapshot governing this request.  Normally
+        # bound by ApiKeyMiddleware, which wraps this middleware and consults
+        # policy first; this call returns that same object rather than reading
+        # a possibly newer one.  It binds a snapshot itself only when
+        # ApiKeyMiddleware returned before reaching policy at all (a truly
+        # public path, or an OPTIONS preflight), so every request still has
+        # exactly one.
+        #
+        # Everything policy-dependent below — classification, pricing rule,
+        # enforcement scope, early-challenge eligibility, accepted rails —
+        # derives from this object.  A TTL refresh mid-request can therefore no
+        # longer produce a 402 that quotes one snapshot's rule and amount
+        # alongside another snapshot's rails.
+        policy_snapshot = payment_policy_snapshot_for_request(request.state)
 
         payment_method_header = request.headers.get("x-stocktrends-payment-method")
         payment_network_header = request.headers.get("x-stocktrends-payment-network")
@@ -1127,6 +1341,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 latency_ms=latency_ms,
                 response=response,
                 decision=decision,
+                is_billable=resolved_is_billable(decision, collected=False),
                 payment_rail="none",
                 payment_method="none",
                 error_code=error_code,
@@ -1166,6 +1381,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
         request.state.x402_payment_response = None
 
         decision = classify_request(
+            policy_config=policy_snapshot,
             path=path,
             has_paid_auth=has_paid_auth,
             payment_method_header=payment_method_header,
@@ -1182,7 +1398,16 @@ class MeteringMiddleware(BaseHTTPMiddleware):
         request.state.econ_payment_status = decision.econ_payment_status
 
         economic_rule_name = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
-        unit_price_usd, stc_cost = resolve_economic_amounts(economic_rule_name)
+        # Resolved once, as data, carrying its own resolution state.  It is
+        # deliberately NOT acted on here: an unresolved price must not become an
+        # early response ahead of route and input validation, or a malformed
+        # payment-bearing request would be answered with a pricing error instead
+        # of its input error.  The two places that may act on it are the points
+        # where money would otherwise move — the unpaid challenge path below,
+        # and the deferred gate.
+        resolved_price = resolve_request_pricing(economic_rule_name)
+        unit_price_usd = resolved_price.unit_price_usd
+        stc_cost = resolved_price.stc_cost
         # The three economics fields answer three different questions and must
         # never be conflated:
         #
@@ -1197,7 +1422,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
         # verification or settlement failure, framework rejection before the
         # gate, route miss, subscription quota) leaves it at zero, so a row
         # never implies a charge that was not taken.
-        billed_amount_usd = Decimal("0")
+        billed_amount_usd = Decimal(0)
         workflow_type = normalize_workflow_type(auth_mode, agent_identifier)
         resolved_payment_method = payment_method_header or decision.log_payment_method
         effective_payment_method = (
@@ -1231,7 +1456,9 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 response,
                 pricing_rule_id=decision.log_pricing_rule_id,
                 payment_required=bool(decision.econ_payment_required),
-                accepted_methods=get_accepted_payment_methods(path, decision.log_pricing_rule_id, method=method),
+                accepted_methods=get_accepted_payment_methods(
+                    policy_snapshot, path, decision.log_pricing_rule_id, method=method
+                ),
             )
 
             latency_ms = int((time.time() - start_time) * 1000)
@@ -1256,6 +1483,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 latency_ms=latency_ms,
                 response=response,
                 decision=decision,
+                is_billable=resolved_is_billable(decision, collected=False),
                 payment_rail=payment_rail,
                 payment_method=resolved_payment_method,
                 error_code="agent_disabled",
@@ -1320,7 +1548,9 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 response,
                 pricing_rule_id=decision.log_pricing_rule_id,
                 payment_required=bool(decision.econ_payment_required),
-                accepted_methods=get_accepted_payment_methods(path, decision.log_pricing_rule_id, method=method),
+                accepted_methods=get_accepted_payment_methods(
+                    policy_snapshot, path, decision.log_pricing_rule_id, method=method
+                ),
             )
 
             latency_ms = int((time.time() - start_time) * 1000)
@@ -1345,6 +1575,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 latency_ms=latency_ms,
                 response=response,
                 decision=decision,
+                is_billable=resolved_is_billable(decision, collected=False),
                 payment_rail=payment_rail,
                 payment_method=resolved_payment_method,
                 error_code=decision.deny_reason or "access_denied",
@@ -1404,7 +1635,9 @@ class MeteringMiddleware(BaseHTTPMiddleware):
             and normalized_payment_method in {"mpp", "x402"}
         )
 
-        should_enforce_agent_pay = should_enforce_agent_pay_for_request(request, path, method, decision)
+        should_enforce_agent_pay = should_enforce_agent_pay_for_request(
+            request, path, method, decision, policy_snapshot
+        )
 
         # ------------------------------------------------------------------
         # Deferred payment gate
@@ -1441,11 +1674,18 @@ class MeteringMiddleware(BaseHTTPMiddleware):
         # This is the PR3 decision point, and it is deliberately NOT the
         # payment gate moved back to middleware.  Two properties keep it safe:
         #
-        #   1. It runs only when the request presents no payment authorization
-        #      or proof at all, so there is nothing here to verify or settle.
+        #   1. It runs only when the request presents no x402 payment
+        #      authorization or proof at all, so there is nothing here to
+        #      verify or settle.  The discriminator is the canonical proof
+        #      contract (`presents_x402_payment_proof`), not the presence of
+        #      descriptive payment metadata: a caller that names a network or
+        #      an amount while holding no authorization is exactly the caller
+        #      that needs the challenge.
         #   2. Its whole payment action is `issue_x402_challenge`, which calls
         #      the pure challenge builder.  No facilitator, no MPP control
-        #      plane, no database, no endpoint.
+        #      plane, no database, no endpoint, and no payment-policy lookup —
+        #      the accepted rails are resolved here, from this request's own
+        #      policy snapshot, and passed in.
         #
         # Route and method recognition come from the application's own routers
         # (`decide_early_challenge`), so an unknown path still reaches its 404
@@ -1453,7 +1693,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
         # exact endpoint payment policy, so a paid-looking URL that no policy
         # prices is never challenged.
         #
-        # A request that *does* carry payment material skips this entirely and
+        # A request that *does* present payment proof skips this entirely and
         # takes the unchanged path: FastAPI structural validation, then
         # request-only semantic validation, then the deferred gate, then the
         # endpoint.  The no-malformed-settlement invariant is untouched.
@@ -1464,22 +1704,63 @@ class MeteringMiddleware(BaseHTTPMiddleware):
             should_enforce_agent_pay
             and decision.econ_payment_required == 1
             and payment_rail == EARLY_CHALLENGE_RAIL
-            and not is_payment_bearing(request.headers)
+            and not presents_x402_payment_proof(request.headers)
         ):
             early_challenge = decide_early_challenge(
                 app=request.scope.get("app"),
                 scope=request.scope,
                 path=path,
                 method=method,
-                endpoint_policy=get_effective_endpoint_payment_policy(path, method),
+                endpoint_policy=get_effective_endpoint_payment_policy_from_config(
+                    policy_snapshot, path, method
+                ),
             )
 
-            if early_challenge.eligible:
+            if early_challenge.eligible and not resolved_price.usable_for_machine_payment:
+                # Fail closed.  A policy naming a pricing rule does not prove a
+                # usable price was resolved, and a payment-required resource
+                # must never publish a zero-amount challenge because its
+                # catalogue row was missing, inactive or unreachable.  Nothing
+                # is quoted, nothing is advertised as payable, and no rail is
+                # contacted.
+                logger.error(
+                    "%s — refusing to issue an x402 challenge for a resource whose "
+                    "price could not be resolved: request_id=%s path=%s method=%s "
+                    "pricing_rule_id=%s resolution=%s",
+                    PRICING_UNAVAILABLE_ERROR,
+                    request_id,
+                    path,
+                    method,
+                    economic_rule_name,
+                    resolved_price.resolution.value,
+                )
+                challenge_only_response = JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": PRICING_UNAVAILABLE_ERROR,
+                        "detail": PRICING_UNAVAILABLE_DETAIL,
+                        "request_id": request_id,
+                    },
+                )
+                _record_pricing_unavailable(
+                    gate_state,
+                    decision=decision,
+                    resolved_price=resolved_price,
+                    payment_method_header=payment_method_header,
+                )
+
+            elif early_challenge.eligible:
                 challenge = issue_x402_challenge(
                     path=path,
                     method=method,
                     amount_usd=unit_price_usd,
                     pricing_rule_id=decision.econ_pricing_rule_id or decision.log_pricing_rule_id,
+                    accepted_payment_methods=get_accepted_payment_methods(
+                        policy_snapshot,
+                        path,
+                        decision.econ_pricing_rule_id or decision.log_pricing_rule_id,
+                        method=method,
+                    ),
                     challenge_mode=challenge_mode_from_headers(request.headers),
                 )
 
@@ -1547,6 +1828,94 @@ class MeteringMiddleware(BaseHTTPMiddleware):
 
             if not (should_enforce_agent_pay and decision.econ_payment_required == 1):
                 return None
+
+            # ----------------------------------------------------------------
+            # Fail closed before anything can move money.
+            #
+            # Reached only after FastAPI's structural validation and the
+            # endpoint-local semantic validator have both passed, because the
+            # gate is invoked at the endpoint call boundary.  A malformed
+            # payment-bearing request is therefore still answered with its
+            # input error and never reaches either check below.
+            #
+            # 1. An unresolved or non-positive price.  A policy naming a
+            #    pricing rule does not prove a usable amount was resolved, and
+            #    verifying, settling or authorizing against zero would serve a
+            #    payment-required resource for free.
+            #
+            # 2. A payment-required request whose rail resolved to neither
+            #    x402 nor MPP — which happens when a caller declares an
+            #    unsupported `X-StockTrends-Payment-Method`.  Enforcement below
+            #    only runs for the two known rails, so such a request used to
+            #    fall through the gate and execute paid work unpaid.  There is
+            #    no rail to enforce, so there is nothing to serve.
+            # ----------------------------------------------------------------
+            if not resolved_price.usable_for_machine_payment:
+                logger.error(
+                    "%s — refusing payment enforcement for a resource whose price "
+                    "could not be resolved: request_id=%s path=%s method=%s "
+                    "pricing_rule_id=%s rail=%s resolution=%s",
+                    PRICING_UNAVAILABLE_ERROR,
+                    request_id,
+                    path,
+                    method,
+                    economic_rule_name,
+                    payment_rail,
+                    resolved_price.resolution.value,
+                )
+                _record_pricing_unavailable(
+                    gate_state,
+                    decision=decision,
+                    resolved_price=resolved_price,
+                    payment_method_header=payment_method_header,
+                )
+                return JSONResponse(
+                    status_code=503,
+                    content={
+                        "error": PRICING_UNAVAILABLE_ERROR,
+                        "detail": PRICING_UNAVAILABLE_DETAIL,
+                        "request_id": request_id,
+                    },
+                )
+
+            if payment_rail not in {"x402", "mpp"}:
+                logger.error(
+                    "%s — a payment-required request resolved to no enforceable "
+                    "rail: request_id=%s path=%s method=%s declared_method=%r",
+                    UNSUPPORTED_PAYMENT_RAIL_ERROR,
+                    request_id,
+                    path,
+                    method,
+                    payment_method_header,
+                )
+                gate_state.rejected = True
+                gate_state.accepted_methods = get_accepted_payment_methods(
+                    policy_snapshot,
+                    path,
+                    decision.econ_pricing_rule_id or decision.log_pricing_rule_id,
+                    method=method,
+                )
+                gate_state.event_error_code = UNSUPPORTED_PAYMENT_RAIL_ERROR
+                gate_state.event_notes = UNSUPPORTED_PAYMENT_RAIL_DETAIL
+                gate_state.econ_payment_fields = build_econ_payment_fields(
+                    payment_required=1,
+                    payment_status="rejected",
+                    payment_method_header=payment_method_header,
+                    payment_network_header=payment_network_header,
+                    payment_token_header=payment_token_header,
+                    payment_amount_header=payment_amount_header,
+                    payment_reference_header=payment_reference_header,
+                    decision=decision,
+                )
+                return JSONResponse(
+                    status_code=402,
+                    content={
+                        "error": UNSUPPORTED_PAYMENT_RAIL_ERROR,
+                        "detail": UNSUPPORTED_PAYMENT_RAIL_DETAIL,
+                        "accepted_payment_methods": gate_state.accepted_methods.split(","),
+                        "request_id": request_id,
+                    },
+                )
 
             local_enforcement_result = None
             if payment_rail in {"x402", "mpp"}:
@@ -1624,6 +1993,12 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                         payment_required_header=local_enforcement_result.payment_required_header,
                         pricing_rule_id=pricing_rule_for_headers,
                         amount_usd=unit_price_usd,
+                        accepted_payment_methods=get_accepted_payment_methods(
+                            policy_snapshot,
+                            path,
+                            pricing_rule_for_headers,
+                            method=method,
+                        ),
                         payment_network=local_enforcement_result.payment_network,
                         payment_token=local_enforcement_result.payment_token,
                     )
@@ -1643,6 +2018,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                     )
 
                 x402_rejection_methods = get_accepted_payment_methods(
+                    policy_snapshot,
                     path,
                     pricing_rule_for_headers,
                     method=method,
@@ -1792,6 +2168,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                         "request_id": request_id,
                     },
                     accepted_methods=get_accepted_payment_methods(
+                        policy_snapshot,
                         path,
                         pricing_rule_for_headers,
                         method=method,
@@ -1961,7 +2338,9 @@ class MeteringMiddleware(BaseHTTPMiddleware):
 
             pricing_rule_for_headers = decision.econ_pricing_rule_id or decision.log_pricing_rule_id
             payment_required_for_headers = bool(decision.econ_payment_required)
-            accepted_methods = get_accepted_payment_methods(path, pricing_rule_for_headers, method=method)
+            accepted_methods = get_accepted_payment_methods(
+                policy_snapshot, path, pricing_rule_for_headers, method=method
+            )
 
             if response is not None:
                 if gate_state.rejected:
@@ -1972,6 +2351,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                     accepted_methods = gate_state.accepted_methods
                 elif decision.econ_payment_required and is_x402_payment_method(normalized_payment_method):
                     accepted_methods = get_accepted_payment_methods(
+                        policy_snapshot,
                         path,
                         pricing_rule_for_headers,
                         method=method,
@@ -1994,46 +2374,12 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 if should_no_store_protected_paid_response(decision):
                     apply_payment_cache_headers(response)
 
-            event = build_request_event(
-                request_id=request_id,
-                environment="production",
-                api_key_id=api_key_id,
-                customer_id=customer_id,
-                subscription_id=subscription_id,
-                plan_code=plan_code,
-                actor_type=actor_type,
-                workflow_type=workflow_type,
-                agent_identifier=agent_identifier,
-                agent_registry_id=agent_registry_id,
-                path=path,
-                method=method,
-                query_string=query_string,
-                request=request,
-                status_code=status_code,
-                success=success,
-                latency_ms=latency_ms,
-                response=response,
-                decision=decision,
-                payment_rail=payment_rail,
-                payment_method=resolved_payment_method,
-                payment_network=payment_network_header,
-                payment_token=payment_token_header,
-                error_code=(
-                    caught_exception.__class__.__name__
-                    if caught_exception
-                    else gate_state.event_error_code
-                ),
-                notes=(
-                    str(caught_exception)
-                    if caught_exception
-                    else gate_state.event_notes
-                ),
-            )
-
-            try:
-                log_api_request_event(event)
-            except Exception as e:
-                logger.error("Metering request-log insert failed: %s", e, exc_info=True)
+            # The request event is deliberately NOT built here.  `is_billable`
+            # on that row must reflect the resolved payment outcome, and for the
+            # MPP rail that outcome is only known after the capture/void block
+            # below.  Constructing the event before capture recorded a captured
+            # request as pending collection and, worse, recorded every challenge
+            # as billable.  See the event/economics block after capture.
 
             # ------------------------------------------------------------------
             # MPP capture — must run after the downstream response is known and
@@ -2136,6 +2482,56 @@ class MeteringMiddleware(BaseHTTPMiddleware):
             # own meanings and are unaffected.
             if gate_state.collected and gate_state.collected_amount_usd is not None:
                 billed_amount_usd = gate_state.collected_amount_usd
+
+            # ------------------------------------------------------------------
+            # Request event — built here, with the payment outcome resolved.
+            #
+            # Ordering is load-bearing: `resolved_is_billable` reads whether a
+            # rail actually collected, and the MPP leg of that is decided by the
+            # capture/void block immediately above.  Economics logging follows,
+            # so both rows describe the same settled state of the request.
+            # ------------------------------------------------------------------
+            event = build_request_event(
+                request_id=request_id,
+                environment="production",
+                api_key_id=api_key_id,
+                customer_id=customer_id,
+                subscription_id=subscription_id,
+                plan_code=plan_code,
+                actor_type=actor_type,
+                workflow_type=workflow_type,
+                agent_identifier=agent_identifier,
+                agent_registry_id=agent_registry_id,
+                path=path,
+                method=method,
+                query_string=query_string,
+                request=request,
+                status_code=status_code,
+                success=success,
+                latency_ms=latency_ms,
+                response=response,
+                decision=decision,
+                is_billable=resolved_is_billable(decision, collected=gate_state.collected),
+                payment_rail=payment_rail,
+                payment_method=resolved_payment_method,
+                payment_network=payment_network_header,
+                payment_token=payment_token_header,
+                error_code=(
+                    caught_exception.__class__.__name__
+                    if caught_exception
+                    else gate_state.event_error_code
+                ),
+                notes=(
+                    str(caught_exception)
+                    if caught_exception
+                    else gate_state.event_notes
+                ),
+            )
+
+            try:
+                log_api_request_event(event)
+            except Exception as e:
+                logger.error("Metering request-log insert failed: %s", e, exc_info=True)
 
             if should_log_economics(decision):
                 payment_status = decision.econ_payment_status

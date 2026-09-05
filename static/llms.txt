@@ -351,10 +351,11 @@ Recommended order for discovery and integration:
 10. Construct a serviceable request
 
    Use the input schema from step 1 (or the canonical OpenAPI document) to
-   build a request the endpoint can actually answer. An unpaid probe returns
-   the 402 payment contract whether or not the request is complete, but once
-   you present a payment proof, deterministically invalid input is rejected
-   with a `400`/`422` input error and nothing is verified or settled.
+   build a request the endpoint can actually answer. An unpaid probe of an
+   eligible fixed-price resource returns the 402 payment contract whether or not
+   the request is complete, but once you present a payment proof,
+   deterministically invalid input is rejected with a `400`/`422` input error
+   and nothing is verified or settled.
 
 11. Start with a high-value premium endpoint:
    * `GET /agent/screener/top`
@@ -438,12 +439,22 @@ Typical pattern:
 6. Retry the same request with `PAYMENT-SIGNATURE` or compatibility `X-Payment` proof
 
 Important: a 402 challenge quotes a price and describes a resource; it moves no
-money. An unpaid request to a recognized fixed-price payable resource receives
-that challenge before its inputs are validated, so a bare probe of the canonical
-resource URL returns the full payment and Bazaar contract. It is still not how
-you discover which parameters an endpoint accepts — the manifest and the
-OpenAPI document describe the whole surface in one read, where a challenge
-describes one resource.
+money. An unpaid request to an *eligible recognized fixed-price* payable resource
+receives that challenge before its inputs are validated, so a bare probe of the
+canonical resource URL returns the full payment and Bazaar contract.
+
+Two documented classes behave differently, and each resource publishes which it
+is under `challenge_lifecycle` in `/.well-known/x402` and in the OpenAPI
+`x-stocktrends-payment` extension:
+
+* availability-gated resources (paid Intelligence artifacts) confirm the
+  artifact is serveable first, and may answer `404` or `503` instead of a
+  challenge;
+* parameterized resources have no bare canonical URL to probe.
+
+A challenge is still not how you discover which parameters an endpoint accepts
+— the manifest and the OpenAPI document describe the whole surface in one read,
+where a challenge describes one resource.
 
 Once you present a payment proof, a request with deterministically invalid input
 — a malformed `symbol_exchange`, a missing required parameter combination, an
