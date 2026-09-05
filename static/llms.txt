@@ -351,9 +351,11 @@ Recommended order for discovery and integration:
 10. Construct a serviceable request
 
    Use the input schema from step 1 (or the canonical OpenAPI document) to
-   build a request the endpoint can actually answer. Deterministically invalid
-   input is rejected with a `400`/`422` input error before any payment
-   challenge is issued, so a 402 is only reachable with a serviceable request.
+   build a request the endpoint can actually answer. An unpaid probe of an
+   eligible fixed-price resource returns the 402 payment contract whether or not
+   the request is complete, but once you present a payment proof,
+   deterministically invalid input is rejected with a `400`/`422` input error
+   and nothing is verified or settled.
 
 11. Start with a high-value premium endpoint:
    * `GET /agent/screener/top`
@@ -431,21 +433,39 @@ Typical pattern:
 
 1. Discover the resource and canonical safe request from `/.well-known/x402`
 2. Confirm the exact contract in `/v1/openapi.json` and current STC cost in `/v1/pricing/catalog`
-3. Call the premium endpoint with an otherwise-serviceable request
+3. Call the premium endpoint. On an eligible recognized fixed-price resource a
+   bare probe already returns the challenge; construct a serviceable request
+   because you are about to pay for it, not in order to be challenged
 4. Receive HTTP 402 with payment requirements
 5. Submit the required payment
-6. Retry the same request with `PAYMENT-SIGNATURE` or compatibility `X-Payment` proof
+6. Retry the same serviceable request with `PAYMENT-SIGNATURE` or compatibility
+   `X-Payment` proof
 
-Important: the 402 challenge is the final pre-payment surface for a request the
-endpoint could actually serve. It is not how you discover which parameters an
-endpoint accepts.
+Important: a 402 challenge quotes a price and describes a resource; it moves no
+money. An unpaid request to an *eligible recognized fixed-price* payable resource
+receives that challenge before its inputs are validated, so a bare probe of the
+canonical resource URL returns the full payment and Bazaar contract.
 
-A request with deterministically invalid input — a malformed `symbol_exchange`,
-a missing required parameter combination, an unsupported sort or exchange code,
-a semantically incomplete body — returns its input error (`400` or `422`)
-instead of a 402, because the API will not quote a price for a request it could
-never serve. The response still carries pricing context headers, so the price
-remains discoverable once the request is corrected.
+Two documented classes behave differently, and each resource publishes which it
+is under `challenge_lifecycle` in `/.well-known/x402` and in the OpenAPI
+`x-stocktrends-payment` extension:
+
+* availability-gated resources (paid Intelligence artifacts) confirm the
+  artifact is serveable first, and may answer `404` or `503` instead of a
+  challenge;
+* parameterized resources have no bare canonical URL to probe.
+
+A challenge is still not how you discover which parameters an endpoint accepts
+— the manifest and the OpenAPI document describe the whole surface in one read,
+where a challenge describes one resource.
+
+Once you present a payment proof, a request with deterministically invalid input
+— a malformed `symbol_exchange`, a missing required parameter combination, an
+unsupported sort or exchange code, a semantically incomplete body — returns its
+input error (`400` or `422`) instead of a 402, and nothing is verified, settled
+or executed: the API will not take money for a request it could never serve. The
+response still carries pricing context headers, so the price remains discoverable
+once the request is corrected.
 
 Relevant headers include:
 

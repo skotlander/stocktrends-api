@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+from middleware.metering import ResolvedPrice
 from pricing.classifier import NON_METERED_PATHS, classify_request
 
 # Symbols must match this pattern: clearly impossible ticker-like identifiers.
@@ -38,8 +39,8 @@ def _stub_runtime(monkeypatch):
     monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *a, **kw: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0"), Decimal("0")),
+        "resolve_request_pricing",
+        lambda *a, **kw: ResolvedPrice.priced(Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *a, **kw: None)
 
@@ -148,8 +149,8 @@ def test_proof_endpoint_request_log_is_called(monkeypatch):
     monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *a, **kw: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0"), Decimal("0")),
+        "resolve_request_pricing",
+        lambda *a, **kw: ResolvedPrice.priced(Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *a, **kw: None)
 
@@ -170,8 +171,8 @@ def test_proof_endpoint_economics_log_not_called(monkeypatch):
     monkeypatch.setattr(metering_module, "log_api_request_event", lambda *a, **kw: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *a, **kw: (Decimal("0"), Decimal("0")),
+        "resolve_request_pricing",
+        lambda *a, **kw: ResolvedPrice.priced(Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *a, **kw: None)
 

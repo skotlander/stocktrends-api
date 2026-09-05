@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+from middleware.metering import ResolvedPrice
 import pricing.classifier as classifier_module
 from payments.enforcement import PaymentEnforcementResult
 from payments.policy_provider import is_public_intelligence_path
@@ -94,8 +95,8 @@ def _stub_runtime_side_effects(monkeypatch, *, cost: Decimal = Decimal("0")):
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *args, **kwargs: (cost, cost),
+        "resolve_request_pricing",
+        lambda *args, **kwargs: ResolvedPrice.priced(cost, cost),
     )
 
 
@@ -172,8 +173,8 @@ def paid_subscription_client(monkeypatch, artifact_root):
     monkeypatch.setenv(STORE_ENV_VAR, str(artifact_root))
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda rule_name: (
+        "resolve_request_pricing",
+        lambda rule_name: ResolvedPrice.priced(
             cost_by_rule.get(rule_name, Decimal("0")),
             cost_by_rule.get(rule_name, Decimal("0")),
         ),

@@ -8,6 +8,7 @@ import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
 from api.routing import install_payment_execution_boundary
+from middleware.metering import ResolvedPrice
 
 
 def _stub_runtime_side_effects(monkeypatch):
@@ -15,8 +16,8 @@ def _stub_runtime_side_effects(monkeypatch):
     monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *args, **kwargs: (Decimal("0"), Decimal("0")),
+        "resolve_request_pricing",
+        lambda *args, **kwargs: ResolvedPrice.priced(Decimal(0), Decimal(0)),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *args, **kwargs: None)
 

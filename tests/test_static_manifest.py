@@ -673,9 +673,22 @@ def test_llms_txt_documents_the_corrected_x402_flow():
     """The narrative surface agrees with the machine-readable ones."""
     text = " ".join(LLMS_TXT.read_text(encoding="utf-8").split())
 
-    assert "otherwise-serviceable request" in text, (
-        "llms.txt no longer tells agents to construct a serviceable request "
-        "before expecting a 402"
+    # Deliberately NOT asserting "otherwise-serviceable request" any more: that
+    # phrase told agents a serviceable request is a precondition for the
+    # challenge, which stopped being true for eligible fixed-price resources at
+    # PR3.  What must survive is the reason to construct one — you are about to
+    # pay — and the class distinction.
+    assert "otherwise-serviceable" not in text, (
+        "llms.txt still implies a serviceable request is required before the "
+        "challenge; it is required before paying"
+    )
+    assert "not in order to be challenged" in text, (
+        "llms.txt no longer separates 'serviceable before paying' from "
+        "'serviceable before being challenged'"
+    )
+    assert "eligible recognized fixed-price resource" in text, (
+        "llms.txt states the relaxed challenge precondition without naming the "
+        "class it applies to"
     )
     assert "not how you discover which parameters an endpoint accepts" in text, (
         "llms.txt still presents the 402 challenge as the input-discovery "

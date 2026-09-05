@@ -917,9 +917,61 @@ def get_runtime_payment_policy_config(force_refresh: bool = False) -> RuntimePay
         return fetched_config
 
 
-def is_free_metered_path(path: str) -> bool:
-    config = get_runtime_payment_policy_config()
+# ---------------------------------------------------------------------------
+# Request-scoped policy snapshot
+#
+# Payment policy is fetched from a control plane and cached with a TTL, so two
+# reads inside one request can legitimately return two different snapshots.
+# That is fine for independent reads and unacceptable for a single payment
+# decision: a request could resolve its pricing rule and amount under snapshot
+# A and its accepted rails and eligibility under snapshot B, and emit one 402
+# describing a resource that never existed in either configuration.
+#
+# One request therefore binds exactly one snapshot, at the outermost layer that
+# consults payment policy (`ApiKeyMiddleware`), and every policy-dependent
+# decision downstream derives from that same object.  The `*_from_config`
+# helpers below exist so a caller can ask any policy question against a held
+# snapshot rather than against "whatever is current now".
+#
+# The convenience wrappers that fetch the current config are retained for
+# non-request callers (startup, discovery assembly, tests).  Request processing
+# must not use them.
+# ---------------------------------------------------------------------------
+
+#: `request.state` attribute carrying the snapshot bound to this request.
+REQUEST_POLICY_SNAPSHOT_ATTR = "payment_policy_snapshot"
+
+
+def payment_policy_snapshot_for_request(request_state) -> RuntimePaymentPolicyConfig:
+    """
+    The one payment-policy snapshot bound to this request.
+
+    Idempotent by construction: the first caller binds the snapshot, every later
+    caller receives the identical object.  `ApiKeyMiddleware` binds it before
+    its own agent-pay entry decision, and `MeteringMiddleware` reads the same
+    object, so authentication classification and payment enforcement cannot
+    disagree about which configuration governs the request.
+
+    Takes `request.state` rather than the request so this module keeps no
+    dependency on the web framework -- and so the module-level `request` name
+    (urllib) is not shadowed.
+    """
+    snapshot = getattr(request_state, REQUEST_POLICY_SNAPSHOT_ATTR, None)
+    if snapshot is None:
+        snapshot = get_runtime_payment_policy_config()
+        setattr(request_state, REQUEST_POLICY_SNAPSHOT_ATTR, snapshot)
+    return snapshot
+
+
+def is_free_metered_path_from_config(
+    config: RuntimePaymentPolicyConfig,
+    path: str,
+) -> bool:
     return path in config.free_metered_paths
+
+
+def is_free_metered_path(path: str) -> bool:
+    return is_free_metered_path_from_config(get_runtime_payment_policy_config(), path)
 
 
 def get_effective_endpoint_payment_policy(
@@ -996,38 +1048,67 @@ def payment_policy_contract_fingerprint(
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def get_allowed_payment_rails_for_path(
+def get_allowed_payment_rails_for_path_from_config(
+    config: RuntimePaymentPolicyConfig,
     path: str,
     method: str | None = None,
 ) -> tuple[str, ...] | None:
-    effective_policy = get_effective_endpoint_payment_policy(path, method)
+    effective_policy = get_effective_endpoint_payment_policy_from_config(config, path, method)
     if effective_policy is None:
         return None
     return effective_policy.allowed_rails
 
 
-def is_agent_pay_route(path: str, method: str | None = None) -> bool:
-    effective_policy = get_effective_endpoint_payment_policy(path, method)
+def get_allowed_payment_rails_for_path(
+    path: str,
+    method: str | None = None,
+) -> tuple[str, ...] | None:
+    return get_allowed_payment_rails_for_path_from_config(
+        get_runtime_payment_policy_config(), path, method
+    )
+
+
+def is_agent_pay_route_from_config(
+    config: RuntimePaymentPolicyConfig,
+    path: str,
+    method: str | None = None,
+) -> bool:
+    effective_policy = get_effective_endpoint_payment_policy_from_config(config, path, method)
     if effective_policy is not None:
         return bool(effective_policy.machine_payment_rails)
 
-    config = get_runtime_payment_policy_config()
     return any(path.startswith(prefix) for prefix in config.agent_pay_path_prefixes)
 
 
-def get_agent_pay_auth_bypass_methods(path: str, method: str | None = None) -> tuple[str, ...]:
-    effective_policy = get_effective_endpoint_payment_policy(path, method)
+def is_agent_pay_route(path: str, method: str | None = None) -> bool:
+    return is_agent_pay_route_from_config(
+        get_runtime_payment_policy_config(), path, method
+    )
+
+
+def get_agent_pay_auth_bypass_methods_from_config(
+    config: RuntimePaymentPolicyConfig,
+    path: str,
+    method: str | None = None,
+) -> tuple[str, ...]:
+    effective_policy = get_effective_endpoint_payment_policy_from_config(config, path, method)
     if effective_policy is not None:
         return effective_policy.machine_payment_rails
 
-    if not is_agent_pay_route(path, method):
+    if not is_agent_pay_route_from_config(config, path, method):
         return ()
 
-    config = get_runtime_payment_policy_config()
-    return tuple(method.lower() for method in config.agent_pay_auth_bypass_methods)
+    return tuple(rail.lower() for rail in config.agent_pay_auth_bypass_methods)
 
 
-def is_agent_pay_auth_candidate(
+def get_agent_pay_auth_bypass_methods(path: str, method: str | None = None) -> tuple[str, ...]:
+    return get_agent_pay_auth_bypass_methods_from_config(
+        get_runtime_payment_policy_config(), path, method
+    )
+
+
+def is_agent_pay_auth_candidate_from_config(
+    config: RuntimePaymentPolicyConfig,
     path: str,
     payment_method: str | None,
     agent_id: str | None,
@@ -1041,32 +1122,61 @@ def is_agent_pay_auth_candidate(
     if not normalized_method:
         return False
 
-    return normalized_method in set(get_agent_pay_auth_bypass_methods(path, method))
+    return normalized_method in set(
+        get_agent_pay_auth_bypass_methods_from_config(config, path, method)
+    )
 
 
-def is_agent_pay_enforcement_path(path: str, method: str | None = None) -> bool:
-    effective_policy = get_effective_endpoint_payment_policy(path, method)
+def is_agent_pay_auth_candidate(
+    path: str,
+    payment_method: str | None,
+    agent_id: str | None,
+    *,
+    method: str | None = None,
+) -> bool:
+    return is_agent_pay_auth_candidate_from_config(
+        get_runtime_payment_policy_config(),
+        path,
+        payment_method,
+        agent_id,
+        method=method,
+    )
+
+
+def is_agent_pay_enforcement_path_from_config(
+    config: RuntimePaymentPolicyConfig,
+    path: str,
+    method: str | None = None,
+) -> bool:
+    effective_policy = get_effective_endpoint_payment_policy_from_config(config, path, method)
     if effective_policy is not None:
         return bool(effective_policy.machine_payment_rails)
 
-    config = get_runtime_payment_policy_config()
     return any(path.startswith(prefix) for prefix in config.enforcement_path_prefixes)
 
 
-def get_accepted_payment_methods_for_path(
+def is_agent_pay_enforcement_path(path: str, method: str | None = None) -> bool:
+    return is_agent_pay_enforcement_path_from_config(
+        get_runtime_payment_policy_config(), path, method
+    )
+
+
+def get_accepted_payment_methods_for_path_from_config(
+    config: RuntimePaymentPolicyConfig,
     path: str,
     pricing_rule_id: str | None,
     *,
     method: str | None = None,
     enforced_payment_method: str | None = None,
 ) -> str:
-    config = get_runtime_payment_policy_config()
     normalized_method = (enforced_payment_method or "").strip().lower()
 
     if is_public_stocktrends_path(path) or is_public_intelligence_path(path):
         return config.accepted_payment_methods_default
 
-    endpoint_allowed_rails = get_allowed_payment_rails_for_path(path, method)
+    endpoint_allowed_rails = get_allowed_payment_rails_for_path_from_config(
+        config, path, method
+    )
 
     if endpoint_allowed_rails is not None:
         return ",".join(endpoint_allowed_rails) if endpoint_allowed_rails else config.accepted_payment_methods_default
@@ -1086,3 +1196,19 @@ def get_accepted_payment_methods_for_path(
         return config.accepted_payment_methods_subscription
 
     return config.accepted_payment_methods_default
+
+
+def get_accepted_payment_methods_for_path(
+    path: str,
+    pricing_rule_id: str | None,
+    *,
+    method: str | None = None,
+    enforced_payment_method: str | None = None,
+) -> str:
+    return get_accepted_payment_methods_for_path_from_config(
+        get_runtime_payment_policy_config(),
+        path,
+        pricing_rule_id,
+        method=method,
+        enforced_payment_method=enforced_payment_method,
+    )

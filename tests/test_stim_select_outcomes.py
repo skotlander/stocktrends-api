@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+from middleware.metering import ResolvedPrice
 import payments.policy_provider as policy_provider
 import pricing.classifier as classifier_module
 import routers.selections as selections_router
@@ -489,8 +490,8 @@ def client(monkeypatch, outcome_engine):
     monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *a, **kw: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *_args, **_kwargs: (Decimal("0"), Decimal("0")),
+        "resolve_request_pricing",
+        lambda *_args, **_kwargs: ResolvedPrice.priced(Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "_ENABLE_AGENT_PAY", False)
     monkeypatch.setattr(metering_module, "ENABLE_AGENT_PAY", False)

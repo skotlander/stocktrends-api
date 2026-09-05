@@ -4,9 +4,13 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Callable, Optional
 
+from payments.challenge import (
+    CHALLENGE_ERROR_CODE,
+    CHALLENGE_ERROR_DETAIL,
+    challenge_mode_from_headers,
+)
 from payments.x402 import (
     INSUFFICIENT_PAYMENT_AMOUNT_ERROR,
-    X402_CHALLENGE_MODE_HEADER,
     build_x402_challenge,
     build_x402_requirements,
     extract_payment_signature,
@@ -62,12 +66,7 @@ def enforce_x402_payment(
     replay_checker: Callable[[str], bool],
     **_kwargs,
 ) -> PaymentEnforcementResult:
-    challenge_mode_header = None
-    if headers is not None:
-        challenge_mode_header = (
-            headers.get(X402_CHALLENGE_MODE_HEADER)
-            or headers.get(X402_CHALLENGE_MODE_HEADER.lower())
-        )
+    challenge_mode_header = challenge_mode_from_headers(headers)
     current_payment_requirements = build_x402_requirements(
         path=path,
         amount_usd=amount_usd,
@@ -84,8 +83,8 @@ def enforce_x402_payment(
         )
         return PaymentEnforcementResult(
             outcome="challenge",
-            error_code="payment_required",
-            error_detail="x402 payment required",
+            error_code=CHALLENGE_ERROR_CODE,
+            error_detail=CHALLENGE_ERROR_DETAIL,
             challenge_body=challenge_body,
             payment_required_header=payment_required_header,
             payment_network=required_network,

@@ -16,6 +16,7 @@ from starlette.datastructures import Headers
 import main
 import middleware.api_key as api_key_module
 import middleware.metering as metering_module
+from middleware.metering import ResolvedPrice
 import metering.logger as metering_logger_module
 import payments.enforcement as enforcement_module
 import payments.mpp_client as mpp_client_module
@@ -48,6 +49,7 @@ from middleware.api_key import (
     is_truly_public_api_path,
 )
 from payments.mpp import MPP_PAYMENT_CHANNEL_ID_HEADERS, MPP_REQUIRED_HEADERS
+from payments.challenge import classify_early_challenge_route
 from payments.policy_provider import get_effective_endpoint_payment_policy
 from payments.x402 import (
     extract_payment_signature,
@@ -129,8 +131,8 @@ def _stub_request_logging(monkeypatch) -> None:
     monkeypatch.setattr(metering_module, "log_api_request_economics", lambda *_a, **_kw: None)
     monkeypatch.setattr(
         metering_module,
-        "resolve_economic_amounts",
-        lambda *_a, **_kw: (Decimal("0"), Decimal("0")),
+        "resolve_request_pricing",
+        lambda *_a, **_kw: ResolvedPrice.priced(Decimal("0"), Decimal("0")),
     )
     monkeypatch.setattr(api_key_module, "log_auth_failure_event", lambda *_a, **_kw: None)
 
@@ -174,7 +176,21 @@ def test_well_known_aliases_are_anonymous_equivalent_and_canonical(monkeypatch):
     assert manifest["schema"] == DISCOVERY_SCHEMA
     assert manifest["canonical_url"] == CANONICAL_DISCOVERY_URL
     assert manifest["service"]["openapi_url"] == "https://api.stocktrends.com/v1/openapi.json"
-    assert manifest["request_lifecycle"]["serviceable_request_required_before_challenge"] is True
+    # PR3: challenge issuance and payment execution are separate halves, and
+    # only the second requires a serviceable request.  The relaxed precondition
+    # is published with its scope named rather than as a bare global boolean,
+    # because availability-gated and parameterized resources are real
+    # exceptions — see `test_pr3_lifecycle_parity.py` for the cross-surface
+    # contract.
+    lifecycle = manifest["request_lifecycle"]
+    assert lifecycle["serviceable_request_required_before_challenge_for_fixed_price"] is False
+    assert lifecycle["serviceable_request_required_before_settlement"] is True
+    assert "fixed-price" in lifecycle["serviceable_request_required_before_challenge_scope"]
+    assert lifecycle["per_resource_precondition_field"] == "resources[].challenge_lifecycle"
+    assert "serviceable_request_required_before_challenge" not in lifecycle, (
+        "an unqualified global boolean cannot state a precondition that has "
+        "documented exceptions"
+    )
     assert manifest["payment_architecture"]["pricing_unit"] == "STC"
 
 
@@ -454,7 +470,21 @@ def test_openapi_security_payment_extensions_and_safe_examples_agree_with_runtim
                 payment = operation["x-stocktrends-payment"]
                 assert payment["supported_rails"] == list(policy.allowed_rails)
                 assert payment["pricing_rule_id"] == policy.pricing_rule_id
-                assert payment["serviceable_request_required_before_challenge"] is True
+                # Per-operation since PR3, and derived from the same
+                # early-challenge classifier the request path uses, so the
+                # published precondition cannot drift from the one actually
+                # applied.  Settlement still requires a serviceable request
+                # on every route.
+                assert payment["serviceable_request_required_before_settlement"] is True
+                expected_precondition = not classify_early_challenge_route(
+                    external_path,
+                    method.upper(),
+                    endpoint_policy=policy,
+                    route_template=external_path,
+                ).eligible
+                assert payment["serviceable_request_required_before_challenge"] is (
+                    expected_precondition
+                )
                 if "x402" in policy.machine_payment_rails:
                     for scheme_name in advertised_proof_schemes:
                         assert {scheme_name: []} in operation["security"]

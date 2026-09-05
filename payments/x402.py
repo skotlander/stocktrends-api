@@ -408,6 +408,20 @@ def _get_header(headers, canonical_name: str):
 
 
 def is_x402_payment_method(headers_or_payment_method) -> bool:
+    """
+    True when the caller is on the x402 rail — by declaration, hint, or proof.
+
+    Rail identification, deliberately broader than `has_x402_payment_proof` and
+    strictly separate from it.  Naming x402 in `X-StockTrends-Payment-Method`
+    selects the rail while paying nothing, and an `Authorization: x402 …` header
+    is an x402-intent hint that the verify/settle path never consumes as an
+    artifact.  Both belong here and neither is payment.
+
+    Use this to decide *which rail* a request is on.  Use
+    `has_x402_payment_proof` to decide whether it has actually presented an
+    authorization artifact.  Conflating the two is what let an unpaid caller
+    suppress the challenge it needed.
+    """
     if headers_or_payment_method is None:
         return False
 
@@ -419,32 +433,106 @@ def is_x402_payment_method(headers_or_payment_method) -> bool:
     if isinstance(payment_method, str) and payment_method.strip().lower() == "x402":
         return True
 
-    if any(_get_header(headers, name) for name in x402_contract.X402_PROOF_HEADERS):
+    if has_x402_payment_proof(headers):
         return True
 
-    auth = headers.get("authorization", "")
-    if isinstance(auth, str) and auth.lower().startswith("x402"):
-        return True
-
-    return False
+    # Rail hint only.  Retained because it predates PR3 and identifies the rail;
+    # it is emphatically not routed through the proof predicate.
+    auth = _get_header(headers, "Authorization") or ""
+    return isinstance(auth, str) and auth.strip().lower().startswith("x402")
 
 
 def has_payment_signature(headers) -> bool:
-    if headers is None:
-        return False
-    return any(_get_header(headers, name) for name in x402_contract.X402_PROOF_HEADERS)
+    """
+    True when a request carries an artifact the facilitator path can actually use.
+
+    Defined as "extraction yields something", never as raw header truthiness.
+    The two are not the same: a header present but blank is truthy while
+    `extract_payment_signature` normalizes it away, and that gap was a second
+    definition of "payment presented" — one that classified a whitespace-only
+    `X-Payment` as payment-bearing, suppressed the early challenge, and answered
+    a bare canonical probe with an input error while no consumable artifact
+    existed anywhere in the request.
+
+    Deriving it from the extractor makes the two agree by construction rather
+    than by both being maintained correctly.
+    """
+    return extract_payment_signature(headers) is not None
+
+
+def has_x402_payment_proof(headers) -> bool:
+    """
+    True when the request presents an x402 payment artifact this system accepts.
+
+    The canonical, single definition of "this caller has presented payment", and
+    deliberately nothing more than `has_payment_signature`: the carrier set is
+    exactly the published `X402_PROOF_HEADERS` contract, which is what
+    `enforce_x402_payment` gates on, and the value must survive the same
+    normalization `extract_payment_signature` applies before handing the
+    artifact to the facilitator.  Presence and extractability are therefore one
+    question, not two — a blank carrier is no artifact at all.
+
+    The set must not be wider than what verify/settle can actually consume.  An
+    earlier revision also accepted `Authorization: x402 …`, which no part of the
+    enforcement path parses as an artifact and which the published contract does
+    not advertise.  The result was two definitions of proof: a caller sending
+    that header alone was classified payment-bearing by the early-challenge
+    guard, skipped the challenge, and received an application input error for a
+    bare canonical probe — the exact failure PR3 exists to remove — while
+    enforcement would have treated the very same request as unpaid.
+    `Authorization: x402` remains a rail *hint* in `is_x402_payment_method`;
+    rail identification is not payment.
+
+    Descriptive Stock Trends payment headers — network, token, amount,
+    reference, channel id — are likewise not proof: a caller can state what it
+    intends to pay with while holding no authorization at all, and that caller
+    is precisely the one that needs the challenge.
+    `X-StockTrends-Payment-Method` is a rail declaration, not payment.
+
+    Any layer asking "has this caller presented payment?" must call this rather
+    than assembling a second header list of its own.  Widening it is a change to
+    the published proof contract and must be made in
+    `payments.x402_contract.X402_PROOF_HEADERS`, so discovery, OpenAPI, CORS,
+    enforcement and this predicate move together.
+    """
+    return has_payment_signature(headers)
 
 
 def extract_payment_signature(headers) -> Optional[str]:
+    """
+    The x402 artifact this request presents, normalized, or `None`.
+
+    The single definition of both *whether* an artifact was presented and *what*
+    the facilitator receives.  `has_payment_signature`, `has_x402_payment_proof`
+    and the early-challenge guard all resolve to this function, so there is one
+    normalization and no way for presence and extraction to disagree.
+
+    Normalization is `str.strip()`, which removes every character Python
+    considers whitespace — ASCII spaces and tabs, and Unicode whitespace such as
+    NBSP where the HTTP stack lets it through.  A carrier that normalizes to
+    nothing is *not* an artifact: the caller is unpaid and needs the challenge.
+
+    A non-blank value that happens to be malformed IS an artifact.  It takes the
+    payment-bearing path and is rejected later as an invalid payment, which is a
+    different outcome from having presented nothing at all — and deliberately
+    so.
+
+    Carriers are tried in `X402_PROOF_HEADERS` order and a blank one does not
+    stop the search, so a request with a blank `PAYMENT-SIGNATURE` and a real
+    `X-Payment` still resolves to the real artifact.
+    """
     if headers is None:
         return None
 
     for header_name in x402_contract.X402_PROOF_HEADERS:
         value = _get_header(headers, header_name)
-        if value:
-            value = value.strip()
-            if value:
-                return value
+        if not isinstance(value, str):
+            # Only a string can be normalized into an artifact.  Skipping keeps
+            # presence and extraction identical for every possible input.
+            continue
+        normalized = value.strip()
+        if normalized:
+            return normalized
 
     return None
 

@@ -717,15 +717,25 @@ def test_invalid_request_on_mpp_never_authorizes(payment_harness, counted_engine
     assert payment_harness.mpp.void_count == 0
 
 
-def test_invalid_unpaid_request_is_answered_not_challenged(
+def test_invalid_unpaid_request_is_challenged_before_validation(
     payment_harness, counted_engines
 ):
+    """
+    PR3: an unpaid probe of a challengeable fixed-price resource is challenged.
+
+    The semantic validator is not weakened by this — it still guards the paid
+    path, which is what the rest of this file exercises.  It is simply not
+    reached, because a request presenting no payment does not need validating
+    to be told what the resource costs and what it requires.  Nothing moves:
+    the same no-rail, no-query assertions apply as to any rejection here.
+    """
     response = payment_harness.client.get(
         _REPRESENTATIVE_INVALID, headers=unpaid_headers()
     )
 
-    assert response.status_code == 400
-    assert "payment-required" not in response.headers
+    assert response.status_code == 402
+    assert "payment-required" in response.headers
+    assert response.json()["error"] == "payment_required"
     assert_rejected_before_payment(payment_harness, counted_engines)
 
 
