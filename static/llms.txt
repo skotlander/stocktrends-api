@@ -152,7 +152,7 @@ https://developer.stocktrends.com/mpp
 * `GET /market/regime/latest`
   Current market regime classification
 * `GET /market/regime/history`
-  Historical weekly market regime classification
+  Recent weekly market regime classification. Returns at most 52 weekly observations, most recent eligible weeks first. `start_date` raises the earliest eligible week; it does not select a window, there is no end bound, and there is no backward pagination. It covers recent regime history, not an arbitrary historical period.
 * `GET /market/regime/forecast`
   Forward-looking market regime forecast
 
@@ -199,7 +199,7 @@ Paid guidance and research routes check artifact availability before any subscri
   Secondary explanatory entrypoint. Dataset structure, indicator definitions, endpoint groups, and AI-oriented context.
 
 * `GET /ai/proof/market-edge`
-  Free, non-metered, no auth required. Returns a static synthetic demonstration of Stock Trends signal structure, field schemas, and value proposition. All instrument data is fictional. Use this to confirm field names (trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag) and RSI baseline semantics (baseline 100, not traditional Wilder RSI) before purchasing access.
+  Free, non-metered, no auth required. Returns a static synthetic illustration of Stock Trends response structure and field schemas. All instrument data is fictional. Use this to confirm field names (trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag) and RSI baseline semantics (baseline 100, not traditional Wilder RSI). It measures nothing: not empirical evidence, not realized outcomes, and not predictive or investment performance.
 
 ### Planning Helpers
 
@@ -313,7 +313,7 @@ Omitting `exchange` on `GET /breadth/sector/history` returns breadth aggregated 
 * `GET /workflows`
   Public workflow registry. Use to choose task-level strategy, endpoint sequence, per-step pricing_rule_id, live STC costs, required inputs, safe examples, output summaries, supported rails, and decision guidance.
 
-Workflow `historical_signal_validation` ("Historical Signal Validation and Model Integration Review") assembles the Stock Trends side of a historical evaluation: bounded point-in-time observations across the instrument, cross-sectional, market-regime and inference layers, plus the semantics and published evidence needed to interpret them. The API supplies the Stock Trends observations, their interpretation semantics, the applicable evidence, and `weekdate` as the alignment key. The external researcher performs the research-period definition, the target and horizon definition, the join, point-in-time and look-ahead discipline, the baseline definition, the incremental-contribution measurement, the regime-stability analysis, the in-sample/out-of-sample design, and the recurring-integration decision. The API does not perform training, feature engineering, external joins, backtesting, statistical testing, or causal validation. A completed evaluation is the success condition; a positive result is not asserted or implied.
+Workflow `historical_signal_validation` ("Historical Signal Validation and Model Integration Review") assembles the Stock Trends side of a historical evaluation: bounded point-in-time observations across the instrument, cross-sectional, market-regime and inference layers, plus the semantics and published evidence needed to interpret them. The API supplies the Stock Trends observations, their interpretation semantics, the applicable evidence, and `weekdate` as the alignment key. The regime-history step is optional: `GET /market/regime/history` returns at most 52 recent eligible weeks and cannot select an arbitrary historical window, so it may not overlap a deep historical research interval. Where it does not, regime segmentation for that period is researcher-supplied work. The external researcher performs the research-period definition, the target and horizon definition, the join, point-in-time and look-ahead discipline, the baseline definition, the incremental-contribution measurement, the regime-stability analysis, the in-sample/out-of-sample design, and the recurring-integration decision. The API does not perform training, feature engineering, external joins, backtesting, statistical testing, or causal validation. A completed evaluation is the success condition; a positive result is not asserted or implied.
 
 ---
 
@@ -328,7 +328,7 @@ Recommended order for discovery and integration:
    Task and tool discovery. Use this for workflow-oriented capability selection.
 
 3. `GET /ai/proof/market-edge`
-   No auth required. Preview synthetic signal structure, confirm field schemas (trend codes, RSI baseline 100, vol_tag values), and understand the value proposition before purchasing access.
+   No auth required. Inspect synthetic response structure and confirm field schemas (trend codes, RSI baseline 100, vol_tag values). This is an illustration of shape, not evidence of usefulness.
 
 4. `GET /ai/context`
    Secondary explanatory entrypoint. Understand dataset structure, terminology, indicator logic, and endpoint groups.
@@ -620,7 +620,7 @@ Agents should:
 * Prefer structured API endpoints over scraping
 * Begin with `/ai/tools` for primary machine-readable discovery; use `/ai/context` for schema grounding and dataset context
 * Use `/meta/inference` before interpreting inference outputs; it defines provider identity, horizon, distribution, confidence, evidence, uncertainty, explanation, signal source, and auditability concepts
-* Call `/ai/proof/market-edge` (no auth) before purchasing access — confirms field names, trend codes, and RSI baseline semantics without cost
+* Call `/ai/proof/market-edge` (no auth) to confirm field names, trend codes, and RSI baseline semantics without cost. It is a static synthetic illustration of response structure, not evidence
 * The Stock Trends RSI is a relative performance ratio vs the S&P 500 benchmark (baseline 100), not the traditional Wilder RSI oscillator
 * STIM (Stock Trends Inference Model) produces probabilistic forward return distributions — it is not a momentum indicator
 * Treat ST-IM as the current baseline inference provider; future Causal AI providers should fit the same cognition contract

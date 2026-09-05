@@ -1061,11 +1061,23 @@
         "confirmation_endpoints": ["/v1/breadth/sector/latest", "/v1/leadership/summary/latest"]
       },
       "title": "Market Regime History",
-      "description": "Returns a historical sequence of weekly market regime snapshots, most recent first, using the same classification logic as /market/regime/latest. Useful for regime transition analysis. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns a historical sequence of weekly market regime snapshots, most recent first, using the same classification logic as /market/regime/latest. Returns at most 52 weekly observations; start_date raises the earliest eligible week rather than selecting a window, and there is no end bound or backward pagination, so this covers recent regime history rather than an arbitrary historical period. Useful for recent regime transition analysis. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/market/regime/history",
       "auth_required": true,
       "category": "market",
+      "parameters": [
+        {"name": "limit", "in": "query", "input_location": "query", "parameter_source": "query", "type": "integer", "required": false, "default": 12, "minimum": 1, "maximum": 52, "description": "Number of weekly regime observations to return. Default 12, maximum 52."},
+        {"name": "start_date", "in": "query", "input_location": "query", "parameter_source": "query", "type": "string", "format": "date", "required": false, "example": "2025-01-03", "description": "Optional earliest eligible weekdate in YYYY-MM-DD format. It raises the earliest week the endpoint will consider; it does not move a window backwards."}
+      ],
+      "coverage_semantics": {
+        "max_observations": 52,
+        "ordering": "most_recent_eligible_weeks_first",
+        "start_date_meaning": "earliest eligible weekdate, not the start of a selected window",
+        "has_end_bound": false,
+        "supports_backward_pagination": false,
+        "note": "Returns the most recent eligible weeks up to the limit. This endpoint does not select an arbitrary historical window and may not overlap a deep historical research interval."
+      },
       "pricing_rule_id": "market_regime_history",
       "stc_cost": null,
       "estimated_usd_cost": null,
@@ -1357,7 +1369,7 @@
   ],
   "usage_guidance": [
     "Start with /.well-known/x402 for payable-resource discovery, then use /v1/ai/tools for task and tool discovery.",
-    "Call /v1/ai/proof/market-edge (no auth) to preview signal field structure before purchasing access.",
+    "Call /v1/ai/proof/market-edge (no auth) to inspect response structure and confirm field schemas. It returns a static synthetic body and is an illustration, not evidence of usefulness.",
     "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
     "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
     "Use /v1/openapi.json to verify exact parameter locations before constructing calls.",

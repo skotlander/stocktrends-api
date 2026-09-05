@@ -205,16 +205,19 @@ _TOOL_TEMPLATES = [
     },
     {
         "name": "ai_proof_market_edge",
-        "title": "Proof of Value - Market Edge",
+        "title": "Market Context - Static Schema Illustration",
         "description": (
-            "Free synthetic-only planning helper. Shows Stock Trends signal fields, trend codes, "
-            "RSI baseline semantics, and agent workflow value without exposing paid market data."
+            "Free synthetic-only schema reference. Shows Stock Trends signal fields, trend codes, "
+            "RSI baseline semantics, and how the context layers compose in a response, without "
+            "exposing paid market data. It measures nothing: not empirical evidence, not realized "
+            "outcomes, and not predictive or investment performance."
         ),
         "endpoint": "/v1/ai/proof/market-edge",
         "method": "GET",
         "category": "discovery",
+        "classification": "illustrative_capability_example",
         "input_schema": {"type": "object", "properties": {}, "required": []},
-        "output_summary": "Synthetic signal example and next-step payment guidance.",
+        "output_summary": "Synthetic response-structure example and access-mechanics reference.",
     },
     {
         "name": "pricing_metadata",
@@ -1698,7 +1701,7 @@ def ai_context():
             "Start with /.well-known/x402 for payable-resource discovery, then use /v1/ai/tools for task and tool discovery.",
             "Use /v1/ai/context as the secondary explanatory endpoint for dataset and endpoint-family context.",
             "Before deciding whether paid Stock Trends information is worth acquiring for a task, follow acquisition_evaluation_guidance: inspect the relevant capability, interpretation, evidence, and pricing resources, keep those categories separate, and decide from what was actually inspected.",
-            "Before calling premium endpoints, call /v1/ai/proof/market-edge (no auth required) to inspect signal structure and confirm field schemas before purchasing access.",
+            "Use /v1/ai/proof/market-edge (no auth required) to inspect response structure and confirm field schemas. It returns a static synthetic body and is an illustration, not evidence of usefulness.",
             "Use /v1/docs and /v1/openapi.json for exact request and response contracts.",
             "Use /v1/workflows to select a market-research strategy and endpoint sequence.",
             "Use planning helpers (/v1/cost-estimate, /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/inference, /v1/meta/stim, /v1/meta/stwr, /v1/leadership/definitions) to resolve symbols, estimate costs, and understand metadata before paid calls.",
@@ -1853,9 +1856,23 @@ def ai_tools():
         },
         "augmentation_role": SERVICE_AUGMENTATION_ROLE,
         "recommended_first_call": {
+            # Framed procedurally. This says what the endpoint does and where it sits
+            # in the sequence; it does not rank paid endpoints by worth, and the
+            # discovery surfaces that come first are named below.
             "endpoint": "/v1/agent/screener/top",
             "method": "GET",
-            "reason": "Returns top-ranked actionable screener results — highest immediate value for agent portfolio and signal workflows.",
+            "reason": (
+                "A common first paid call once a task has been chosen: it returns ranked "
+                "Stock Trends signal candidates that downstream symbol, decision and "
+                "portfolio steps consume. Whether it suits a given task is for the caller "
+                "to determine from the resources named in acquisition_evaluation_guidance."
+            ),
+            "read_first": [
+                "/.well-known/x402",
+                "/v1/ai/tools",
+                "/v1/workflows",
+                "/v1/pricing/catalog",
+            ],
             "auth_required": True,
             "supported_rails": ["subscription", "x402", "mpp"],
             "expected_flow": [
@@ -1949,36 +1966,49 @@ def ai_tools():
             },
         },
         "agent_conversion_path": {
+            # Key name retained because clients pin this response shape. Its value is
+            # access and discovery mechanics — the order in which public surfaces are
+            # read and how the rails work — not a funnel toward a purchase.
+            "content_type": "access_and_discovery_mechanics",
+            # Key retained for response-shape compatibility; the endpoint it names is
+            # a schema illustration, not proof of anything.
             "proof_endpoint": "/v1/ai/proof/market-edge",
-            "proof_description": (
-                "Free, non-metered. Demonstrates signal structure and value proposition "
-                "without requiring payment or authentication."
+            "schema_illustration_endpoint": "/v1/ai/proof/market-edge",
+            "schema_illustration_description": (
+                "Free, non-metered. Returns a static synthetic body illustrating response "
+                "structure and field semantics. It is an illustration, not evidence: it "
+                "measures no outcome and demonstrates no usefulness."
             ),
             "conversion_steps": [
                 {
                     "step": 1,
-                    "call": "GET /v1/ai/proof/market-edge",
-                    "note": "No auth needed. See signal structure and value proposition.",
+                    "call": "GET /.well-known/x402",
+                    "note": "Canonical payable-resource discovery. Public, non-metered.",
                 },
                 {
                     "step": 2,
+                    "call": "GET /v1/ai/proof/market-edge",
+                    "note": "No auth needed. Inspect response structure and confirm field schemas.",
+                },
+                {
+                    "step": 3,
                     "call": "GET /v1/workflows",
                     "note": "Choose a strategy and endpoint sequence for the research task.",
                 },
                 {
-                    "step": 3,
+                    "step": 4,
                     "call": "GET /v1/pricing/catalog",
                     "note": "Resolve live STC costs for target endpoints.",
                 },
                 {
-                    "step": 4,
+                    "step": 5,
                     "call": "GET /v1/pricing",
                     "note": "Inspect payment rails, identity headers, and accepted payment method guidance.",
                 },
                 {
-                    "step": 5,
+                    "step": 6,
                     "call": "GET /v1/agent/screener/top",
-                    "note": "First premium call. Supports subscription, x402, mpp.",
+                    "note": "A paid call, once a task has been chosen. Supports subscription, x402, mpp.",
                 },
             ],
             "payment_methods_supported": ["subscription", "x402", "mpp"],

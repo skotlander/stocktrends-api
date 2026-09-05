@@ -27,6 +27,7 @@ from support.payment_harness import x402_headers
 # Module stubs for sqlalchemy/db/etc. are provided by tests/conftest.py.
 import main
 import routers.market as market_router
+from discovery.endpoint_metadata import build_endpoint_preview
 from discovery.provenance import evidence_map
 from discovery.x402_discovery import build_x402_discovery
 from payments import policy_provider
@@ -627,32 +628,80 @@ def test_indicators_history_remains_mandatory_and_discloses_its_bounds(workflow)
 # Finding 7 — workflow pricing resolved against the real policy surface
 # ===========================================================================
 
-def _runtime_pricing_rule_ids() -> set[str]:
+def _runtime_rule_by_route() -> dict[tuple[str, str], str]:
     """
-    Rule ids the runtime payment policy actually governs.
+    The pricing rule runtime policy governs for each exact (method, path).
 
-    Deliberately not derived from the workflow registry: building the cost map
-    from the workflow's own ids would make the assertion true by construction.
+    Keyed by route, not flattened to a set of ids: "this id exists somewhere"
+    would pass even when a step is priced against a different endpoint's rule.
+    Built from payments.policy_provider, never from the workflow under test.
     """
     config = policy_provider.get_runtime_payment_policy_config()
     return {
-        policy.pricing_rule_id
+        (policy.method.upper(), policy.path_pattern): policy.pricing_rule_id
         for policy in config.endpoint_payment_policies
         if policy.pricing_rule_id
     }
 
 
-def test_every_workflow_pricing_rule_exists_in_the_runtime_policy():
-    runtime_rules = _runtime_pricing_rule_ids()
-    assert runtime_rules, "runtime payment policy exposed no pricing rules"
+def _runtime_pricing_rule_ids() -> set[str]:
+    return set(_runtime_rule_by_route().values())
 
-    unknown = {
-        (w["workflow_id"], step["pricing_rule_id"])
-        for w in WORKFLOW_REGISTRY
-        for step in w["steps"]
-        if step.get("pricing_rule_id") and step["pricing_rule_id"] not in runtime_rules
-    }
-    assert not unknown, f"workflow steps reference rules the runtime does not govern: {sorted(unknown)}"
+
+def test_every_priced_workflow_step_matches_its_routes_runtime_rule():
+    """
+    Each priced step must carry the rule runtime policy governs for that exact
+    (method, path).
+
+    This fails on a nonexistent rule id and equally on a real id borrowed from
+    another endpoint — the second is the dangerous case, because the workflow
+    would quote and reason about the wrong price while every id still resolves.
+    """
+    by_route = _runtime_rule_by_route()
+    assert by_route, "runtime payment policy exposed no pricing rules"
+
+    mismatches: list[str] = []
+    checked = 0
+    for workflow in WORKFLOW_REGISTRY:
+        for step in workflow["steps"]:
+            rule_id = step.get("pricing_rule_id")
+            if not rule_id:
+                continue
+            method, path = step["endpoint"].split(" ", 1)
+            expected = by_route.get((method.upper(), path))
+            checked += 1
+            if expected is None:
+                mismatches.append(
+                    f"{workflow['workflow_id']}/{step['step_id']}: "
+                    f"{step['endpoint']} is not payment-governed at runtime"
+                )
+            elif expected != rule_id:
+                mismatches.append(
+                    f"{workflow['workflow_id']}/{step['step_id']}: "
+                    f"{step['endpoint']} declares {rule_id!r}, runtime governs it "
+                    f"with {expected!r}"
+                )
+
+    assert checked >= 15, f"only {checked} priced steps were checked"
+    assert not mismatches, "workflow pricing does not match runtime policy:\n" + "\n".join(mismatches)
+
+
+def test_route_exact_pricing_check_rejects_a_borrowed_but_valid_rule():
+    """
+    Positive control for the test above.
+
+    `prices_history_paid` is a real, active rule — for a different endpoint. A
+    check that only asked "does this id exist?" would accept it.
+    """
+    by_route = _runtime_rule_by_route()
+    borrowed = by_route[("GET", "/v1/prices/history")]
+    governed = by_route[("GET", "/v1/indicators/history")]
+    assert borrowed != governed
+
+    # It is a genuinely valid id...
+    assert borrowed in _runtime_pricing_rule_ids()
+    # ...and still wrong for this route, which is what the route-exact check sees.
+    assert by_route[("GET", "/v1/indicators/history")] != borrowed
 
 
 def test_workflow_costs_resolve_from_an_independently_built_runtime_map(monkeypatch):
@@ -693,3 +742,242 @@ def test_registry_integrity_fails_when_a_rule_leaves_the_runtime_policy(monkeypa
         workflows_router.get_workflows()
     assert excinfo.value.status_code == 500
     assert "Registry integrity error" in str(excinfo.value.detail)
+
+# ===========================================================================
+# Re-review finding 1 — stale persuasion in *discovery*, not just the route body
+# ===========================================================================
+
+# The route body was neutralized in the previous pass while the surfaces that
+# describe it were not, so an agent reading /v1/ai/tools still met "Proof of
+# Value" and "highest immediate value". These phrases are checked across the
+# whole live manifest and both static artifacts.
+DISCOVERY_PERSUASION = (
+    "proof of value",
+    "proof-of-value",
+    "value proposition",
+    "agent workflow value",
+    "highest immediate value",
+    "highest value",
+    "before purchasing access",
+    "conversion prompt",
+    "extract signal edge",
+    "signal edge",
+    "actionable signals",
+)
+
+
+def _static_tools_text() -> str:
+    with open("static/tools.json", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def _static_llms_text() -> str:
+    with open("static/llms.txt", encoding="utf-8") as handle:
+        return handle.read()
+
+
+def test_complete_live_ai_tools_response_carries_no_persuasion():
+    """
+    The whole manifest, not the market-edge tool entry alone.
+
+    Covers the tool title and description, recommended_first_call, the retained
+    conversion-path field, top-level notes and onboarding guidance in one sweep,
+    because that is how an agent actually reads it.
+    """
+    corpus = json.dumps(ai_tools()).lower()
+    hits = [phrase for phrase in DISCOVERY_PERSUASION if phrase in corpus]
+    assert not hits, f"/v1/ai/tools carries persuasive language: {hits}"
+
+
+def test_live_ai_context_carries_no_persuasion():
+    corpus = json.dumps(ai_context()).lower()
+    hits = [phrase for phrase in DISCOVERY_PERSUASION if phrase in corpus]
+    assert not hits, f"/v1/ai/context carries persuasive language: {hits}"
+
+
+@pytest.mark.parametrize(
+    "name,loader", [("static/tools.json", _static_tools_text), ("static/llms.txt", _static_llms_text)]
+)
+def test_static_artifacts_carry_no_persuasion(name, loader):
+    corpus = loader().lower()
+    hits = [phrase for phrase in DISCOVERY_PERSUASION if phrase in corpus]
+    assert not hits, f"{name} carries persuasive language: {hits}"
+
+
+def test_discovery_persuasion_check_has_a_positive_control():
+    planted = (
+        "Proof of Value - Market Edge. Understand the value proposition and agent "
+        "workflow value before purchasing access; returns the highest immediate value "
+        "actionable signals."
+    ).lower()
+    hits = [phrase for phrase in DISCOVERY_PERSUASION if phrase in planted]
+    assert len(hits) >= 5, f"discovery denylist failed to fire: {hits}"
+
+
+def test_market_edge_tool_entry_is_described_as_an_illustration():
+    """Neutral must still be informative: the entry says what it does show."""
+    tool = next(t for t in ai_tools()["tools"] if t["endpoint"] == PROOF_PATH)
+    assert tool["classification"] == "illustrative_capability_example"
+    description = tool["description"].lower()
+    assert "schema" in description or "structure" in description
+    for phrase in ("not empirical evidence", "not realized outcomes", "not predictive"):
+        assert phrase in description
+
+
+def test_recommended_first_call_is_framed_procedurally():
+    """
+    A first call may be recommended for what it does, never for being worth most.
+    """
+    rfc = ai_tools()["recommended_first_call"]
+    reason = rfc["reason"].lower()
+    for phrase in ("highest", "best value", "most valuable", "greatest"):
+        assert phrase not in reason, f"recommended_first_call ranks by worth: {phrase!r}"
+    # It says what the endpoint returns, and defers suitability to the caller.
+    assert "returns" in reason
+    assert "for the caller to determine" in reason
+    # And it names the public discovery surfaces that come first.
+    assert "/.well-known/x402" in rfc["read_first"]
+
+
+def test_conversion_path_field_is_retained_but_neutral():
+    """
+    The key is pinned by an existing contract; its value must not be a funnel.
+    """
+    acp = ai_tools()["agent_conversion_path"]
+    assert acp["proof_endpoint"] == PROOF_PATH, "pinned compatibility key was dropped"
+    assert acp["content_type"] == "access_and_discovery_mechanics"
+    described = acp["schema_illustration_description"].lower()
+    assert "illustration, not evidence" in described
+
+
+# ===========================================================================
+# Re-review finding 2 — the static fallback must state the real regime contract
+# ===========================================================================
+
+def _static_tool(path: str) -> dict:
+    with open("static/tools.json", encoding="utf-8") as handle:
+        for tool in json.load(handle)["tools"]:
+            if tool["path"] == path:
+                return tool
+    raise AssertionError(f"{path} missing from static/tools.json")
+
+
+def test_static_market_regime_entry_requires_the_real_parameters():
+    """
+    Required, not checked-if-present.
+
+    An agent that can only reach the static fallback has to learn the same
+    contract the runtime enforces, or it will construct a request the endpoint
+    silently ignores.
+    """
+    tool = _static_tool("/market/regime/history")
+    params = {p["name"]: p for p in tool.get("parameters", [])}
+
+    assert "start_date" in params, "static entry omits start_date"
+    assert "start" not in params, "static entry carries the stale `start` name"
+
+    assert params["limit"]["default"] == 12
+    assert params["limit"]["maximum"] == 52
+    assert params["start_date"]["type"] == "string"
+
+
+def test_static_market_regime_entry_discloses_its_real_semantics():
+    tool = _static_tool("/market/regime/history")
+    semantics = tool["coverage_semantics"]
+
+    assert semantics["max_observations"] == 52
+    assert semantics["ordering"] == "most_recent_eligible_weeks_first"
+    assert semantics["has_end_bound"] is False
+    assert semantics["supports_backward_pagination"] is False
+    assert "earliest eligible" in semantics["start_date_meaning"]
+
+    description = tool["description"].lower()
+    assert "at most 52" in description
+    assert "arbitrary historical period" in description
+
+
+def test_static_regime_contract_matches_the_runtime_bounds_table():
+    """Independently derived: static file text vs the runtime bounds table."""
+    tool = _static_tool("/market/regime/history")
+    params = {p["name"]: p for p in tool["parameters"]}
+    bounds = HISTORY_ENDPOINT_BOUNDS["/v1/market/regime/history"]
+
+    assert params["limit"]["default"] == bounds["default_limit"]
+    assert params["limit"]["maximum"] == bounds["max_limit"]
+
+
+def test_static_llms_describes_regime_coverage_and_researcher_responsibility():
+    text = _static_llms_text()
+
+    regime_line = next(
+        line for line in text.splitlines() if "Recent weekly market regime" in line
+    )
+    assert "at most 52" in regime_line
+    assert "most recent eligible" in regime_line
+    assert "not an arbitrary historical period" in regime_line
+
+    workflow_prose = next(
+        line for line in text.splitlines() if "historical_signal_validation" in line
+    )
+    assert "regime-history step is optional" in workflow_prose
+    assert "52 recent eligible weeks" in workflow_prose
+    assert "researcher-supplied" in workflow_prose
+
+
+# ===========================================================================
+# Re-review finding 3 — the full 402 preview must publish applied_bounds
+# ===========================================================================
+
+REMEDIATED_HISTORY_ENDPOINTS = (
+    "/v1/indicators/history",
+    "/v1/prices/history",
+    "/v1/stim/history",
+    "/v1/market/regime/history",
+)
+
+
+@pytest.mark.parametrize("path", sorted(HISTORY_ENDPOINT_BOUNDS))
+def test_full_preview_publishes_every_applied_bounds_field_the_runtime_returns(
+    path, client, monkeypatch
+):
+    """
+    Two independently derived sources: the published response_shape, and the keys
+    the endpoint actually emits when called.
+
+    A paying client reads the preview to learn what it will receive. Telling it to
+    check applied_bounds while not publishing the structure leaves the disclosure
+    undiscoverable.
+    """
+    module_name, query = BOUNDS_ENDPOINTS[path]
+    _install(monkeypatch, module_name, row_count=2)
+    runtime_keys = set(
+        client.get(f"{path}{query}", headers=x402_headers()).json()["applied_bounds"]
+    )
+
+    preview = build_endpoint_preview(path)
+    published = {
+        field.split(".", 1)[1]
+        for field in preview["response_shape"]
+        if field.startswith("applied_bounds.")
+    }
+
+    assert runtime_keys, f"{path} returned no applied_bounds"
+    missing = runtime_keys - published
+    assert not missing, f"{path} returns {sorted(missing)} that the 402 preview never publishes"
+    invented = published - runtime_keys
+    assert not invented, f"{path} preview advertises {sorted(invented)} that runtime never returns"
+
+
+@pytest.mark.parametrize("path", REMEDIATED_HISTORY_ENDPOINTS)
+def test_remediated_endpoints_publish_the_full_bounds_structure(path):
+    preview = build_endpoint_preview(path)
+    published = {f for f in preview["response_shape"] if f.startswith("applied_bounds.")}
+    for field in (
+        "applied_bounds.limit",
+        "applied_bounds.limit_source",
+        "applied_bounds.max_limit",
+        "applied_bounds.rows_returned",
+        "applied_bounds.truncated_by_limit",
+        "applied_bounds.window_source",
+    ):
+        assert field in published, f"{path} preview omits {field}"
