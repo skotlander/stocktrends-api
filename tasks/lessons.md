@@ -283,3 +283,68 @@ authorization or capture, or paid execution. Negative tests now present a real
 payment artifact on each rail, so a regression would move money rather than
 merely change a status code. Do not freeze a status a future PR may legitimately
 revisit; freeze the thing that costs money if it breaks.
+
+---
+
+## 2026-09-05 — A payment gate that also withheld the payment contract
+
+**Problem.** Coinbase CDP Bazaar validates a payable resource by probing its
+canonical URL without application-specific parameters. Six Stock Trends
+resources — `/v1/stim/latest`, `/v1/stim/history`, `/v1/indicators/latest`,
+`/v1/indicators/history`, `/v1/prices/latest`, `/v1/prices/history` — answered
+that probe with `400 missing_required_param` before any payment contract
+existed, so CDP recorded `valid: false`, `returns_402: false`, `index: null` for
+each. `/v1/market/regime/latest`, which requires no input, returned `402` and
+indexed correctly. All six settled and executed normally when called with valid
+input; nothing was economically wrong. The resources were simply invisible as
+payable to the discovery layer that matters most.
+
+**Root cause.** The payment-boundary remediation moved "the payment step" behind
+FastAPI's structural validation and the endpoint-local semantic validators. That
+step bundled two things that are not the same:
+
+* **challenge issuance**, which quotes a price and describes a resource, and
+  moves no money;
+* **payment verification and settlement**, which can move money.
+
+Deferring the second was necessary and remains correct. Deferring the first came
+along for the ride, and had no economic justification — it withheld the contract
+from exactly the requests whose only purpose is to read it. Validation before
+settlement was the right invariant; it was not a complete model of the protocol,
+because it had no concept of a response that describes a payment rather than
+attempting one.
+
+**Fix.** The two halves are now separate in names, types and call sites.
+`payments/challenge.py` owns issuance and is structurally incapable of moving
+money — a test asserts it references no facilitator, control-plane or engine
+symbol. For a request that presents no payment authorization or proof, on a
+route recognized by the application's own routers and classified `fixed_price`
+by an exact endpoint payment policy, the challenge is issued before
+application-input validation and the request stops there: no gate is published,
+no endpoint runs, no data is touched. A request that presents payment material
+is untouched by any of this and takes the original path — structural validation,
+semantic validation, deferred gate, endpoint.
+
+**Prevention rule.** Before deferring a step for economic safety, ask which part
+of it can actually move money, and defer only that part. A response that
+*describes* a payment is not a response that *takes* one, and a safety
+constraint written against the coarser unit will withhold information at no
+benefit. State the rule in terms of the hazard — "nothing that can move money
+runs before validation" — not in terms of a subsystem name.
+
+**Corollary on route recognition.** An early decision in middleware needs
+authoritative route and method knowledge, and there are only two ways to get it:
+keep a second path table, or ask the application's routers the question the
+dispatcher is about to ask. The first drifts, and its failure mode here would be
+quoting a price for a resource that does not exist. `api/route_recognition.py`
+mirrors `Router.app`'s own walk — first `Match.FULL` wins, any `Match.PARTIAL`
+means `405` — and reports anything less than a definite match onto an `APIRoute`
+as unrecognized, so a redirect candidate, a mount, or a typo all fail closed.
+
+**Corollary on eligibility.** Not every paid route can be challenged before its
+inputs are known. Classification is explicit and total: `EarlyChallengeClass`
+names one eligible class and five reasons for refusal, so an audit reads the
+decision instead of inferring it. Paid Intelligence artifact routes stay excluded
+because they must confirm the artifact is serveable before quoting a price for
+it — the system does not sell what it cannot deliver — and prefix-governed paths
+with no exact policy stay excluded because prefix governance fixes no amount.

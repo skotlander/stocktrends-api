@@ -48,6 +48,7 @@ from middleware.api_key import (
     is_truly_public_api_path,
 )
 from payments.mpp import MPP_PAYMENT_CHANNEL_ID_HEADERS, MPP_REQUIRED_HEADERS
+from payments.challenge import classify_early_challenge_route
 from payments.policy_provider import get_effective_endpoint_payment_policy
 from payments.x402 import (
     extract_payment_signature,
@@ -174,7 +175,13 @@ def test_well_known_aliases_are_anonymous_equivalent_and_canonical(monkeypatch):
     assert manifest["schema"] == DISCOVERY_SCHEMA
     assert manifest["canonical_url"] == CANONICAL_DISCOVERY_URL
     assert manifest["service"]["openapi_url"] == "https://api.stocktrends.com/v1/openapi.json"
-    assert manifest["request_lifecycle"]["serviceable_request_required_before_challenge"] is True
+    # PR3: challenge issuance and payment execution are separate halves.
+    # Only the second requires a serviceable request, and the manifest must
+    # say so — claiming otherwise is what told x402 indexers that a bare
+    # probe of a canonical resource URL could not be challenged.
+    lifecycle = manifest["request_lifecycle"]
+    assert lifecycle["serviceable_request_required_before_challenge"] is False
+    assert lifecycle["serviceable_request_required_before_settlement"] is True
     assert manifest["payment_architecture"]["pricing_unit"] == "STC"
 
 
@@ -454,7 +461,21 @@ def test_openapi_security_payment_extensions_and_safe_examples_agree_with_runtim
                 payment = operation["x-stocktrends-payment"]
                 assert payment["supported_rails"] == list(policy.allowed_rails)
                 assert payment["pricing_rule_id"] == policy.pricing_rule_id
-                assert payment["serviceable_request_required_before_challenge"] is True
+                # Per-operation since PR3, and derived from the same
+                # early-challenge classifier the request path uses, so the
+                # published precondition cannot drift from the one actually
+                # applied.  Settlement still requires a serviceable request
+                # on every route.
+                assert payment["serviceable_request_required_before_settlement"] is True
+                expected_precondition = not classify_early_challenge_route(
+                    external_path,
+                    method.upper(),
+                    endpoint_policy=policy,
+                    route_template=external_path,
+                ).eligible
+                assert payment["serviceable_request_required_before_challenge"] is (
+                    expected_precondition
+                )
                 if "x402" in policy.machine_payment_rails:
                     for scheme_name in advertised_proof_schemes:
                         assert {scheme_name: []} in operation["security"]

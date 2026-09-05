@@ -205,28 +205,57 @@ def test_07b_semantic_invalid_enum_body_does_not_settle(payment_harness):
 
 
 # ===========================================================================
-# 8-9 — discovery precedence: invalid input beats the payment challenge
+# 8-9 — challenge issuance is separate from settlement
+#
+# PR3 corrected the precedence this pair used to assert.  Input validation
+# before *settlement* was necessary and remains in force — test_01 through
+# test_07b, and test_33, are the cases that prove it.  Input validation before
+# *challenge issuance* was a different claim, and it was wrong: it withheld the
+# payment contract from an unpaid probe of a payable resource, which is how a
+# recognized fixed-price resource came to be indexed as not payable.
+#
+# The discriminator is payment-bearing state, not input validity.
 # ===========================================================================
 
-def test_08_invalid_unpaid_request_returns_input_error_not_challenge(
+def test_08_invalid_unpaid_request_is_challenged_not_answered(
     payment_harness, priced_engines
 ):
     """
-    Contract-visible and intentional: an unpaid request that could never have
-    been served returns the deterministic client-input error rather than a
-    payment challenge.  Pricing context headers stay present so an agent can
-    still discover the price after correcting its request.
+    An unpaid probe of a challengeable fixed-price resource receives the
+    challenge, whatever its inputs say.
 
-    This precedence is why `tests/test_402_preview.py` names a real instrument
-    in the requests it uses to inspect challenge shape — a paid instrument
-    endpoint called with no instrument is now answered before payment.
+    Issuing it costs nothing and commits nothing: no facilitator call, no
+    session, no endpoint execution.  The complementary half of the contract is
+    `test_08b` — the identical request carrying payment material still gets its
+    input error, and still settles nothing.
     """
     response = payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM", headers=unpaid_headers()
     )
 
+    assert response.status_code == 402
+    assert "payment-required" in response.headers
+    assert response.json()["error"] == "payment_required"
+    assert response.headers["x-stocktrends-pricing-rule"] == "prices_history_paid"
+    _assert_no_settlement(payment_harness)
+
+
+def test_08b_invalid_payment_bearing_request_is_answered_not_challenged(
+    payment_harness, priced_engines
+):
+    """
+    The other half of the same distinction, stated as one pair.
+
+    The two requests differ only in whether payment material is present, and
+    they must diverge on exactly that: an unpaid probe learns the contract, a
+    paying client learns its request is wrong — before anything can settle.
+    """
+    response = payment_harness.client.get(
+        "/v1/prices/history?symbol_exchange=IBM", headers=x402_headers()
+    )
+
     assert response.status_code == 400
-    assert "payment-required" not in response.headers
+    assert response.json()["detail"]["error"] == "invalid_symbol_exchange"
     assert response.headers["x-stocktrends-pricing-rule"] == "prices_history_paid"
     _assert_no_settlement(payment_harness)
 
@@ -1288,7 +1317,7 @@ def test_33b_semantic_invalid_mpp_is_recorded_as_rejected(
 
 @pytest.mark.parametrize(
     ("rail", "headers_factory"),
-    [("x402", x402_headers), ("mpp", mpp_headers), ("unpaid", unpaid_headers)],
+    [("x402", x402_headers), ("mpp", mpp_headers)],
 )
 def test_33c_framework_invalid_request_is_recorded_as_rejected(
     payment_harness, priced_engines, rail, headers_factory
@@ -1300,6 +1329,11 @@ def test_33c_framework_invalid_request_is_recorded_as_rejected(
     reason a semantic rejection is — the wrapper never reached enforcement — so
     it carries the same terminal status on every rail.  MPP recorded `presented`
     here too; this was the second instance of the same defect.
+
+    Parameterized over the payment-bearing rails only.  The unpaid case is no
+    longer this state at all: since PR3 it is answered with a challenge before
+    validation runs, which is a live `pending` request rather than a terminal
+    denial — see `test_33c_unpaid_framework_invalid_request_is_challenged`.
     """
     response = payment_harness.client.get(
         _FRAMEWORK_INVALID_QUERY, headers=headers_factory()
@@ -1311,6 +1345,33 @@ def test_33c_framework_invalid_request_is_recorded_as_rejected(
     _assert_not_reported_as_usage(
         payment_harness, expected_status=PRE_GATE_REJECTED_STATUS
     )
+
+
+def test_33c_unpaid_framework_invalid_request_is_challenged(
+    payment_harness, priced_engines
+):
+    """
+    The unpaid case of the same request, and the accounting it must carry.
+
+    A challenge is not a denial: the agent may still pay for this request, so
+    the row is `pending`, not `rejected`.  It is equally not a collection — the
+    billed amount stays zero and no rail was contacted — so it cannot enter the
+    runbook's billable totals either.
+    """
+    response = payment_harness.client.get(
+        _FRAMEWORK_INVALID_QUERY, headers=unpaid_headers()
+    )
+
+    assert response.status_code == 402
+    assert response.json()["error"] == "payment_required"
+    _assert_no_settlement(payment_harness)
+    assert payment_harness.mpp.authorize_count == 0
+
+    row = payment_harness.logs.only_economics_row()
+    assert row["payment_status"] == "pending"
+    assert row["payment_status"] != PRE_GATE_REJECTED_STATUS
+    assert row["payment_status"] not in RUNBOOK_BILLABLE_STATUSES
+    assert row["billed_amount_usd"] == 0
 
 
 @pytest.mark.parametrize(

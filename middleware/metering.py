@@ -23,12 +23,22 @@ from metering.logger import (
     log_api_request_economics,
     get_metering_engine,
 )
+from payments.challenge import (
+    CHALLENGE_ERROR_CODE,
+    CHALLENGE_ERROR_DETAIL,
+    EARLY_CHALLENGE_RAIL,
+    challenge_mode_from_headers,
+    decide_early_challenge,
+    decorate_x402_challenge,
+    is_payment_bearing,
+    issue_x402_challenge,
+)
 from payments.enforcement import enforce_payment_rail
 from payments.policy_provider import (
     get_accepted_payment_methods_for_path,
+    get_effective_endpoint_payment_policy,
     is_agent_pay_enforcement_path,
 )
-from discovery.preview import get_endpoint_preview
 from pricing.classifier import PricingDecision, classify_request
 from payments.x402 import (
     is_x402_payment_method,
@@ -510,6 +520,37 @@ def build_econ_payment_fields(
         "payment_amount_native": amount_native,
         "payment_amount_usd": payment_amount_usd,
         "payment_reference": payment_reference_header,
+    }
+
+
+def challenge_econ_payment_fields(
+    *,
+    payment_method: str | None,
+    payment_network: str | None,
+    payment_token: str | None,
+) -> dict:
+    """
+    The economics shape of an issued challenge: quoted, pending, uncollected.
+
+    A challenge is not a settlement, and this is where that distinction becomes
+    an accounting fact.  `pending` is the status for a request an agent may
+    still pay for — deliberately not `presented` (which the billing runbook
+    counts as usage), not `rejected` (which is terminal), and not `settled`.
+    No payment reference and no amount are recorded, because none exists: the
+    absence of an amount here is what keeps `collected_amount_usd` and
+    `billed_amount_usd` at zero for every challenge.
+
+    Shared by the deferred gate's challenge branch and the pre-input challenge
+    path so that one protocol event cannot be reported two different ways.
+    """
+    return {
+        "payment_status": "pending",
+        "payment_method": payment_method,
+        "payment_network": payment_network,
+        "payment_token": payment_token,
+        "payment_amount_native": None,
+        "payment_amount_usd": None,
+        "payment_reference": None,
     }
 
 
@@ -1394,6 +1435,83 @@ class MeteringMiddleware(BaseHTTPMiddleware):
         )
         request.state.payment_enforcement = gate_state
 
+        # ------------------------------------------------------------------
+        # Challenge issuance, separated from payment settlement
+        #
+        # This is the PR3 decision point, and it is deliberately NOT the
+        # payment gate moved back to middleware.  Two properties keep it safe:
+        #
+        #   1. It runs only when the request presents no payment authorization
+        #      or proof at all, so there is nothing here to verify or settle.
+        #   2. Its whole payment action is `issue_x402_challenge`, which calls
+        #      the pure challenge builder.  No facilitator, no MPP control
+        #      plane, no database, no endpoint.
+        #
+        # Route and method recognition come from the application's own routers
+        # (`decide_early_challenge`), so an unknown path still reaches its 404
+        # and a wrong method still reaches its 405.  Eligibility comes from an
+        # exact endpoint payment policy, so a paid-looking URL that no policy
+        # prices is never challenged.
+        #
+        # A request that *does* carry payment material skips this entirely and
+        # takes the unchanged path: FastAPI structural validation, then
+        # request-only semantic validation, then the deferred gate, then the
+        # endpoint.  The no-malformed-settlement invariant is untouched.
+        # ------------------------------------------------------------------
+        challenge_only_response = None
+
+        if (
+            should_enforce_agent_pay
+            and decision.econ_payment_required == 1
+            and payment_rail == EARLY_CHALLENGE_RAIL
+            and not is_payment_bearing(request.headers)
+        ):
+            early_challenge = decide_early_challenge(
+                app=request.scope.get("app"),
+                scope=request.scope,
+                path=path,
+                method=method,
+                endpoint_policy=get_effective_endpoint_payment_policy(path, method),
+            )
+
+            if early_challenge.eligible:
+                challenge = issue_x402_challenge(
+                    path=path,
+                    method=method,
+                    amount_usd=unit_price_usd,
+                    pricing_rule_id=decision.econ_pricing_rule_id or decision.log_pricing_rule_id,
+                    challenge_mode=challenge_mode_from_headers(request.headers),
+                )
+
+                challenge_only_response = JSONResponse(
+                    status_code=402,
+                    content=challenge.body,
+                )
+                challenge_only_response.headers["PAYMENT-REQUIRED"] = (
+                    challenge.payment_required_header
+                )
+
+                # Recorded exactly as the gate records its own challenge, so
+                # the two are indistinguishable in the logs — because they are
+                # the same protocol event.  `collected` stays False and no
+                # payment reference is set, so nothing downstream can report
+                # this as billed, settled or successful paid execution.
+                gate_state.rejected = True
+                gate_state.accepted_methods = challenge.accepted_payment_methods
+                gate_state.event_error_code = CHALLENGE_ERROR_CODE
+                gate_state.event_notes = CHALLENGE_ERROR_DETAIL
+                gate_state.payment_network = (
+                    challenge.payment_network or payment_network_header
+                )
+                gate_state.payment_token = (
+                    challenge.payment_token or payment_token_header
+                )
+                gate_state.econ_payment_fields = challenge_econ_payment_fields(
+                    payment_method=payment_method_header or decision.econ_payment_method,
+                    payment_network=gate_state.payment_network,
+                    payment_token=gate_state.payment_token,
+                )
+
         def run_payment_gate():
             """
             Validate and enforce payment for a request FastAPI has accepted.
@@ -1491,46 +1609,37 @@ class MeteringMiddleware(BaseHTTPMiddleware):
 
             if payment_rail == "x402":
                 if local_enforcement_result.outcome == "challenge":
-                    # Resolve accepted methods from policy before building the
-                    # response so both the header and the body carry the full
-                    # endpoint capability list (subscription,x402,mpp for paid
-                    # endpoints) rather than the selected challenge rail only.
-                    accepted_methods_str = get_accepted_payment_methods(
-                        path,
-                        pricing_rule_for_headers,
+                    # Composed by the shared challenge decorator, which resolves
+                    # accepted methods from policy so both the header and the
+                    # body carry the full endpoint capability list
+                    # (subscription,x402,mpp for paid endpoints) rather than the
+                    # selected challenge rail only, and injects the schema-only
+                    # preview.  The pre-input challenge path uses the same
+                    # decorator, so a challenge obtained before validation and
+                    # one obtained here describe the same payable contract.
+                    challenge = decorate_x402_challenge(
+                        path=path,
                         method=method,
-                    )
-
-                    # Shallow-copy so we don't mutate the cached enforcement result.
-                    challenge_body = dict(local_enforcement_result.challenge_body)
-                    challenge_body["accepted_payment_methods"] = accepted_methods_str.split(",")
-                    # Inject non-sensitive schema preview for known agent endpoints only.
-                    # Omitted entirely for unknown paths; never contains live data.
-                    _preview = get_endpoint_preview(
-                        path,
+                        challenge_body=local_enforcement_result.challenge_body,
+                        payment_required_header=local_enforcement_result.payment_required_header,
                         pricing_rule_id=pricing_rule_for_headers,
-                        stc_cost=f"{unit_price_usd:.6f}",
-                        effective_price_usd=f"{unit_price_usd:.6f}",
+                        amount_usd=unit_price_usd,
+                        payment_network=local_enforcement_result.payment_network,
+                        payment_token=local_enforcement_result.payment_token,
                     )
-                    if _preview is not None:
-                        challenge_body["stocktrends_preview"] = _preview
 
                     return reject(
                         enforcement=local_enforcement_result,
-                        content=challenge_body,
-                        accepted_methods=accepted_methods_str,
-                        event_error_code="payment_required",
-                        event_notes="x402 payment required",
-                        payment_required_header=local_enforcement_result.payment_required_header,
-                        econ_payment_fields={
-                            "payment_status": "pending",
-                            "payment_method": payment_method_header or decision.econ_payment_method,
-                            "payment_network": local_enforcement_result.payment_network or payment_network_header,
-                            "payment_token": local_enforcement_result.payment_token or payment_token_header,
-                            "payment_amount_native": None,
-                            "payment_amount_usd": None,
-                            "payment_reference": None,
-                        },
+                        content=challenge.body,
+                        accepted_methods=challenge.accepted_payment_methods,
+                        event_error_code=CHALLENGE_ERROR_CODE,
+                        event_notes=CHALLENGE_ERROR_DETAIL,
+                        payment_required_header=challenge.payment_required_header,
+                        econ_payment_fields=challenge_econ_payment_fields(
+                            payment_method=payment_method_header or decision.econ_payment_method,
+                            payment_network=challenge.payment_network or payment_network_header,
+                            payment_token=challenge.payment_token or payment_token_header,
+                        ),
                     )
 
                 x402_rejection_methods = get_accepted_payment_methods(
@@ -1704,8 +1813,14 @@ class MeteringMiddleware(BaseHTTPMiddleware):
 
             return None
 
+        # No gate is published for a challenge-only request: the endpoint is
+        # never reached, so nothing would ever invoke it, and publishing one
+        # would make the finaliser read this challenge as a pre-gate rejection
+        # (`rejected`) instead of the live `pending` a challenge is.
         payment_gate = None
-        if should_validate_agent_pay or should_enforce_agent_pay:
+        if challenge_only_response is None and (
+            should_validate_agent_pay or should_enforce_agent_pay
+        ):
             payment_gate = DeferredPaymentGate(run_payment_gate)
             setattr(request.state, PAYMENT_GATE_STATE_ATTR, payment_gate)
 
@@ -1713,7 +1828,14 @@ class MeteringMiddleware(BaseHTTPMiddleware):
         caught_exception = None
 
         try:
-            response = await call_next(request)
+            # The challenge-only response replaces the downstream call rather
+            # than short-circuiting the whole dispatch: the finaliser below owns
+            # pricing headers, request-event and economics logging, and a
+            # challenge issued here must be recorded exactly like any other.
+            if challenge_only_response is not None:
+                response = challenge_only_response
+            else:
+                response = await call_next(request)
         except Exception as exc:
             caught_exception = exc
             raise

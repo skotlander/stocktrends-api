@@ -100,12 +100,42 @@ Reading the manifest is public/free and must not:
 * authorize or settle an MPP session;
 * verify or settle an x402 payment.
 
-A `402 Payment Required` response belongs to execution. It is emitted only for
-an otherwise-serviceable paid request after routing, parsing, Pydantic/schema
-validation, and request-only semantic validation. A crawler should never need
-to send a malformed paid request to discover a resource or its parameters.
+## Challenge Issuance Is Not Payment Execution
 
-The integration sequence is:
+A `402 Payment Required` response is the *issuance* half of the x402 protocol.
+It quotes a price and describes a resource; it verifies nothing, settles
+nothing, and executes nothing. Payment execution — verification, settlement,
+MPP authorization — is a separate half, and it remains behind routing, parsing,
+Pydantic/schema validation and request-only semantic validation. Nothing in this
+section relaxes that.
+
+Because issuance moves no money, it is not gated on request validity. For a
+recognized fixed-price payable route presented with no payment authorization or
+proof, the challenge is issued from route and policy knowledge alone, before
+application-input validation. An anonymous probe of the canonical resource URL —
+`GET /v1/prices/history` with no parameters — therefore receives a valid `402`
+carrying the payment requirements, the canonical resource URL and the Bazaar
+extension, including the input schema it did not supply.
+
+This is a protocol property, not crawler-specific behaviour. No user agent is
+inspected, and no client is special-cased: the same probe from any caller gets
+the same challenge. The classification of which routes are eligible, and why the
+paid Intelligence artifact routes are deliberately excluded, is documented in
+`request-lifecycle.md` step 4A.
+
+A payment-bearing request is unaffected. It completes structural and semantic
+validation first, and a deterministically invalid one returns its existing
+`400`/`422` with nothing verified, settled, authorized or executed. The two
+outcomes differ on payment-bearing state alone:
+
+```text
+unpaid + incomplete           -> 402 challenge
+payment-bearing + incomplete  -> 400/422, zero settlement
+```
+
+The `402` is still not the preferred way to learn a resource's parameters — it
+is one probe of one resource, where the manifest describes the whole payable
+surface in one read. The integration sequence remains:
 
 1. read `/.well-known/x402` for payable-resource discovery;
 2. use `/v1/ai/tools` for task/tool discovery;
@@ -113,7 +143,7 @@ The integration sequence is:
 4. use `/v1/workflows` for workflow planning;
 5. resolve current cost through `/v1/pricing/catalog`;
 6. construct a serviceable request;
-7. receive an execution-time 402 when using anonymous x402;
+7. receive the 402 challenge when using anonymous x402;
 8. pay and retry with a supported payment proof.
 
 ## Multi-Rail Boundary

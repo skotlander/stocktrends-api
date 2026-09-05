@@ -351,9 +351,10 @@ Recommended order for discovery and integration:
 10. Construct a serviceable request
 
    Use the input schema from step 1 (or the canonical OpenAPI document) to
-   build a request the endpoint can actually answer. Deterministically invalid
-   input is rejected with a `400`/`422` input error before any payment
-   challenge is issued, so a 402 is only reachable with a serviceable request.
+   build a request the endpoint can actually answer. An unpaid probe returns
+   the 402 payment contract whether or not the request is complete, but once
+   you present a payment proof, deterministically invalid input is rejected
+   with a `400`/`422` input error and nothing is verified or settled.
 
 11. Start with a high-value premium endpoint:
    * `GET /agent/screener/top`
@@ -436,16 +437,21 @@ Typical pattern:
 5. Submit the required payment
 6. Retry the same request with `PAYMENT-SIGNATURE` or compatibility `X-Payment` proof
 
-Important: the 402 challenge is the final pre-payment surface for a request the
-endpoint could actually serve. It is not how you discover which parameters an
-endpoint accepts.
+Important: a 402 challenge quotes a price and describes a resource; it moves no
+money. An unpaid request to a recognized fixed-price payable resource receives
+that challenge before its inputs are validated, so a bare probe of the canonical
+resource URL returns the full payment and Bazaar contract. It is still not how
+you discover which parameters an endpoint accepts — the manifest and the
+OpenAPI document describe the whole surface in one read, where a challenge
+describes one resource.
 
-A request with deterministically invalid input — a malformed `symbol_exchange`,
-a missing required parameter combination, an unsupported sort or exchange code,
-a semantically incomplete body — returns its input error (`400` or `422`)
-instead of a 402, because the API will not quote a price for a request it could
-never serve. The response still carries pricing context headers, so the price
-remains discoverable once the request is corrected.
+Once you present a payment proof, a request with deterministically invalid input
+— a malformed `symbol_exchange`, a missing required parameter combination, an
+unsupported sort or exchange code, a semantically incomplete body — returns its
+input error (`400` or `422`) instead of a 402, and nothing is verified, settled
+or executed: the API will not take money for a request it could never serve. The
+response still carries pricing context headers, so the price remains discoverable
+once the request is corrected.
 
 Relevant headers include:
 

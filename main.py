@@ -41,6 +41,7 @@ from middleware.api_key import (
 )
 from middleware.request_logger import RequestLoggerMiddleware
 from middleware.metering import MeteringMiddleware
+from payments.challenge import classify_early_challenge_route
 import payments.policy_provider as payment_policy
 import payments.x402_contract as x402_contract
 from payments.mpp import MPP_PAYMENT_CHANNEL_ID_HEADERS, MPP_REQUIRED_HEADERS
@@ -468,7 +469,25 @@ def _apply_api_key_security_to_openapi_locked(v1_app: FastAPI) -> dict:
                     "anonymous_challenge_supported": (
                         "x402" in endpoint_policy.machine_payment_rails
                     ),
-                    "serviceable_request_required_before_challenge": True,
+                    # Per-operation, and derived from the same classifier the
+                    # runtime uses, so the published contract cannot claim a
+                    # precondition the request path does not apply.  False for a
+                    # recognized fixed-price resource, whose canonical URL is
+                    # challengeable before application-input validation; True
+                    # for one excluded from that path — an availability-gated
+                    # Intelligence artifact route, or a parameterized resource.
+                    # Settlement always requires a serviceable request, on every
+                    # route; that is
+                    # `serviceable_request_required_before_settlement`.
+                    "serviceable_request_required_before_challenge": not (
+                        classify_early_challenge_route(
+                            external_path,
+                            method.upper(),
+                            endpoint_policy=endpoint_policy,
+                            route_template=external_path,
+                        ).eligible
+                    ),
+                    "serviceable_request_required_before_settlement": True,
                 }
                 if "x402" in endpoint_policy.machine_payment_rails:
                     payment_extension["x402_version"] = x402_contract.X402_VERSION
@@ -592,7 +611,8 @@ def ai_plugin():
                 "then use /v1/ai/tools and /v1/workflows, "
                 "/v1/pricing/catalog, /v1/pricing, /v1/instruments/lookup, /v1/instruments/resolve, "
                 "/v1/stwr/reports/catalog, and /v1/meta/* planning helpers before paid execution. "
-                "Construct a serviceable request before expecting an execution-time 402. Authentication or "
+                "An unpaid probe of a payable resource returns its 402 payment contract; construct a "
+                "serviceable request before paying. Authentication or "
                 "machine payment is required for protected data endpoints."
             ),
             "x_stocktrends_discovery": {
@@ -607,7 +627,8 @@ def ai_plugin():
                 "subscription_auth": ["X-API-Key", "Authorization: Bearer"],
                 "machine_payment_rails": ["x402", "mpp"],
                 "x402_proof_headers": list(x402_contract.X402_PROOF_HEADERS),
-                "serviceable_request_required_before_challenge": True,
+                "serviceable_request_required_before_challenge": False,
+                "serviceable_request_required_before_settlement": True,
             },
             "data_provenance": data_provenance(),
             "auth": {

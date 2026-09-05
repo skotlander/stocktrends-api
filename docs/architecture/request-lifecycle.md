@@ -10,17 +10,24 @@ This document defines the exact lifecycle of an API request, including:
 * payment enforcement
 * logging
 
-Ordering is load-bearing, not incidental. Payment enforcement is deliberately
-positioned after every rejection the system can reach without doing paid work,
-so that no deterministic client-input failure or route-miss condition can move
-money. Steps 6 through 9 exist for that reason and must not be reordered.
+Ordering is load-bearing, not incidental. Payment *enforcement* — verification
+and settlement, the steps that can move money — is deliberately positioned after
+every rejection the system can reach without doing paid work, so that no
+deterministic client-input failure or route-miss condition can move money. Steps
+6 through 9 exist for that reason and must not be reordered.
 
-Resource discovery occurs outside this paid execution lifecycle. Anonymous
-agents use `/.well-known/x402` to discover payment-governed resources, canonical
-safe requests, runtime-supported rails, and STC pricing-rule references without
-executing a resource. A `402` is an execution-time challenge for an otherwise
-serviceable request; it is not the canonical mechanism for discovering a
-resource or learning its input schema. See `x402-discovery.md`.
+Challenge *issuance* is a separate half of the x402 protocol and sits earlier.
+A `402` challenge quotes a price and describes a resource; it verifies nothing,
+settles nothing and executes nothing. For a recognized fixed-price payable route
+presented with no payment authorization or proof, the challenge is issued at step
+4A, before application-input validation, so that a machine probing the canonical
+resource URL receives the payment and Bazaar contract instead of an input error.
+See "Challenge Issuance Is Not Settlement" below.
+
+Resource discovery still occurs primarily outside this paid execution lifecycle.
+Anonymous agents use `/.well-known/x402` to discover payment-governed resources,
+canonical safe requests, runtime-supported rails, and STC pricing-rule references
+without executing a resource. See `x402-discovery.md`.
 
 ---
 
@@ -388,11 +395,69 @@ This step classifies only. No payment is collected, no facilitator is
 contacted, and no MPP authorization is opened here.
 
 Rail selection happens in middleware, which runs *before* routing. At this
-point the system does not yet know that the path matches a route, that the body
-parses, or that the request is answerable. Enforcing payment here is what
-allowed unservable requests to settle; enforcement is therefore deferred to
-step 10 and published as a one-shot gate on the request for the endpoint
-boundary to invoke.
+point the system does not yet know that the body parses or that the request is
+answerable. Enforcing payment here is what allowed unservable requests to
+settle; enforcement is therefore deferred to step 10 and published as a one-shot
+gate on the request for the endpoint boundary to invoke.
+
+---
+
+### 4A. x402 Challenge Issuance — Unpaid Probes Only
+
+A challenge is not a settlement, and this step is the whole of that distinction.
+
+It applies to a request that satisfies all of the following:
+
+* agent-pay enforcement is active and the request is payment-required;
+* the resolved rail is x402;
+* the request presents **no** payment authorization or proof — neither an x402
+  proof header (`X-Payment`, `PAYMENT-SIGNATURE`, `Authorization: x402 …`) nor
+  any `x-stocktrends-payment-*` material header. Naming a rail in
+  `x-stocktrends-payment-method` declares intent, not payment, and does not
+  count as payment-bearing;
+* the path and method resolve to a real `APIRoute`, established from the
+  application's own routers (`api/route_recognition.py`), never from a
+  hand-written table;
+* the route is classified early-challenge eligible (see below).
+
+When all of those hold, the system issues the `402` challenge and stops. It
+performs no payment verification, no settlement, no MPP authorization, no
+endpoint execution and no database, service or artifact-store access. Its whole
+payment action is the pure challenge builder, which composes the requirements,
+the canonical resource URL and the Bazaar extension from the static endpoint
+registry.
+
+No deferred payment gate is published for such a request: nothing would ever
+invoke it, and publishing one would make the finaliser read the challenge as a
+pre-gate rejection instead of the live `pending` a challenge is.
+
+**Eligibility classification.** Implemented in `payments/challenge.py` as
+`EarlyChallengeClass`; every governed route resolves to exactly one class, and
+every exclusion is named rather than implied.
+
+* `fixed_price` — **eligible**. An exact `EndpointPaymentPolicy` governs the
+  path and method, enables the x402 rail, and names a pricing rule, so the
+  quoted amount is fully determined by `(path, method)` without a single
+  request value. All currently governed non-Intelligence routes are in this
+  class: prices, indicators, ST-IM, selections, published selections, STWR
+  reports, breadth, leadership, market regime, screener, decision and portfolio.
+* `availability_gated` — **excluded**. Paid Intelligence artifact routes confirm
+  the artifact store is reachable and the artifact exists *before* any payment
+  challenge (step 5), and answer `503`/`404` when it is not. The system does not
+  quote a price for an intelligence product it cannot serve.
+* `parameterized_resource` — **excluded**. The route template carries path
+  parameters, so there is no bare canonical URL for a machine to probe and the
+  rationale does not apply.
+* `no_endpoint_policy` — **excluded**. Only prefix governance applies
+  (`/v1/stim`), so no pricing rule fixes an amount. Challenging on prefix alone
+  would turn middleware into a "paid-looking URL → `402`" mechanism.
+* `no_x402_rail` / `no_pricing_rule` — **excluded**, fail-closed.
+* `unrecognized_route` — **excluded**. Route recognition says the dispatcher
+  would answer `404` or `405`, and it must.
+
+A request that does present payment material skips this step entirely and takes
+the full path below: structural validation, semantic validation, the deferred
+gate, then the endpoint.
 
 ---
 
@@ -540,31 +605,58 @@ Includes:
 
 ---
 
-## Precedence: Input Errors and the Payment Challenge
+## Challenge Issuance Is Not Settlement
 
-Two rules follow from the ordering above, and both are contract-visible.
+The rule that decides between an input error and a payment challenge is
+**payment-bearing state**, not input validity.
 
-**A deterministic request-only input error takes precedence over a payment
-challenge.** An unpaid request that could never have been served returns its
-input error (`400`/`422`), not a `402`. Quoting a price for a request the
-endpoint would refuse tells the agent nothing useful and invites it to pay for
-a request that cannot succeed. Pricing context headers remain present on the
-error response, so the price is still discoverable once the request is
-corrected.
+**An unpaid probe of a recognized fixed-price payable route receives the
+challenge, whatever its inputs say.** Issuing it commits nothing and costs
+nothing, and it is the only way a machine discovering the resource at its
+canonical URL can see that the resource is payable, what it costs, which rails
+it accepts, and which inputs it requires. The challenge describes the required
+inputs even though the probe supplied none of them.
 
-**An otherwise-valid unpaid paid request proceeds to the 402 challenge.** The
-`402` is the final pre-payment surface for a request that *is* serviceable — it
-is not the mechanism for discovering which parameters an endpoint accepts.
-Agents should read `/v1/ai/tools` or the canonical OpenAPI document for input
-schemas, and `/v1/pricing/catalog` for current pricing, then construct a
-serviceable request.
+**A payment-bearing request completes structural and semantic validation before
+anything capable of moving money runs.** A deterministically invalid one returns
+its existing `400`/`422` and settles nothing, authorizes nothing and executes
+nothing. Pricing context headers remain present on that error, so the price is
+still discoverable once the request is corrected.
+
+So the same incomplete request diverges on one axis only:
+
+```text
+unpaid + incomplete           -> 402 challenge, nothing verified or settled
+payment-bearing + incomplete  -> 400/422,       nothing verified or settled
+payment-bearing + valid       -> verify/settle once, endpoint executes once
+```
+
+**Why validation-before-settlement was necessary but not sufficient.** The
+earlier remediation correctly established that no deterministic client-input
+failure may cause settlement, and achieved it by moving the whole payment step
+behind validation. But "the payment step" bundles two different things: the half
+that can move money, and the half that merely quotes a price. Moving the
+quoting half behind validation had no economic benefit and a real external cost —
+a canonical probe of `/v1/prices/history` was answered `400 missing_required_param`
+before any payment contract existed, so an x402 indexer saw no `402`, no payment
+requirements and no Bazaar metadata, and recorded the resource as not payable.
+The `402` was still a correct *execution-time* answer; it was simply never
+reachable at the URL machines actually probe. PR3 keeps the settlement half
+exactly where it was and moves only the issuance half.
+
+The `402` challenge is still not a substitute for the input-schema sources.
+Agents should read `/.well-known/x402`, `/v1/ai/tools` or the canonical OpenAPI
+document for input schemas, and `/v1/pricing/catalog` for current pricing, then
+construct a serviceable request before paying.
 
 Accounting consequence: a request denied before the payment gate — route miss,
 structural validation failure, or semantic rejection — records
 `payment_status = rejected` on every rail. It is terminal and non-consuming, and
 is excluded from the billing runbook's `presented`/`covered` usage queries. A
 challenge, by contrast, records `pending`, because the agent may still pay for
-it.
+it. That holds whichever step issued the challenge: an early challenge and a
+gate-issued challenge are the same protocol event and are recorded identically —
+`pending`, `billed_amount_usd = 0`, no payment reference, no collected amount.
 
 ---
 

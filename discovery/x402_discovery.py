@@ -457,10 +457,21 @@ def build_x402_discovery(*, strict: bool = True) -> dict[str, Any]:
             "payment": _x402_payment_metadata(),
         },
         "request_lifecycle": {
-            "serviceable_request_required_before_challenge": True,
+            # Challenge issuance and payment execution are separate halves of
+            # the protocol, and only the second requires a serviceable request.
+            # A recognized fixed-price resource answers an unpaid probe of its
+            # canonical URL with the challenge, so the payment and input
+            # contract is readable without constructing a request first.
+            # Availability-gated resources are the documented exception; each
+            # resource entry states its own `possible_unpaid_statuses`.
+            "serviceable_request_required_before_challenge": False,
+            "serviceable_request_required_before_settlement": True,
             "statement": (
-                "Routing, parsing, schema validation, and request-only semantic validation "
-                "run before an execution-time 402 challenge."
+                "A 402 challenge quotes a price and describes a resource; it moves no "
+                "money. For a recognized fixed-price payable resource presented with no "
+                "payment proof, it is issued before application-input validation. "
+                "Routing, parsing, schema validation, and request-only semantic "
+                "validation all run before any payment verification or settlement."
             ),
             "discovery_is_execution_free": True,
         },
