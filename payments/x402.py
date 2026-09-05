@@ -409,12 +409,18 @@ def _get_header(headers, canonical_name: str):
 
 def is_x402_payment_method(headers_or_payment_method) -> bool:
     """
-    True when the caller is on the x402 rail — by declaration or by proof.
+    True when the caller is on the x402 rail — by declaration, hint, or proof.
 
-    Deliberately broader than `has_x402_payment_proof`: naming x402 in
-    `X-StockTrends-Payment-Method` selects the rail without paying anything.
-    Use this to decide *which rail* a request is on; use
-    `has_x402_payment_proof` to decide whether it has actually paid.
+    Rail identification, deliberately broader than `has_x402_payment_proof` and
+    strictly separate from it.  Naming x402 in `X-StockTrends-Payment-Method`
+    selects the rail while paying nothing, and an `Authorization: x402 …` header
+    is an x402-intent hint that the verify/settle path never consumes as an
+    artifact.  Both belong here and neither is payment.
+
+    Use this to decide *which rail* a request is on.  Use
+    `has_x402_payment_proof` to decide whether it has actually presented an
+    authorization artifact.  Conflating the two is what let an unpaid caller
+    suppress the challenge it needed.
     """
     if headers_or_payment_method is None:
         return False
@@ -427,7 +433,13 @@ def is_x402_payment_method(headers_or_payment_method) -> bool:
     if isinstance(payment_method, str) and payment_method.strip().lower() == "x402":
         return True
 
-    return has_x402_payment_proof(headers)
+    if has_x402_payment_proof(headers):
+        return True
+
+    # Rail hint only.  Retained because it predates PR3 and identifies the rail;
+    # it is emphatically not routed through the proof predicate.
+    auth = _get_header(headers, "Authorization") or ""
+    return isinstance(auth, str) and auth.strip().lower().startswith("x402")
 
 
 def has_payment_signature(headers) -> bool:
@@ -439,31 +451,38 @@ def has_payment_signature(headers) -> bool:
 
 def has_x402_payment_proof(headers) -> bool:
     """
-    True when the request presents actual x402 payment authorization.
+    True when the request presents an x402 payment artifact this system accepts.
 
-    The canonical, single definition of "this caller has paid, or is trying to":
-    every supported carrier of an x402 authorization artifact, and nothing else.
-    That is the published proof-header contract (`X402_PROOF_HEADERS`, currently
-    `PAYMENT-SIGNATURE` and `X-Payment`) plus the supported
-    `Authorization: x402 …` form.
+    The canonical, single definition of "this caller has presented payment", and
+    deliberately nothing more than `has_payment_signature`: the carrier set is
+    exactly the published `X402_PROOF_HEADERS` contract, which is what
+    `enforce_x402_payment` gates on and what `extract_payment_signature` hands
+    to the facilitator.
+
+    The set must not be wider than what verify/settle can actually consume.  An
+    earlier revision also accepted `Authorization: x402 …`, which no part of the
+    enforcement path parses as an artifact and which the published contract does
+    not advertise.  The result was two definitions of proof: a caller sending
+    that header alone was classified payment-bearing by the early-challenge
+    guard, skipped the challenge, and received an application input error for a
+    bare canonical probe — the exact failure PR3 exists to remove — while
+    enforcement would have treated the very same request as unpaid.
+    `Authorization: x402` remains a rail *hint* in `is_x402_payment_method`;
+    rail identification is not payment.
 
     Descriptive Stock Trends payment headers — network, token, amount,
-    reference, channel id — are deliberately NOT proof.  A caller can state what
-    it intends to pay with while holding no authorization at all, and treating
-    that as payment would let an unpaid caller suppress the challenge it needs.
-    `X-StockTrends-Payment-Method` is likewise a rail declaration, not payment.
+    reference, channel id — are likewise not proof: a caller can state what it
+    intends to pay with while holding no authorization at all, and that caller
+    is precisely the one that needs the challenge.
+    `X-StockTrends-Payment-Method` is a rail declaration, not payment.
 
-    Any other layer asking "has this caller presented payment?" must call this
-    rather than assembling a second header list of its own.
+    Any layer asking "has this caller presented payment?" must call this rather
+    than assembling a second header list of its own.  Widening it is a change to
+    the published proof contract and must be made in
+    `payments.x402_contract.X402_PROOF_HEADERS`, so discovery, OpenAPI, CORS,
+    enforcement and this predicate move together.
     """
-    if headers is None:
-        return False
-
-    if has_payment_signature(headers):
-        return True
-
-    auth = _get_header(headers, "Authorization") or ""
-    return isinstance(auth, str) and auth.strip().lower().startswith("x402")
+    return has_payment_signature(headers)
 
 
 def extract_payment_signature(headers) -> Optional[str]:

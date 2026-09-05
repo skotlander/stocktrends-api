@@ -166,17 +166,21 @@ def presents_x402_payment_proof(headers: Any) -> bool:
     The discriminator the early challenge turns on: has this caller paid?
 
     Delegates to `payments.x402.has_x402_payment_proof`, which is the single
-    definition of an x402 authorization carrier — the published
-    `X402_PROOF_HEADERS` plus the supported `Authorization: x402 …` form.  This
-    module deliberately keeps no proof-header list of its own; a second list
-    would drift from the contract the facilitator path actually reads.
+    definition of an x402 payment artifact and resolves to exactly the published
+    `X402_PROOF_HEADERS` contract — the same carriers `enforce_x402_payment`
+    gates on.  This module deliberately keeps no proof-header list of its own; a
+    second list would drift from the contract the facilitator path actually
+    reads.
 
-    An earlier revision of this guard also treated the descriptive Stock Trends
-    payment headers (network, token, amount, reference, channel id) as proof.
-    That was too broad: a caller can describe what it intends to pay with while
-    holding no authorization at all, and such a caller is precisely the one that
-    needs the challenge.  Naming a rail in `X-StockTrends-Payment-Method` is
-    likewise intent, not payment.
+    Two earlier revisions of this guard were too broad, and both failed in the
+    same direction.  The first treated the descriptive Stock Trends payment
+    headers (network, token, amount, reference, channel id) as proof.  The
+    second treated `Authorization: x402 …` as proof, which no part of
+    verify/settle consumes as an artifact.  In each case a caller holding no
+    authorization was classified payment-bearing, skipped the challenge, and
+    received an application input error for a bare canonical probe.  Rail
+    identification — `X-StockTrends-Payment-Method`, an `Authorization: x402`
+    hint — is not payment, and belongs in `is_x402_payment_method`.
 
     MPP stays safe without being named here.  The early-challenge guard requires
     the *resolved rail* to be x402, and an MPP request declares `mpp` and

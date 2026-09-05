@@ -1199,15 +1199,18 @@ def test_35_only_real_x402_proof_counts_as_payment():
     """
     The discriminator the whole design turns on, stated exactly.
 
-    An earlier revision treated any descriptive Stock Trends payment header as
-    proof.  That was too broad in the direction that matters: a caller can name
-    a network, a token, an amount, a reference or a channel id while holding no
-    authorization at all, and such a caller is precisely the one that needs the
-    challenge.  Suppressing it handed them an input error instead of the payment
-    contract — the exact failure PR3 exists to remove.
+    Two earlier revisions were too broad, and both failed the same way: a caller
+    holding no authorization was classified payment-bearing, skipped the
+    challenge, and received an application input error for a bare canonical
+    probe — the exact failure PR3 exists to remove.
 
-    Only the canonical x402 authorization carriers count, and this asserts the
-    guard resolves the same contract the facilitator path reads.
+    The first accepted any descriptive Stock Trends payment header.  The second
+    accepted `Authorization: x402 …`, which no part of verify/settle consumes as
+    an artifact and which the published contract does not advertise.
+
+    Only the published `X402_PROOF_HEADERS` carriers count.  Rail identification
+    is a separate question and lives in `is_x402_payment_method`;
+    `test_35c` pins that separation.
     """
     from payments.challenge import presents_x402_payment_proof
     from payments.x402_contract import X402_PROOF_HEADERS
@@ -1238,9 +1241,46 @@ def test_35_only_real_x402_proof_counts_as_payment():
         assert presents_x402_payment_proof({header: "artifact"}), header
         assert presents_x402_payment_proof({header.lower(): "artifact"}), header
 
-    assert presents_x402_payment_proof({"authorization": "x402 artifact"})
-    assert presents_x402_payment_proof({"Authorization": "x402 artifact"})
+    # `Authorization: x402` is a rail hint, not an artifact.  The enforcement
+    # path reads neither `has_payment_signature` nor `extract_payment_signature`
+    # from it, so accepting it here would mean the guard and enforcement
+    # disagreed about whether the very same request had paid.
+    assert not presents_x402_payment_proof({"authorization": "x402 artifact"}), (
+        "Authorization: x402 was treated as payment proof; verify/settle never "
+        "consumes it as an artifact, so this caller is unpaid and needs the "
+        "challenge"
+    )
+    assert not presents_x402_payment_proof({"Authorization": "x402 artifact"})
     assert not presents_x402_payment_proof({"authorization": "Bearer token"})
+
+
+def test_35c_proof_and_rail_identification_are_separate_questions():
+    """
+    Rail identification stays broad; payment proof stays exact.
+
+    `is_x402_payment_method` answers "which rail is this on?" and legitimately
+    reads a declared method and an `Authorization: x402` hint.  Narrowing the
+    proof predicate must not have narrowed rail selection with it, because rail
+    resolution is pre-existing behaviour the early-challenge guard depends on.
+    """
+    from payments.x402 import has_x402_payment_proof, is_x402_payment_method
+
+    hint = {"Authorization": "x402 something"}
+    assert is_x402_payment_method(hint), (
+        "the Authorization rail hint stopped identifying the x402 rail"
+    )
+    assert not has_x402_payment_proof(hint)
+
+    declared = {"x-stocktrends-payment-method": "x402"}
+    assert is_x402_payment_method(declared)
+    assert not has_x402_payment_proof(declared)
+
+    artifact = {"X-Payment": "an-artifact"}
+    assert is_x402_payment_method(artifact)
+    assert has_x402_payment_proof(artifact)
+
+    assert not is_x402_payment_method({"x-stocktrends-payment-method": "mpp"})
+    assert not has_x402_payment_proof({"x-stocktrends-payment-method": "mpp"})
 
 
 def test_35b_the_guard_has_no_proof_header_list_of_its_own():

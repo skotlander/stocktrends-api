@@ -433,10 +433,13 @@ Typical pattern:
 
 1. Discover the resource and canonical safe request from `/.well-known/x402`
 2. Confirm the exact contract in `/v1/openapi.json` and current STC cost in `/v1/pricing/catalog`
-3. Call the premium endpoint with an otherwise-serviceable request
+3. Call the premium endpoint. On an eligible recognized fixed-price resource a
+   bare probe already returns the challenge; construct a serviceable request
+   because you are about to pay for it, not in order to be challenged
 4. Receive HTTP 402 with payment requirements
 5. Submit the required payment
-6. Retry the same request with `PAYMENT-SIGNATURE` or compatibility `X-Payment` proof
+6. Retry the same serviceable request with `PAYMENT-SIGNATURE` or compatibility
+   `X-Payment` proof
 
 Important: a 402 challenge quotes a price and describes a resource; it moves no
 money. An unpaid request to an *eligible recognized fixed-price* payable resource
