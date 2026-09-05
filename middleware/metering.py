@@ -2398,35 +2398,78 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                 and enforcement_result.outcome == "authorized"
             ):
                 if response is not None and status_code < 400:
+                    # Capture is guarded the same way void is, and for the same
+                    # reason: the downstream response is already produced, so a
+                    # control-plane problem must not be allowed to destroy it.
+                    #
+                    # Before this guard an exception here escaped the finaliser
+                    # entirely — the successful paid response was lost, and
+                    # neither the request-event nor the economics row was ever
+                    # written, so a request that authorized against a session
+                    # left no local record at all.  Codex reached it with a
+                    # control plane returning HTTP 200 and a non-object JSON
+                    # body, which the response parser read with `.get()`.
+                    #
+                    # `payments.mpp_client` now fails closed on that shape, but
+                    # this guard stays regardless: transport, parser and runtime
+                    # code can always raise in a way the caller did not
+                    # enumerate, and observability must not depend on having
+                    # enumerated it.  An unresolved capture is `capture_failed`
+                    # — nothing is claimed as collected, and logging proceeds.
                     from payments.mpp_client import capture_mpp_payment
-                    # Capture the amount that was authorized.  enforce_mpp_payment
-                    # authorizes `unit_price_usd` (the quoted charge), so capture
-                    # must use the same figure or the two legs of one payment
-                    # disagree.  stc_cost is the analytical measure and never
-                    # decides how much is taken; production hid the discrepancy
-                    # only because the two values happen to be equal today.
-                    _cap = capture_mpp_payment(
-                        channel_id=enforcement_result.payment_channel_id,
-                        payment_reference=enforcement_result.payment_reference,
-                        captured_stc=unit_price_usd,
-                        pricing_rule_id=economic_rule_name,
-                        request_id=request_id,
-                    )
-                    if _cap.success:
-                        mpp_capture_outcome = "captured"
-                        gate_state.collected_amount_usd = unit_price_usd
-                    else:
-                        mpp_capture_outcome = "capture_failed"
-                        logger.error(
-                            "mpp capture failed after successful response — "
-                            "request_id=%s channel_id=%s payment_reference=%s "
-                            "error_code=%s error_detail=%s",
-                            request_id,
-                            enforcement_result.payment_channel_id,
-                            enforcement_result.payment_reference,
-                            _cap.error_code,
-                            _cap.error_detail,
+
+                    # Read once, before the guarded call.  The exception handler
+                    # must not dereference the same result object the failure may
+                    # be about, and the reconciliation identifiers have to be in
+                    # hand whatever happens inside.
+                    _cap_channel_id = enforcement_result.payment_channel_id
+                    _cap_reference = enforcement_result.payment_reference
+
+                    try:
+                        # Capture the amount that was authorized.  enforce_mpp_payment
+                        # authorizes `unit_price_usd` (the quoted charge), so capture
+                        # must use the same figure or the two legs of one payment
+                        # disagree.  stc_cost is the analytical measure and never
+                        # decides how much is taken; production hid the discrepancy
+                        # only because the two values happen to be equal today.
+                        _cap = capture_mpp_payment(
+                            channel_id=_cap_channel_id,
+                            payment_reference=_cap_reference,
+                            captured_stc=unit_price_usd,
+                            pricing_rule_id=economic_rule_name,
+                            request_id=request_id,
                         )
+                    except Exception:
+                        # Outcome unknown, so nothing is claimed.  The collected
+                        # amount is deliberately left unset: only a confirmed
+                        # capture may set it, and only `captured` may later set
+                        # `gate_state.collected`.
+                        mpp_capture_outcome = "capture_failed"
+                        # `logger.exception` already attaches the traceback, so
+                        # the exception object is not repeated in the message.
+                        logger.exception(
+                            "mpp capture raised after successful response — "
+                            "request_id=%s channel_id=%s payment_reference=%s",
+                            request_id,
+                            _cap_channel_id,
+                            _cap_reference,
+                        )
+                    else:
+                        if _cap.success:
+                            mpp_capture_outcome = "captured"
+                            gate_state.collected_amount_usd = unit_price_usd
+                        else:
+                            mpp_capture_outcome = "capture_failed"
+                            logger.error(
+                                "mpp capture failed after successful response — "
+                                "request_id=%s channel_id=%s payment_reference=%s "
+                                "error_code=%s error_detail=%s",
+                                request_id,
+                                _cap_channel_id,
+                                _cap_reference,
+                                _cap.error_code,
+                                _cap.error_detail,
+                            )
                 else:
                     # Authorized but downstream failed — void the authorization
                     # so reserved STC is returned to available immediately.

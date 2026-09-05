@@ -33,6 +33,54 @@ class MppControlPlaneResult:
     response_data: Optional[dict] = None
 
 
+#: A control-plane call whose body was not a JSON object.
+#:
+#: Distinct from a rejection.  The real outcome of the operation is unknown, so
+#: it is reported as a structured failure rather than inferred in either
+#: direction: coercing an unreadable shape into success would claim a capture
+#: the control plane may never have performed.
+INVALID_CONTROL_PLANE_RESPONSE_ERROR = "control_plane_invalid_response"
+
+
+def _response_body(data: Any) -> dict[str, Any]:
+    """
+    The parsed body as a mapping, for reading optional diagnostic fields.
+
+    `_mpp_post` returns whatever the control plane actually sent, and JSON
+    permits a string, number, list, boolean or null at the top level.  Reading
+    `error_code` off one of those raises `AttributeError` -- which is how a
+    control-plane response *shape* became an exception raised in the middle of
+    the request finaliser, taking the request-event and economics rows with it.
+    """
+    return data if isinstance(data, dict) else {}
+
+
+def _invalid_response_result(
+    operation: str,
+    status: int,
+    data: Any,
+) -> MppControlPlaneResult | None:
+    """
+    A structured failure when a successful HTTP response is not a JSON object.
+
+    Returns `None` when the body is a usable object and interpretation may
+    proceed.  Applied on the success path of every control-plane operation, so
+    an unparseable or wrongly-shaped 2xx body fails closed with a stable code
+    instead of raising.
+    """
+    if isinstance(data, dict):
+        return None
+
+    return MppControlPlaneResult(
+        success=False,
+        error_code=INVALID_CONTROL_PLANE_RESPONSE_ERROR,
+        error_detail=(
+            f"Control plane {operation} returned HTTP {status} with a "
+            f"{type(data).__name__} body; a JSON object was expected."
+        ),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Internal HTTP transport (mirrors the _post_json pattern from payments/x402.py)
 # ---------------------------------------------------------------------------
@@ -132,35 +180,41 @@ def authorize_mpp_payment(
             error_detail=raw or "Control plane did not respond.",
         )
 
+    body = _response_body(data)
+
     if status >= 400:
-        error_code = (data or {}).get("error_code") or "authorization_failed"
-        error_detail = (data or {}).get("error_detail") or f"Control plane authorize returned HTTP {status}."
+        error_code = body.get("error_code") or "authorization_failed"
+        error_detail = body.get("error_detail") or f"Control plane authorize returned HTTP {status}."
         return MppControlPlaneResult(
             success=False,
             error_code=error_code,
             error_detail=error_detail,
-            response_data=data,
+            response_data=body or None,
         )
+
+    invalid = _invalid_response_result("authorize", status, data)
+    if invalid is not None:
+        return invalid
 
     # Control-plane authorize returns a reservation object with status="pending"
     # on success (HTTP 200/201).  There is no top-level "authorized" or "success"
     # boolean field.  An "id" field confirms an authorization record was created.
-    cp_status = (data or {}).get("status")
-    authorized = cp_status == "pending" and bool((data or {}).get("id"))
+    cp_status = body.get("status")
+    authorized = cp_status == "pending" and bool(body.get("id"))
     if not authorized:
-        error_code = (data or {}).get("error_code") or "authorization_failed"
+        error_code = body.get("error_code") or "authorization_failed"
         error_detail = (
-            (data or {}).get("error_detail")
+            body.get("error_detail")
             or f"Control plane authorize returned unexpected status: {cp_status!r}."
         )
         return MppControlPlaneResult(
             success=False,
             error_code=error_code,
             error_detail=error_detail,
-            response_data=data,
+            response_data=body,
         )
 
-    return MppControlPlaneResult(success=True, response_data=data)
+    return MppControlPlaneResult(success=True, response_data=body)
 
 
 # ---------------------------------------------------------------------------
@@ -210,35 +264,41 @@ def capture_mpp_payment(
             error_detail=raw or "Control plane did not respond.",
         )
 
+    body = _response_body(data)
+
     if status >= 400:
-        error_code = (data or {}).get("error_code") or "capture_failed"
-        error_detail = (data or {}).get("error_detail") or f"Control plane capture returned HTTP {status}."
+        error_code = body.get("error_code") or "capture_failed"
+        error_detail = body.get("error_detail") or f"Control plane capture returned HTTP {status}."
         return MppControlPlaneResult(
             success=False,
             error_code=error_code,
             error_detail=error_detail,
-            response_data=data,
+            response_data=body or None,
         )
+
+    invalid = _invalid_response_result("capture", status, data)
+    if invalid is not None:
+        return invalid
 
     # Control-plane capture returns the updated authorization object with
     # status="captured" and captured_at set on success.  Inferred from the same
     # object shape as authorize.  Confirm with control-plane contract if shape differs.
-    cp_status = (data or {}).get("status")
-    captured = cp_status == "captured" or bool((data or {}).get("captured_at"))
+    cp_status = body.get("status")
+    captured = cp_status == "captured" or bool(body.get("captured_at"))
     if not captured:
-        error_code = (data or {}).get("error_code") or "capture_failed"
+        error_code = body.get("error_code") or "capture_failed"
         error_detail = (
-            (data or {}).get("error_detail")
+            body.get("error_detail")
             or f"Control plane capture returned unexpected status: {cp_status!r}."
         )
         return MppControlPlaneResult(
             success=False,
             error_code=error_code,
             error_detail=error_detail,
-            response_data=data,
+            response_data=body,
         )
 
-    return MppControlPlaneResult(success=True, response_data=data)
+    return MppControlPlaneResult(success=True, response_data=body)
 
 
 # ---------------------------------------------------------------------------
@@ -281,22 +341,28 @@ def void_mpp_authorization(
             error_detail=raw or "Control plane did not respond.",
         )
 
+    body = _response_body(data)
+
     if status >= 400:
-        error_code = (data or {}).get("error_code") or "void_failed"
+        error_code = body.get("error_code") or "void_failed"
         error_detail = (
-            (data or {}).get("error_detail")
+            body.get("error_detail")
             or f"Control plane void returned HTTP {status}."
         )
         return MppControlPlaneResult(
             success=False,
             error_code=error_code,
             error_detail=error_detail,
-            response_data=data,
+            response_data=body or None,
         )
+
+    invalid = _invalid_response_result("void", status, data)
+    if invalid is not None:
+        return invalid
 
     # Control-plane void returns the authorization object.  Both "voided" and
     # "expired" indicate the reservation is released (or was already released).
-    cp_status = (data or {}).get("status")
+    cp_status = body.get("status")
     if cp_status not in ("voided", "expired"):
         return MppControlPlaneResult(
             success=False,
@@ -304,7 +370,7 @@ def void_mpp_authorization(
             error_detail=(
                 f"Control plane void returned unexpected status: {cp_status!r}."
             ),
-            response_data=data,
+            response_data=body,
         )
 
-    return MppControlPlaneResult(success=True, response_data=data)
+    return MppControlPlaneResult(success=True, response_data=body)

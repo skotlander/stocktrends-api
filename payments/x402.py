@@ -443,10 +443,21 @@ def is_x402_payment_method(headers_or_payment_method) -> bool:
 
 
 def has_payment_signature(headers) -> bool:
-    """True when a request carries an x402 proof header (`X402_PROOF_HEADERS`)."""
-    if headers is None:
-        return False
-    return any(_get_header(headers, name) for name in x402_contract.X402_PROOF_HEADERS)
+    """
+    True when a request carries an artifact the facilitator path can actually use.
+
+    Defined as "extraction yields something", never as raw header truthiness.
+    The two are not the same: a header present but blank is truthy while
+    `extract_payment_signature` normalizes it away, and that gap was a second
+    definition of "payment presented" — one that classified a whitespace-only
+    `X-Payment` as payment-bearing, suppressed the early challenge, and answered
+    a bare canonical probe with an input error while no consumable artifact
+    existed anywhere in the request.
+
+    Deriving it from the extractor makes the two agree by construction rather
+    than by both being maintained correctly.
+    """
+    return extract_payment_signature(headers) is not None
 
 
 def has_x402_payment_proof(headers) -> bool:
@@ -456,8 +467,10 @@ def has_x402_payment_proof(headers) -> bool:
     The canonical, single definition of "this caller has presented payment", and
     deliberately nothing more than `has_payment_signature`: the carrier set is
     exactly the published `X402_PROOF_HEADERS` contract, which is what
-    `enforce_x402_payment` gates on and what `extract_payment_signature` hands
-    to the facilitator.
+    `enforce_x402_payment` gates on, and the value must survive the same
+    normalization `extract_payment_signature` applies before handing the
+    artifact to the facilitator.  Presence and extractability are therefore one
+    question, not two — a blank carrier is no artifact at all.
 
     The set must not be wider than what verify/settle can actually consume.  An
     earlier revision also accepted `Authorization: x402 …`, which no part of the
@@ -486,15 +499,40 @@ def has_x402_payment_proof(headers) -> bool:
 
 
 def extract_payment_signature(headers) -> Optional[str]:
+    """
+    The x402 artifact this request presents, normalized, or `None`.
+
+    The single definition of both *whether* an artifact was presented and *what*
+    the facilitator receives.  `has_payment_signature`, `has_x402_payment_proof`
+    and the early-challenge guard all resolve to this function, so there is one
+    normalization and no way for presence and extraction to disagree.
+
+    Normalization is `str.strip()`, which removes every character Python
+    considers whitespace — ASCII spaces and tabs, and Unicode whitespace such as
+    NBSP where the HTTP stack lets it through.  A carrier that normalizes to
+    nothing is *not* an artifact: the caller is unpaid and needs the challenge.
+
+    A non-blank value that happens to be malformed IS an artifact.  It takes the
+    payment-bearing path and is rejected later as an invalid payment, which is a
+    different outcome from having presented nothing at all — and deliberately
+    so.
+
+    Carriers are tried in `X402_PROOF_HEADERS` order and a blank one does not
+    stop the search, so a request with a blank `PAYMENT-SIGNATURE` and a real
+    `X-Payment` still resolves to the real artifact.
+    """
     if headers is None:
         return None
 
     for header_name in x402_contract.X402_PROOF_HEADERS:
         value = _get_header(headers, header_name)
-        if value:
-            value = value.strip()
-            if value:
-                return value
+        if not isinstance(value, str):
+            # Only a string can be normalized into an artifact.  Skipping keeps
+            # presence and extraction identical for every possible input.
+            continue
+        normalized = value.strip()
+        if normalized:
+            return normalized
 
     return None
 
