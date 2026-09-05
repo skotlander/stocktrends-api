@@ -144,6 +144,83 @@ wrong names.
 
 ---
 
+## 2026-09-04 — A paid endpoint's default was a 48 MB payload
+
+**Problem.** An external agent settled x402 for `GET /v1/breadth/sector/history`
+with an empty query string and received HTTP 200 carrying 47,651,791 bytes in
+8.47 seconds. The response contained nothing saying a limit had been applied, so
+the caller could not tell a complete result from a truncated one.
+
+**Root cause.** Two independent omissions that only matter together. The route
+declared `limit` with a default of 200000 and applied no date bounding at all, so
+a request with no query string asked for the entire multi-decade series. The
+response envelope echoed `start` and `end` — both `None` — and nothing else, so
+the applied ceiling was invisible.
+
+The discovery surfaces did not catch it, because they were describing it
+faithfully: `safe_default: 200000` was published in the endpoint registry and in
+OpenAPI. Every layer agreed, and every layer was wrong together.
+
+**Fix.** A shared bounds table in `utils/history_bounds.py` that the routers and
+the discovery registry both read, a default trailing window applied only when the
+caller supplied neither `start` nor `end`, and an additive `applied_bounds` block
+reporting window, limit, their sources, the maximum, the row count, and whether
+truncation occurred. Truncation is detected by requesting one row beyond the
+limit rather than inferred from a row count.
+
+**Prevention rule.** A default is part of the paid contract. When pricing a
+route that returns a collection, ask what a request with no query string
+actually costs the caller to receive — not whether the parameter has an upper
+bound. `ge=1, le=500000` bounded the parameter and left the response unbounded
+in practice.
+
+**Prevention rule (corollary).** "Discovery matches runtime" is necessary and not
+sufficient. Three surfaces agreeing on a number proves only that they were
+transcribed from each other. The bound is now derived from one table by all
+three, so the question that remains is whether the number is right — which is a
+question a person has to answer.
+
+**Prevention mechanism.** `test_pr1_history_bounds.py` holds an audit table of
+every payment-governed history route with a recorded verdict, enrolled from the
+policy provider rather than from a list in the test. Pricing a new history
+endpoint fails the suite until somebody records which class it falls into.
+
+---
+
+## 2026-09-04 — Two aggregates disagreed about what "all exchanges" meant
+
+**Problem.** `/v1/breadth/sector/history` with no `exchange` filter returned
+several rows for the same `(weekdate, sector_code)` — one per exchange — and the
+projection did not carry `ss.exchange`, so they reached the caller as unlabelled
+duplicates that could not be told apart or recombined. `/v1/breadth/sector/latest`
+aggregated across exchanges correctly for the same nominal question.
+
+**Root cause.** A performance fast path. `st_sector_summary` is aggregated per
+`(weekdate, sector, exchange, type)`, which answers a single-exchange request
+exactly. The predicate that selected it checked `group_level`, `cs_only`,
+`include_unknown`, `min_price` and `min_volume` — every condition that would
+change the *shape* of the aggregate, and not the one that changed its
+*population*.
+
+**Fix.** `_use_sector_summary()` now also requires an explicit exchange. An
+all-exchange request falls through to the raw `st_data` aggregation the `/latest`
+endpoint already used, which computes COUNT/SUM/AVG/MAX once over the whole
+population. Recombining the stored per-exchange rows was rejected: a weighted
+merge is only exact if each stored average was computed over the same row count
+as `total`, and the summary table does not record that.
+
+**Prevention rule.** When a pre-aggregated table stands in for a live
+aggregation, the guard must cover the grouping keys the stored rows are
+partitioned by, not only the filters the caller can vary. A summary row answers
+a question; check that it is the question being asked.
+
+**Prevention rule (corollary).** Two endpoints that name the same quantity must
+compute it the same way. `/latest` and `/history` disagreeing about
+"all-exchange sector breadth" was invisible because neither was checked against
+the other; they are now asserted to build the same aggregate expressions.
+
+---
+
 ## Non-blocking follow-ups (recorded, not actioned)
 
 Raised by the independent review of PR #97 and deliberately left out of the

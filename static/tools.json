@@ -115,7 +115,7 @@
           "parameter_source": "query",
           "type": "string",
           "required": true,
-          "allowed_values": ["regime_analysis", "symbol_decision", "stim_forecast_review", "portfolio_build", "portfolio_compare_review"],
+          "allowed_values": ["regime_analysis", "symbol_decision", "stim_forecast_review", "portfolio_build", "portfolio_compare_review", "historical_signal_validation"],
           "example": "portfolio_build",
           "description": "Workflow ID from /v1/workflows."
         },
@@ -467,7 +467,7 @@
           "parameter_source": "query",
           "type": "integer",
           "required": false,
-          "default": 52,
+          "default": 260,
           "minimum": 1,
           "maximum": 2600,
           "description": "Maximum number of weekly rows."
@@ -691,7 +691,7 @@
           "parameter_source": "query",
           "type": "integer",
           "required": false,
-          "default": 52,
+          "default": 260,
           "minimum": 1,
           "maximum": 2600,
           "description": "Maximum number of weekly rows."
@@ -722,7 +722,7 @@
       "name": "selections_history",
       "analytical_role": "probabilistic_selection_universe",
       "title": "Selections History",
-      "description": "Returns historical base ST-IM selection records. Filter by symbol_exchange, symbol, exchange, or date range. Each entry includes prob13wk. No published threshold filter applied unless min_prob13wk is set. Use /selections/published/history for the three-horizon published definition. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns historical base ST-IM selection records. Filter by symbol_exchange, symbol, exchange, or date range. Each entry includes prob13wk. No published threshold filter applied unless min_prob13wk is set. Use /selections/published/history for the three-horizon published definition. The applied_bounds block on the response reports the row limit that was applied and whether the result was truncated. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/selections/history",
       "auth_required": true,
@@ -883,7 +883,7 @@
         "base_period_context_endpoint": "/v1/meta/stim"
       },
       "title": "Published STIM Select History",
-      "description": "Returns historical published STIM Select records filtered to the three-horizon criteria and prob13wk threshold. Filter by symbol_exchange, symbol, exchange, or date range. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns historical published STIM Select records filtered to the three-horizon criteria and prob13wk threshold. Filter by symbol_exchange, symbol, exchange, or date range. The applied_bounds block on the response reports the row limit that was applied and whether the result was truncated. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/selections/published/history",
       "auth_required": true,
@@ -954,7 +954,7 @@
       "name": "stwr_reports_history",
       "analytical_role": "curated_signal_report",
       "title": "STWR Reports History",
-      "description": "Returns historical Stock Trends Weekly Reporter screening report rows for a requested report code and exchange, grouped by weekdate by default. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns historical Stock Trends Weekly Reporter screening report rows for a requested report code and exchange, grouped by weekdate by default. Rows are ordered by weekdate ascending, then by the report's own ranking within each week, so each weekdate appears in exactly one grouped bucket. Omitting start and end applies a bounded trailing 104-week window; the applied_bounds block on the response reports the window, the row limit, and whether the result was truncated. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/stwr/reports/history",
       "auth_required": true,
@@ -1211,7 +1211,10 @@
       "name": "breadth_sector_history",
       "analytical_role": "market_breadth_context",
       "title": "Sector Breadth History",
-      "description": "Returns historical sector, industry-group, or industry breadth derived from Stock Trends signal distribution. Use for breadth transition analysis and workflow context. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns historical sector, industry-group, or industry breadth derived from Stock Trends signal distribution. Use for breadth transition analysis and workflow context. Omitting start and end applies a bounded trailing 104-week window; the applied_bounds block on the response reports the window, the row limit, and whether the result was truncated. Omitting exchange returns breadth aggregated across all exchanges, one row per weekdate and sector, using the same aggregation as /breadth/sector/latest. Fetch /v1/pricing/catalog for current STC cost.",
+      "parameters": [
+        {"name": "limit", "in": "query", "input_location": "query", "parameter_source": "query", "type": "integer", "required": false, "default": 5000, "minimum": 1, "maximum": 500000, "description": "Safety limit across all rows returned. When start and end are both omitted, a trailing 104-week window ending at the latest available weekdate is applied as well."}
+      ],
       "method": "GET",
       "path": "/breadth/sector/history",
       "auth_required": true,
@@ -1251,7 +1254,10 @@
       "name": "leadership_rotation_history",
       "analytical_role": "leadership_intelligence",
       "title": "Leadership Rotation History",
-      "description": "Returns historical sector leadership rotation over time with bullish share, average RSI, trend maturity, leadership_score, and weekly rank. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns historical sector leadership rotation over time with bullish share, average RSI, trend maturity, leadership_score, and weekly rank. Omitting start and end applies a bounded trailing 104-week window; the applied_bounds block on the response reports the window, the row limit, and whether the result was truncated. Fetch /v1/pricing/catalog for current STC cost.",
+      "parameters": [
+        {"name": "limit", "in": "query", "input_location": "query", "parameter_source": "query", "type": "integer", "required": false, "default": 2000, "minimum": 1, "maximum": 50000, "description": "Safety limit across all rows returned. When start and end are both omitted, a trailing 104-week window ending at the latest available weekdate is applied as well."}
+      ],
       "method": "GET",
       "path": "/leadership/rotation/history",
       "auth_required": true,

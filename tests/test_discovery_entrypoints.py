@@ -143,6 +143,7 @@ def test_cost_estimate_workflow_id_openapi_parameter_is_valid(client):
         "stim_forecast_review",
         "portfolio_build",
         "portfolio_compare_review",
+        "historical_signal_validation",
     ]
 
 

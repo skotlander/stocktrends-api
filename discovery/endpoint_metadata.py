@@ -23,6 +23,15 @@ from discovery.provenance import (
     endpoint_needs_provenance,
     provenance_reference,
 )
+from discovery.service_meta import (
+    SERVICE_EVALUATION_GUIDANCE_POINTER,
+    SERVICE_EVALUATION_GUIDANCE_SOURCE,
+)
+from utils.history_bounds import (
+    history_default_limit,
+    history_default_window_weeks,
+    history_max_limit,
+)
 
 SUPPORTED_RAILS = ["subscription", "x402", "mpp"]
 
@@ -42,6 +51,11 @@ TOOLS_MANIFEST_URL = "https://api.stocktrends.com/v1/ai/tools"
 WORKFLOWS_URL = "https://api.stocktrends.com/v1/workflows"
 PUBLIC_API_BASE_URL = "https://api.stocktrends.com"
 PRICING_CATALOG_URL = f"{PUBLIC_API_BASE_URL}/v1/pricing/catalog"
+# Canonical x402 payable-resource discovery. Defined here rather than in
+# discovery.x402_discovery because that module already imports this one, and a
+# second literal of the same path in the other direction could drift.
+X402_DISCOVERY_PATH = "/.well-known/x402"
+X402_DISCOVERY_URL = f"{PUBLIC_API_BASE_URL}{X402_DISCOVERY_PATH}"
 COMPACT_SAFE_EXAMPLE_MAX_BYTES = 384
 
 # ---------------------------------------------------------------------------
@@ -268,19 +282,50 @@ def _symbol_lookup_inputs() -> tuple[dict[str, Any], dict[str, Any]]:
     )
 
 
-def _date_inputs(default_limit: int, max_limit: int) -> dict[str, Any]:
+def _limit_input(path: str) -> dict[str, Any]:
+    """
+    Publish the row limit a history endpoint actually enforces.
+
+    Values come from `utils.history_bounds.HISTORY_ENDPOINT_BOUNDS`, which is the
+    same table the routers build their `Query(...)` declarations from. Before
+    this, discovery transcribed its own numbers and drifted: the static manifest
+    advertised a 500-row default for a route enforcing 200000, and a 52-row
+    default for two routes enforcing 260.
+    """
+    default_limit = history_default_limit(path)
+    max_limit = history_max_limit(path)
+    window_weeks = history_default_window_weeks(path)
+
+    description = "Maximum number of rows returned."
+    if window_weeks is not None:
+        description += (
+            f" When start and end are both omitted, a trailing {window_weeks}-week "
+            "window ending at the latest available weekdate is applied as well. "
+            "The applied_bounds block on the response reports the window and limit "
+            "that were actually used."
+        )
+    else:
+        description += (
+            " This endpoint applies no default date window. The applied_bounds block "
+            "on the response reports the limit that was actually used."
+        )
+
+    return {
+        "type": "integer",
+        "required": False,
+        "safe_default": default_limit,
+        "minimum": 1,
+        "maximum": max_limit,
+        "example": default_limit,
+        "description": description,
+    }
+
+
+def _date_inputs(path: str) -> dict[str, Any]:
     return {
         "start": copy.deepcopy(START_INPUT),
         "end": copy.deepcopy(END_INPUT),
-        "limit": {
-            "type": "integer",
-            "required": False,
-            "safe_default": default_limit,
-            "minimum": 1,
-            "maximum": max_limit,
-            "example": default_limit,
-            "description": "Maximum number of rows returned.",
-        },
+        "limit": _limit_input(path),
     }
 
 
@@ -529,7 +574,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         workflow_role="Historical signal context and trend persistence review.",
         input_rule="Provide symbol_exchange, or provide both symbol and exchange.",
         required_inputs=copy.deepcopy(_REQ_SYMBOL),
-        optional_inputs={**copy.deepcopy(_OPT_SYMBOL), **_date_inputs(260, 2600)},
+        optional_inputs={**copy.deepcopy(_OPT_SYMBOL), **_date_inputs("/v1/indicators/history")},
         safe_example_request={
             "method": "GET",
             "path": "/v1/indicators/history",
@@ -641,7 +686,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         workflow_role="Historical forward-distribution context.",
         input_rule="Provide symbol_exchange, or provide both symbol and exchange.",
         required_inputs=copy.deepcopy(_REQ_SYMBOL),
-        optional_inputs={**{k: copy.deepcopy(v) for k, v in _OPT_SYMBOL.items() if k != "cs_only"}, **_date_inputs(260, 2600), "include_gaps": {"type": "boolean", "required": False, "safe_default": False}},
+        optional_inputs={**{k: copy.deepcopy(v) for k, v in _OPT_SYMBOL.items() if k != "cs_only"}, **_date_inputs("/v1/stim/history"), "include_gaps": {"type": "boolean", "required": False, "safe_default": False}},
         safe_example_request={"method": "GET", "path": "/v1/stim/history", "query": {"symbol_exchange": "IBM-N", "limit": 52}},
         response_shape=["request_id", "symbol_exchange", "start", "end", "count", "data", "include_gaps", "gaps"],
         example_object={"request_id": "req_demo", "symbol_exchange": "SAMPLE-N", "count": 1, "data": [{"weekdate": "YYYY-MM-DD", "x13wk": 0.0, "x13wksd": 1.0}]},
@@ -700,7 +745,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         workflow_role="Historical price context.",
         input_rule="Provide symbol_exchange, or provide both symbol and exchange.",
         required_inputs=copy.deepcopy(_REQ_SYMBOL),
-        optional_inputs={**copy.deepcopy(_OPT_SYMBOL), **_date_inputs(260, 2600)},
+        optional_inputs={**copy.deepcopy(_OPT_SYMBOL), **_date_inputs("/v1/prices/history")},
         safe_example_request={"method": "GET", "path": "/v1/prices/history", "query": {"symbol_exchange": "IBM-N", "limit": 52, "cs_only": True}},
         response_shape=["request_id", "symbol_exchange", "cs_only", "start", "end", "count", "data[].weekdate", "data[].symbol_exchange", "data[].price", "data[].adj_close", "data[].volume", "data[].pr_change"],
         example_object={"request_id": "req_demo", "symbol_exchange": "SAMPLE-N", "count": 1, "data": [{"weekdate": "YYYY-MM-DD", "price": 0.0, "volume": 0}]},
@@ -764,13 +809,13 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "start": copy.deepcopy(START_INPUT),
             "end": copy.deepcopy(END_INPUT),
             "min_prob13wk": {"type": "number", "required": False},
-            "limit": {"type": "integer", "required": False, "safe_default": 520, "minimum": 1, "maximum": 5200},
+            "limit": _limit_input("/v1/selections/history"),
             "include_data": {"type": "boolean", "required": False, "safe_default": False},
             "include_mast": {"type": "boolean", "required": False, "safe_default": False},
             "cs_only": copy.deepcopy(CS_ONLY_INPUT),
         },
         safe_example_request={"method": "GET", "path": "/v1/selections/history", "query": {"symbol_exchange": "IBM-N", "limit": 52}},
-        response_shape=["request_id", "symbol", "exchange", "symbol_exchange", "start", "end", "min_prob13wk", "include_data", "include_mast", "cs_only", "count", "data[].weekdate", "data[].prob13wk", "data[].symbol_exchange"],
+        response_shape=["request_id", "symbol", "exchange", "symbol_exchange", "start", "end", "min_prob13wk", "include_data", "include_mast", "cs_only", "applied_bounds.limit", "applied_bounds.limit_source", "applied_bounds.max_limit", "applied_bounds.rows_returned", "applied_bounds.truncated_by_limit", "count", "data[].weekdate", "data[].prob13wk", "data[].symbol_exchange"],
         example_object={"request_id": "req_demo", "symbol_exchange": "SAMPLE-N", "count": 1, "data": [{"weekdate": "YYYY-MM-DD", "symbol_exchange": "SAMPLE-N", "prob13wk": 0.0}]},
         output_summary="Historical base ST-IM selection records with prob13wk.",
         analytical_role=ROLE_PROBABILISTIC_SELECTION_UNIVERSE,
@@ -1047,7 +1092,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "min_x4wk1": {"type": "number", "required": False, "safe_default": 0.0},
             "min_x13wk1": {"type": "number", "required": False, "safe_default": 2.19},
             "min_x40wk1": {"type": "number", "required": False, "safe_default": 6.45},
-            "limit": {"type": "integer", "required": False, "safe_default": 5200, "minimum": 1, "maximum": 50000},
+            "limit": _limit_input("/v1/selections/published/history"),
             "include_data": {"type": "boolean", "required": False, "safe_default": False},
             "include_mast": {"type": "boolean", "required": False, "safe_default": False},
             "cs_only": copy.deepcopy(CS_ONLY_INPUT),
@@ -1057,7 +1102,10 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         example_object={"request_id": "req_demo", "symbol_exchange": "SAMPLE-N", "count": 1, "data": [{"weekdate": "YYYY-MM-DD", "prob13wk": 0.67, "x13wk1": 3.45}]},
         output_summary="Historical published STIM Select records.",
         analytical_role=ROLE_PROBABILISTIC_SELECTION_LIST,
-        notes=["Use date filters and limits to keep autonomous workflows bounded."],
+        notes=[
+            "Use date filters and limits to keep autonomous workflows bounded.",
+            "Read applied_bounds on the response to see the limit that was applied and whether the result was truncated.",
+        ],
         related_endpoints=["/v1/selections/published/latest", "/v1/selections/history"],
         next_recommended_calls=["/v1/stim/history", "/v1/indicators/history"],
         interpretation_guidance=STIM_SELECT_INTERPRETATION_GUIDANCE,
@@ -1099,7 +1147,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         purpose="Review recent market regime transitions.",
         investment_agent_value="Helps agents understand whether current regime context is stable or changing.",
         workflow_role="Historical market context.",
-        optional_inputs={"limit": {"type": "integer", "required": False, "safe_default": 12, "minimum": 1, "maximum": 52}, "start": copy.deepcopy(START_INPUT)},
+        optional_inputs={"limit": _limit_input("/v1/market/regime/history"), "start": copy.deepcopy(START_INPUT)},
         safe_example_request={"method": "GET", "path": "/v1/market/regime/history", "query": {"limit": 12}},
         response_shape=["history[].weekdate", "history[].regime", "history[].confidence", "history[].regime_score", "history[].bullish_pct", "history[].bearish_pct", "history[].avg_rsi", "history[].avg_mt_cnt", "history[].signal_count", "count", "limit", "start_date"],
         example_object={"count": 1, "history": [{"weekdate": "YYYY-MM-DD", "regime": "mixed", "regime_score": 0.0}]},
@@ -1405,14 +1453,17 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "end": copy.deepcopy(END_INPUT),
             "group_by_week": {"type": "boolean", "required": False, "safe_default": True},
             "include_mast": {"type": "boolean", "required": False, "safe_default": False},
-            "limit": {"type": "integer", "required": False, "safe_default": 200000, "minimum": 1, "maximum": 500000},
+            "limit": _limit_input("/v1/stwr/reports/history"),
         },
-        safe_example_request={"method": "GET", "path": "/v1/stwr/reports/history", "query": {"rpt": "bullcross", "exchange": "N", "limit": 500}},
-        response_shape=["request_id", "rpt", "name", "exchange", "start", "end", "week_count", "count", "weeks[].weekdate", "weeks[].count", "weeks[].data[].symbol_exchange", "note"],
+        safe_example_request={"method": "GET", "path": "/v1/stwr/reports/history", "query": {"rpt": "bullcross", "exchange": "N"}},
+        response_shape=["request_id", "rpt", "name", "exchange", "start", "end", "applied_bounds.start", "applied_bounds.end", "applied_bounds.window_source", "applied_bounds.limit", "applied_bounds.limit_source", "applied_bounds.max_limit", "applied_bounds.rows_returned", "applied_bounds.truncated_by_limit", "week_count", "count", "weeks[].weekdate", "weeks[].count", "weeks[].data[].symbol_exchange", "note"],
         example_object={"request_id": "req_demo", "rpt": "bullcross", "exchange": "N", "week_count": 1, "weeks": [{"weekdate": "YYYY-MM-DD", "count": 1, "data": [{"symbol_exchange": "SAMPLE-N"}]}]},
         output_summary="Historical STWR report rows, grouped by week by default.",
         analytical_role=ROLE_CURATED_SIGNAL_REPORT,
-        notes=["Use bounded date ranges or limits for autonomous workflows."],
+        notes=[
+            "Omitting start and end applies a bounded trailing window; read applied_bounds to see the window, limit and whether the result was truncated.",
+            "Rows are ordered by weekdate ascending, then by the report's own ranking within each week, so each weekdate appears in exactly one grouped bucket.",
+        ],
         related_endpoints=["/v1/stwr/reports/latest", "/v1/indicators/history"],
         next_recommended_calls=["/v1/indicators/history"],
     ),
@@ -1468,14 +1519,18 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "group_by_week": {"type": "boolean", "required": False, "safe_default": True},
             "cs_only": copy.deepcopy(CS_ONLY_INPUT),
             "include_unknown": {"type": "boolean", "required": False, "safe_default": False},
-            "limit": {"type": "integer", "required": False, "safe_default": 200000, "minimum": 1, "maximum": 500000},
+            "limit": _limit_input("/v1/breadth/sector/history"),
         },
-        safe_example_request={"method": "GET", "path": "/v1/breadth/sector/history", "query": {"group_level": "sector", "group_by_week": True, "limit": 5000}},
-        response_shape=["request_id", "group_level", "exchange", "start", "end", "cs_only", "include_unknown", "week_count", "count", "weeks[].weekdate", "weeks[].data[].bullish_count", "weeks[].data[].bearish_count", "weeks[].data[].avg_rsi", "note"],
+        safe_example_request={"method": "GET", "path": "/v1/breadth/sector/history", "query": {"group_level": "sector", "group_by_week": True}},
+        response_shape=["request_id", "group_level", "exchange", "start", "end", "cs_only", "include_unknown", "applied_bounds.start", "applied_bounds.end", "applied_bounds.window_source", "applied_bounds.limit", "applied_bounds.limit_source", "applied_bounds.max_limit", "applied_bounds.rows_returned", "applied_bounds.truncated_by_limit", "week_count", "count", "weeks[].weekdate", "weeks[].data[].bullish_count", "weeks[].data[].bearish_count", "weeks[].data[].avg_rsi", "note"],
         example_object={"request_id": "req_demo", "group_level": "sector", "week_count": 1, "weeks": [{"weekdate": "YYYY-MM-DD", "count": 1, "data": [{"group_name": "Sample Sector", "bullish_count": 0, "bearish_count": 0, "avg_rsi": 100}]}]},
         output_summary="Historical breadth groups and weekly signal distribution metrics.",
         analytical_role=ROLE_MARKET_BREADTH_CONTEXT,
-        notes=["Use /v1/breadth/sector/latest for the current breadth snapshot before requesting multi-week history."],
+        notes=[
+            "Use /v1/breadth/sector/latest for the current breadth snapshot before requesting multi-week history.",
+            "Omitting start and end applies a bounded trailing window; read applied_bounds to see the window, limit and whether the result was truncated.",
+            "Omitting exchange returns breadth aggregated across all exchanges, one row per weekdate and sector, using the same aggregation as /v1/breadth/sector/latest. Supply exchange to scope to a single exchange.",
+        ],
         related_endpoints=["/v1/breadth/sector/latest", "/v1/market/regime/history"],
         next_recommended_calls=["/v1/market/regime/latest", "/v1/leadership/summary/latest"],
     ),
@@ -1695,6 +1750,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
                 "safe_default": True,
                 "example": True,
             },
+            "limit": _limit_input("/v1/leadership/rotation/history"),
         },
         safe_example_request={
             "method": "GET",
@@ -1703,7 +1759,11 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         },
         response_shape=[
             "request_id", "exchange", "start", "end", "filters.type",
-            "filters.min_constituents", "filters.top_k", "week_count", "count",
+            "filters.min_constituents", "filters.top_k",
+            "applied_bounds.start", "applied_bounds.end", "applied_bounds.window_source",
+            "applied_bounds.limit", "applied_bounds.limit_source", "applied_bounds.max_limit",
+            "applied_bounds.rows_returned", "applied_bounds.truncated_by_limit",
+            "week_count", "count",
             "weeks[].weekdate", "weeks[].count", "weeks[].data[].sector_code",
             "weeks[].data[].sector_name", "weeks[].data[].bull_pct",
             "weeks[].data[].avg_rsi", "weeks[].data[].avg_mt_cnt",
@@ -1740,7 +1800,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         analytical_role=ROLE_LEADERSHIP_INTELLIGENCE,
         notes=[
             "RSI baseline is 100; values above 100 indicate outperformance versus benchmark.",
-            "Use bounded date ranges for autonomous workflows.",
+            "Omitting start and end applies a bounded trailing window; read applied_bounds to see the window, limit and whether the result was truncated.",
         ],
         related_endpoints=["/v1/leadership/summary/latest", "/v1/breadth/sector/history", "/v1/market/regime/history"],
         next_recommended_calls=["/v1/market/regime/history", "/v1/indicators/history"],
@@ -2145,6 +2205,12 @@ def build_endpoint_preview(
         "notes": copy.deepcopy(entry.get("notes", [])),
         "related_endpoints": copy.deepcopy(entry.get("related_endpoints", [])),
         "next_recommended_calls": copy.deepcopy(entry.get("next_recommended_calls", [])),
+        # This builder produces the `stocktrends_preview` carried by the HTTP 402
+        # challenge, which is the last surface a client sees before paying. The
+        # evaluation pointer belongs here for that reason; the canonical
+        # statement stays at /v1/ai/context so there is one definition of it.
+        "evaluation_guidance": SERVICE_EVALUATION_GUIDANCE_POINTER,
+        "evaluation_guidance_source": SERVICE_EVALUATION_GUIDANCE_SOURCE,
         "pricing": {
             "pricing_rule_id": resolved_pricing_rule_id,
             "stc_cost": stc_cost,
@@ -2198,7 +2264,12 @@ def build_compact_endpoint_preview(
         "output_summary": entry["output_summary"],
         "not_investment_advice": True,
         "not_investment_adviser": True,
+        # No evaluation guidance here. This builder exists to keep a challenge
+        # body small, and the evaluation procedure is published at service level
+        # on /.well-known/x402 and /v1/ai/context. The discovery block below
+        # already points a client at both.
         "discovery": {
+            "x402_discovery": X402_DISCOVERY_URL,
             "tools_manifest": TOOLS_MANIFEST_URL,
             "ai_context": AI_CONTEXT_URL,
             "workflows": WORKFLOWS_URL,

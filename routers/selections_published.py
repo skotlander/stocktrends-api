@@ -10,6 +10,17 @@ from sqlalchemy import text
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
+from utils.history_bounds import (
+    LIMIT_SOURCE_CALLER,
+    LIMIT_SOURCE_DEFAULT,
+    WINDOW_SOURCE_CALLER,
+    WINDOW_SOURCE_NOT_APPLIED,
+    build_applied_bounds,
+    history_default_limit,
+    history_max_limit,
+    probe_limit,
+    split_probe_rows,
+)
 
 router = APIRouter(prefix="/selections/published", tags=["selections_published"])
 
@@ -17,6 +28,12 @@ router = APIRouter(prefix="/selections/published", tags=["selections_published"]
 BASE_4WK = 0.00
 BASE_13WK = 2.19
 BASE_40WK = 6.45
+
+# Single definition of the /selections/published/history row bounds, feeding the
+# FastAPI Query below (and therefore OpenAPI) and the discovery registry alike.
+PUBLISHED_HISTORY_PATH = "/v1/selections/published/history"
+PUBLISHED_HISTORY_DEFAULT_LIMIT = history_default_limit(PUBLISHED_HISTORY_PATH)
+PUBLISHED_HISTORY_MAX_LIMIT = history_max_limit(PUBLISHED_HISTORY_PATH)
 
 
 def _norm_symbol(s: str) -> str:
@@ -386,7 +403,12 @@ def selections_published_history(
     min_x4wk1: float = Query(default=BASE_4WK, description="Minimum lower confidence bound for 4-week return"),
     min_x13wk1: float = Query(default=BASE_13WK, description="Minimum lower confidence bound for 13-week return"),
     min_x40wk1: float = Query(default=BASE_40WK, description="Minimum lower confidence bound for 40-week return"),
-    limit: int = Query(default=5200, ge=1, le=50000, description="Safety limit"),
+    limit: int = Query(
+        default=PUBLISHED_HISTORY_DEFAULT_LIMIT,
+        ge=1,
+        le=PUBLISHED_HISTORY_MAX_LIMIT,
+        description="Safety limit. This endpoint applies no default date window.",
+    ),
     include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
     include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
     cs_only: bool = Query(default=True, description="When include_data=true, filter to common stocks"),
@@ -406,7 +428,9 @@ def selections_published_history(
         exchange=exchange,
     )
 
-    params: dict[str, Any] = {"limit": limit}
+    # Retrieval semantics are unchanged: this endpoint was already bounded by its
+    # 5200-row default. The probe row exists only so truncation is reportable.
+    params: dict[str, Any] = {"limit": probe_limit(limit)}
     where = _published_where(
         ex=ex,
         start=start,
@@ -514,7 +538,8 @@ def selections_published_history(
             },
         )
 
-    data_desc = [dict(r) for r in rows]
+    bounded_rows, truncated_by_limit = split_probe_rows(list(rows), limit)
+    data_desc = [dict(r) for r in bounded_rows]
     for d in data_desc:
         d["symbol_exchange"] = f'{d["symbol"]}-{d["exchange"]}'
 
@@ -537,6 +562,28 @@ def selections_published_history(
         "include_data": include_data,
         "include_mast": include_mast,
         "cs_only": (cs_only if include_data else None),
+        "applied_bounds": build_applied_bounds(
+            start=start,
+            end=end,
+            window_source=(
+                WINDOW_SOURCE_CALLER if (start or end) else WINDOW_SOURCE_NOT_APPLIED
+            ),
+            default_window_weeks=None,
+            limit=limit,
+            limit_source=(
+                LIMIT_SOURCE_CALLER
+                if "limit" in request.query_params
+                else LIMIT_SOURCE_DEFAULT
+            ),
+            max_limit=PUBLISHED_HISTORY_MAX_LIMIT,
+            rows_returned=len(data),
+            truncated_by_limit=truncated_by_limit,
+            widen_with=(
+                "Supply start and/or end to select a range, and raise limit up to "
+                f"{PUBLISHED_HISTORY_MAX_LIMIT} for more rows. This endpoint applies "
+                "no default date window."
+            ),
+        ),
         "count": len(data),
         "data": data,
     }

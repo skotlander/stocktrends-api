@@ -381,6 +381,190 @@ WORKFLOW_REGISTRY: list[dict] = [
             },
         ],
     },
+    {
+        "workflow_id": "historical_signal_validation",
+        "name": "Historical Signal Validation and Model Integration Review",
+        "description": (
+            "Retrieve bounded historical Stock Trends observations across the instrument, "
+            "cross-sectional, market-regime and inference layers so an external research "
+            "system, forecasting model, portfolio system or agent can evaluate whether "
+            "Stock Trends context adds information beyond its own existing baseline."
+        ),
+        "tags": ["agent", "research", "historical", "validation", "integration"],
+        "supported_rails": ["subscription", "x402", "mpp"],
+        "analytical_role": "research_validation_workflow",
+        "research_goal": (
+            "Assemble the Stock Trends side of a historical evaluation: point-in-time "
+            "observations, the semantics needed to interpret them, and the published "
+            "evidence describing what has already been measured."
+        ),
+        "decision_guidance": (
+            "Use when the question is whether Stock Trends context is worth integrating "
+            "into an existing research or forecasting process, rather than what the "
+            "current market state is. The evaluation itself is performed by the caller."
+        ),
+        "best_for": (
+            "Evaluating Stock Trends as a candidate contextual feature or data layer for "
+            "an external model or research process."
+        ),
+        "agent_goal_examples": [
+            (
+                "Assemble a historical Stock Trends feature set aligned on weekdate "
+                "for a researcher-defined forward-return target."
+            ),
+            (
+                "Compare Stock Trends classification, breadth, leadership and regime "
+                "context against an existing baseline feature set over a defined "
+                "historical period."
+            ),
+            (
+                "Check whether a measured contribution holds across different market "
+                "regimes before deciding on recurring integration."
+            ),
+        ],
+        "symbol_selection_guidance": (
+            "Instrument-level steps take symbol_exchange. Resolve tickers through "
+            "/v1/instruments/lookup or /v1/instruments/resolve first and reuse the "
+            "returned symbol_exchange. The cross-sectional, regime and evidence steps are "
+            "market-level and take no symbol."
+        ),
+        "interpretation_guidance": (
+            "Stock Trends observations are weekly classification states keyed on "
+            "weekdate; weekdate is the alignment key for any join the caller performs. "
+            "Read /v1/meta/indicators for indicator semantics and /v1/meta/inference for "
+            "the provider-agnostic inference contract before treating any field as a "
+            "feature. ST-IM is one inference provider over the classification framework "
+            "rather than the framework itself, so the instrument, breadth, leadership and "
+            "regime layers are evaluated on their own terms and not only through ST-IM. "
+            "Historical depth supports comparability across market environments; it does "
+            "not establish that any measured relationship will persist."
+        ),
+        "required_interpretation_steps": [
+            "Call GET /v1/meta/indicators before treating trend, trend_cnt, mt_cnt, rsi, rsi_updn or vol_tag as features.",
+            "Call GET /v1/meta/inference before interpreting any provider-specific inference output.",
+            "Call GET /v1/meta/stim before interpreting ST-IM fields, if ST-IM history is used.",
+            "Treat weekdate as the point-in-time key; each row describes the week it is keyed on.",
+            "Read applied_bounds on every history response to confirm the window and row limit actually applied.",
+            "If ST-IM Select outcome evidence is used, interpret it as an aggregate measurement of one stated signal rule over a stated population, not as a portfolio result, a forecast, or evidence about the broader classification layers.",
+        ],
+        "stock_trends_supplies": [
+            "Point-in-time weekly historical observations for the instrument, cross-sectional, market-regime and inference layers.",
+            "Interpretation semantics and field definitions for those observations.",
+            "Published evidence families, each carrying its own methodology and limitations, mapped at /v1/ai/context.",
+            "weekdate as a consistent alignment key across all layers.",
+            "Explicit applied_bounds describing the window and row limit each response was produced under.",
+        ],
+        "researcher_supplied_steps": [
+            "Define the historical research period appropriate to the question.",
+            "Define the target, outcome definition and forecast horizon being predicted.",
+            "Perform the join between Stock Trends observations and that target.",
+            "Enforce point-in-time discipline and avoid look-ahead leakage in that join.",
+            "Define the existing baseline or feature set the comparison is against.",
+            "Measure any incremental contribution over that baseline.",
+            "Examine stability across market regimes or other relevant contexts.",
+            "Separate in-sample exploration from out-of-sample validation.",
+            "Decide whether the measured contribution justifies recurring integration.",
+        ],
+        "not_provided_by_this_api": [
+            "bulk dataset download",
+            "model training or fitting",
+            "automatic feature engineering",
+            "joins to external targets or datasets",
+            "backtesting or portfolio simulation",
+            "statistical significance testing",
+            "causal validation",
+        ],
+        "success_condition": (
+            "The caller can state, from the material actually retrieved, whether a "
+            "measured incremental contribution was stable enough to justify recurring "
+            "use. A completed evaluation is the success condition; a positive result is "
+            "not asserted, implied, or required."
+        ),
+        "next_step_guidance": [
+            "Use /v1/cost-estimate to bound the STC cost of the paid steps before executing them.",
+            "Use /v1/instruments/resolve to produce symbol_exchange values for the instrument-level steps.",
+            "Use the regime_analysis or portfolio_build workflows instead if the goal turns out to be current market context rather than historical evaluation.",
+        ],
+        "steps": [
+            {
+                "step_id": "meta_indicators",
+                "endpoint": "GET /v1/meta/indicators",
+                "pricing_rule_id": None,
+                "description": "Retrieve Stock Trends indicator definitions before treating any field as a research feature.",
+                "optional": False,
+            },
+            {
+                "step_id": "meta_inference",
+                "endpoint": "GET /v1/meta/inference",
+                "pricing_rule_id": None,
+                "description": "Retrieve the provider-agnostic inference contract governing any inference output used.",
+                "optional": False,
+            },
+            {
+                "step_id": "stim_select_outcome_evidence",
+                "endpoint": "GET /v1/selections/stim-select/outcomes/summary",
+                "pricing_rule_id": None,
+                "description": (
+                    "Optionally inspect published aggregate outcome evidence for the "
+                    "ST-IM Select filter. This is one evidence family, specific to one "
+                    "application of the framework; it is relevant when the evaluation "
+                    "concerns that filter, and not a precondition for evaluating the "
+                    "broader classification and context layers. See the evidence map at "
+                    "/v1/ai/context for the other families and their limitations."
+                ),
+                "optional": True,
+            },
+            {
+                "step_id": "instrument_classification_history",
+                "endpoint": "GET /v1/indicators/history",
+                "pricing_rule_id": "indicators_history_paid",
+                "description": "Retrieve bounded weekly Stock Trends classification history for a resolved instrument: the core candidate feature set.",
+                "optional": False,
+            },
+            {
+                "step_id": "regime_history",
+                "endpoint": "GET /v1/market/regime/history",
+                "pricing_rule_id": "market_regime_history",
+                "description": "Retrieve historical market regime context for regime-conditioned evaluation of any measured relationship.",
+                "optional": False,
+            },
+            {
+                "step_id": "breadth_history",
+                "endpoint": "GET /v1/breadth/sector/history",
+                "pricing_rule_id": "breadth_sector_history_paid",
+                "description": "Retrieve historical cross-sectional participation context as an independent candidate feature layer.",
+                "optional": True,
+            },
+            {
+                "step_id": "leadership_rotation_history",
+                "endpoint": "GET /v1/leadership/rotation/history",
+                "pricing_rule_id": "leadership_rotation_history_paid",
+                "description": "Retrieve historical sector leadership concentration and rotation context as a further independent feature layer.",
+                "optional": True,
+            },
+            {
+                "step_id": "price_context_history",
+                "endpoint": "GET /v1/prices/history",
+                "pricing_rule_id": "prices_history_paid",
+                "description": "Retrieve bounded weekly price context the caller may use when constructing its own outcome definition.",
+                "optional": True,
+            },
+            {
+                "step_id": "meta_stim",
+                "endpoint": "GET /v1/meta/stim",
+                "pricing_rule_id": None,
+                "description": "Retrieve the ST-IM provider profile, required only if ST-IM history is included in the evaluation.",
+                "optional": True,
+            },
+            {
+                "step_id": "inference_history",
+                "endpoint": "GET /v1/stim/history",
+                "pricing_rule_id": "stim_history_paid",
+                "description": "Optionally retrieve bounded historical ST-IM forward-return distributions as one inference layer over the classification framework.",
+                "optional": True,
+            },
+        ],
+    },
 ]
 
 WORKFLOW_ID_EXAMPLES = [
@@ -389,6 +573,7 @@ WORKFLOW_ID_EXAMPLES = [
     "stim_forecast_review",
     "portfolio_build",
     "portfolio_compare_review",
+    "historical_signal_validation",
 ]
 
 # ---------------------------------------------------------------------------
@@ -562,6 +747,13 @@ def get_workflows() -> JSONResponse:
             "symbol_selection_guidance": w.get("symbol_selection_guidance"),
             "interpretation_guidance": w.get("interpretation_guidance"),
             "required_interpretation_steps": w.get("required_interpretation_steps", []),
+            # Division-of-labour fields. A workflow that spans work this API does
+            # not perform has to say so explicitly, or a consumer will read the
+            # step list as the whole procedure.
+            "stock_trends_supplies": w.get("stock_trends_supplies", []),
+            "researcher_supplied_steps": w.get("researcher_supplied_steps", []),
+            "not_provided_by_this_api": w.get("not_provided_by_this_api", []),
+            "success_condition": w.get("success_condition"),
             "next_step_guidance": w.get("next_step_guidance", []),
             "steps": steps,
         }

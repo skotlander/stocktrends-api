@@ -27,14 +27,27 @@ from routers.leadership import _rotation_summary_sql  # noqa: E402
 # ---------------------------------------------------------------------------
 
 class TestUseSectorSummary:
+    """
+    The summary fast-path is only usable for a single-exchange request.
+
+    st_sector_summary is aggregated per (weekdate, sector, exchange, type). A
+    single-exchange request reads exactly one stored row per (weekdate, sector);
+    an all-exchange request would read one row per exchange for the same
+    (weekdate, sector_code), which the projection does not label. All-exchange
+    breadth therefore falls through to the raw st_data aggregation.
+    """
+
     def _call(self, **kw):
         defaults = dict(level="sector", cs_only=True, include_unknown=False,
-                        min_price=None, min_volume=None)
+                        min_price=None, min_volume=None, exchange="N")
         defaults.update(kw)
         return _use_sector_summary(**defaults)
 
-    def test_defaults_true(self):
+    def test_single_exchange_defaults_true(self):
         assert self._call() is True
+
+    def test_all_exchange_request_falls_back_to_raw_aggregation(self):
+        assert self._call(exchange=None) is False
 
     def test_industry_group_false(self):
         assert self._call(level="industry_group") is False

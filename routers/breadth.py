@@ -23,10 +23,38 @@ from sqlalchemy import text
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
+from utils.history_bounds import (
+    DEFAULT_HISTORY_WINDOW_WEEKS,
+    LIMIT_SOURCE_CALLER,
+    LIMIT_SOURCE_DEFAULT,
+    build_applied_bounds,
+    history_default_limit,
+    history_max_limit,
+    probe_limit,
+    resolve_history_window,
+    split_probe_rows,
+)
 
 router = APIRouter(prefix="/breadth", tags=["breadth"])
 
 GroupLevel = Literal["sector", "industry_group", "industry"]
+
+# Bounds for /breadth/sector/history.  A bare request previously ran the full
+# multi-decade series through a 200000-row ceiling and returned ~48 MB; these
+# are the values that make the default slice a deliberate research window.
+# Read from the shared bounds table so the runtime Query below, the OpenAPI
+# schema derived from it, and the discovery registry all state the same numbers.
+# The pre-existing explicit ceiling is retained so that any caller who already
+# raises `limit` deliberately keeps working unchanged.
+HISTORY_PATH = "/v1/breadth/sector/history"
+HISTORY_DEFAULT_LIMIT = history_default_limit(HISTORY_PATH)
+HISTORY_MAX_LIMIT = history_max_limit(HISTORY_PATH)
+HISTORY_WIDEN_HINT = (
+    "Supply start and/or end to select a different range, and raise limit up to "
+    f"{HISTORY_MAX_LIMIT} for more rows. When start and end are both omitted, a "
+    f"trailing {DEFAULT_HISTORY_WINDOW_WEEKS}-week window ending at the latest "
+    "available weekdate is applied."
+)
 
 
 # --- Normalizers ------------------------------------------------------------
@@ -97,10 +125,33 @@ def _use_sector_summary(
     include_unknown: bool,
     min_price: float | None,
     min_volume: int | None,
+    exchange: str | None,
 ) -> bool:
-    """True when st_sector_summary can satisfy the request without raw st_data aggregation."""
+    """
+    True when st_sector_summary can satisfy the request without raw st_data aggregation.
+
+    `st_sector_summary` is aggregated per (weekdate, sector, exchange, type).  It
+    can therefore answer a *single-exchange* request directly: the stored row is
+    already the aggregate over exactly the population the caller asked for.
+
+    It cannot answer an all-exchange request by itself.  Selecting without an
+    exchange filter returns one row per exchange for the same
+    (weekdate, sector_code) — and the projection does not even carry
+    `ss.exchange`, so those rows reach the caller as unlabelled duplicates.
+    Recombining them would need a weighted merge whose exactness depends on each
+    stored average having been computed over the same row count as `total`,
+    which the summary table does not record.
+
+    So an all-exchange request falls through to `_breadth_sql`, which computes
+    COUNT/SUM/AVG/MAX directly over the full (weekdate, sector) row population
+    in one pass.  That is the definitional aggregate — there is no intermediate
+    per-exchange mean to re-weight — and it is the identical aggregation
+    `/breadth/sector/latest` already performs, so the two endpoints now agree on
+    what all-exchange sector breadth means.
+    """
     return (
-        level == "sector"
+        exchange is not None
+        and level == "sector"
         and cs_only is True
         and include_unknown is False
         and min_price is None
@@ -401,10 +452,30 @@ def breadth_sector_history(
     min_price: float | None = Query(default=None),
     min_volume: int | None = Query(default=None),
     vol_scale: int = Query(default=100),
-    limit: int = Query(default=200000, ge=1, le=500000, description="Safety limit across all rows returned."),
+    limit: int = Query(
+        default=HISTORY_DEFAULT_LIMIT,
+        ge=1,
+        le=HISTORY_MAX_LIMIT,
+        description=(
+            "Safety limit across all rows returned. When start and end are both "
+            f"omitted, a trailing {DEFAULT_HISTORY_WINDOW_WEEKS}-week window is also applied."
+        ),
+    ),
 ):
     engine = get_engine()
     ex = _norm_exchange(exchange) if exchange else None
+
+    # Bounding runs here, inside paid execution, rather than in the registered
+    # pre-payment validator: it shapes the work performed, it does not decide
+    # whether the request was answerable.
+    effective_start, effective_end, window_source = resolve_history_window(
+        start=start,
+        end=end,
+        anchor_weekdate=lambda: _latest_weekdate(engine, ex),
+    )
+    limit_source = (
+        LIMIT_SOURCE_CALLER if "limit" in request.query_params else LIMIT_SOURCE_DEFAULT
+    )
 
     if _use_sector_summary(
         level=group_level,
@@ -412,10 +483,11 @@ def breadth_sector_history(
         include_unknown=include_unknown,
         min_price=min_price,
         min_volume=min_volume,
+        exchange=ex,
     ):
         sql_base, params = _breadth_summary_sql(
-            start=start,
-            end=end,
+            start=effective_start,
+            end=effective_end,
             exchange=ex,
         )
         order = " ORDER BY weekdate ASC, bullish_count DESC, avg_rsi DESC"
@@ -423,8 +495,8 @@ def breadth_sector_history(
         sql_base, params = _breadth_sql(
             level=group_level,
             weekdate=None,
-            start=start,
-            end=end,
+            start=effective_start,
+            end=effective_end,
             exchange=ex,
             cs_only=cs_only,
             min_price=min_price,
@@ -435,7 +507,7 @@ def breadth_sector_history(
         order = " ORDER BY d.weekdate ASC, bullish_count DESC, avg_rsi DESC"
 
     sql = text(f"{sql_base}{order} LIMIT :limit")
-    params["limit"] = int(limit)
+    params["limit"] = probe_limit(limit)
 
     try:
         with engine.connect() as conn:
@@ -446,7 +518,20 @@ def breadth_sector_history(
             detail={"request_id": request.state.request_id, "error": "db_query_failed", "message": str(e)},
         )
 
-    flat = _postprocess([dict(r) for r in rows])
+    bounded_rows, truncated_by_limit = split_probe_rows(list(rows), limit)
+    flat = _postprocess([dict(r) for r in bounded_rows])
+
+    applied_bounds = build_applied_bounds(
+        start=effective_start,
+        end=effective_end,
+        window_source=window_source,
+        limit=limit,
+        limit_source=limit_source,
+        max_limit=HISTORY_MAX_LIMIT,
+        rows_returned=len(flat),
+        truncated_by_limit=truncated_by_limit,
+        widen_with=HISTORY_WIDEN_HINT,
+    )
 
     if not group_by_week:
         return {
@@ -457,6 +542,7 @@ def breadth_sector_history(
             "end": end,
             "cs_only": cs_only,
             "include_unknown": include_unknown,
+            "applied_bounds": applied_bounds,
             "count": len(flat),
             "data": flat,
         }
@@ -486,6 +572,7 @@ def breadth_sector_history(
         "end": end,
         "cs_only": cs_only,
         "include_unknown": include_unknown,
+        "applied_bounds": applied_bounds,
         "week_count": len(weeks),
         "count": len(flat),
         "weeks": weeks,

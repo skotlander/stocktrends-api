@@ -16,6 +16,17 @@ from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
 from services import stim_select_outcome_summary as outcome_summary_service
+from utils.history_bounds import (
+    LIMIT_SOURCE_CALLER,
+    LIMIT_SOURCE_DEFAULT,
+    WINDOW_SOURCE_CALLER,
+    WINDOW_SOURCE_NOT_APPLIED,
+    build_applied_bounds,
+    history_default_limit,
+    history_max_limit,
+    probe_limit,
+    split_probe_rows,
+)
 from utils.volume import volume_to_actual_shares
 from services.stim_select_outcome_summary import (
     StimSelectOutcomeSummaryTableMissing,
@@ -24,6 +35,13 @@ from services.stim_select_outcome_summary import (
 
 logger = logging.getLogger("stocktrends_api.selections")
 router = APIRouter(prefix="/selections", tags=["selections"])
+
+# Single definition of the /selections/history row bounds. The FastAPI Query
+# below derives the OpenAPI default and maximum from these, and the discovery
+# registry mirrors them, so runtime and published metadata cannot drift.
+SELECTIONS_HISTORY_PATH = "/v1/selections/history"
+SELECTIONS_HISTORY_DEFAULT_LIMIT = history_default_limit(SELECTIONS_HISTORY_PATH)
+SELECTIONS_HISTORY_MAX_LIMIT = history_max_limit(SELECTIONS_HISTORY_PATH)
 
 STIM_SELECT_BASE_4WK = float(outcome_summary_service.STIM_SELECT_BASE_4WK)
 STIM_SELECT_BASE_13WK = float(outcome_summary_service.STIM_SELECT_BASE_13WK)
@@ -892,7 +910,12 @@ def selections_history(
     start: str | None = Query(default=None, description="Start date YYYY-MM-DD (inclusive)"),
     end: str | None = Query(default=None, description="End date YYYY-MM-DD (inclusive)"),
     min_prob13wk: float | None = Query(default=None, description="Optional minimum prob13wk threshold"),
-    limit: int = Query(default=520, ge=1, le=5200, description="Safety limit"),
+    limit: int = Query(
+        default=SELECTIONS_HISTORY_DEFAULT_LIMIT,
+        ge=1,
+        le=SELECTIONS_HISTORY_MAX_LIMIT,
+        description="Safety limit. This endpoint applies no default date window.",
+    ),
     include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
     include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
     cs_only: bool = Query(default=True, description="When include_data=true, filter to common stocks"),
@@ -918,7 +941,10 @@ def selections_history(
         exchange=exchange,
     )
 
-    params: dict[str, Any] = {"limit": limit}
+    # Retrieval semantics are unchanged here: this endpoint was already bounded
+    # by its 520-row default. The probe row exists only so truncation can be
+    # reported rather than left for the caller to infer.
+    params: dict[str, Any] = {"limit": probe_limit(limit)}
     where = "WHERE 1=1"
 
     if s:
@@ -1004,7 +1030,8 @@ def selections_history(
             },
         )
 
-    data_desc = [dict(r) for r in rows]
+    bounded_rows, truncated_by_limit = split_probe_rows(list(rows), limit)
+    data_desc = [dict(r) for r in bounded_rows]
     for d in data_desc:
         d["symbol_exchange"] = f'{d["symbol"]}-{d["exchange"]}'
 
@@ -1024,6 +1051,28 @@ def selections_history(
         "include_data": include_data,
         "include_mast": include_mast,
         "cs_only": (cs_only if include_data else None),
+        "applied_bounds": build_applied_bounds(
+            start=start,
+            end=end,
+            window_source=(
+                WINDOW_SOURCE_CALLER if (start or end) else WINDOW_SOURCE_NOT_APPLIED
+            ),
+            default_window_weeks=None,
+            limit=limit,
+            limit_source=(
+                LIMIT_SOURCE_CALLER
+                if "limit" in request.query_params
+                else LIMIT_SOURCE_DEFAULT
+            ),
+            max_limit=SELECTIONS_HISTORY_MAX_LIMIT,
+            rows_returned=len(data),
+            truncated_by_limit=truncated_by_limit,
+            widen_with=(
+                "Supply start and/or end to select a range, and raise limit up to "
+                f"{SELECTIONS_HISTORY_MAX_LIMIT} for more rows. This endpoint applies "
+                "no default date window."
+            ),
+        ),
         "count": len(data),
         "data": data,
     }

@@ -10,10 +10,34 @@ from sqlalchemy import text
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
+from utils.history_bounds import (
+    DEFAULT_HISTORY_WINDOW_WEEKS,
+    LIMIT_SOURCE_CALLER,
+    LIMIT_SOURCE_DEFAULT,
+    build_applied_bounds,
+    history_default_limit,
+    history_max_limit,
+    probe_limit,
+    resolve_history_window,
+    split_probe_rows,
+)
 
 router = APIRouter(prefix="/leadership", tags=["leadership"])
 
 BULLISH_TRENDS = ("^+", "^-", "v^")
+
+# Bounds for /leadership/rotation/history.  This endpoint previously had no
+# `limit` parameter and emitted no LIMIT clause at all, so its result size was
+# governed only by `top_k` multiplied by however many weeks exist.
+ROTATION_HISTORY_PATH = "/v1/leadership/rotation/history"
+ROTATION_HISTORY_DEFAULT_LIMIT = history_default_limit(ROTATION_HISTORY_PATH)
+ROTATION_HISTORY_MAX_LIMIT = history_max_limit(ROTATION_HISTORY_PATH)
+ROTATION_HISTORY_WIDEN_HINT = (
+    "Supply start and/or end to select a different range, and raise limit up to "
+    f"{ROTATION_HISTORY_MAX_LIMIT} for more rows. When start and end are both "
+    f"omitted, a trailing {DEFAULT_HISTORY_WINDOW_WEEKS}-week window ending at "
+    "the latest available weekdate is applied."
+)
 
 
 def _norm_exchange(ex: str) -> str:
@@ -73,12 +97,16 @@ def _rotation_summary_sql(
     end: str | None,
     min_constituents: int,
     top_k: int | None,
+    limit: int | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
     Build the complete rotation/history SQL against st_sector_summary.
 
     Preserves the MySQL 5.7 user-variable ranking pattern; applies it to
     the pre-aggregated summary table instead of raw st_data.
+
+    `limit` emits a real LIMIT clause after the final ordering, so the row cap
+    is enforced by the database rather than assumed from `top_k`.
     """
     params: dict[str, Any] = {
         "type": type_,
@@ -147,6 +175,10 @@ def _rotation_summary_sql(
         sql += " WHERE ranked.rank_in_week <= :top_k "
 
     sql += " ORDER BY ranked.weekdate ASC, ranked.rank_in_week ASC, ranked.sector_name ASC "
+
+    if limit is not None:
+        params["limit"] = int(limit)
+        sql += " LIMIT :limit "
 
     return sql, params
 
@@ -353,6 +385,15 @@ def leadership_rotation_history(
     top_k: int | None = Query(default=5, ge=1, le=50, description="Top K sectors per week (omit for all)"),
     min_constituents: int = Query(default=25, ge=1, le=5000, description="Min # instruments in sector/week"),
     group_by_week: bool = Query(default=True, description="Group results by weekdate"),
+    limit: int = Query(
+        default=ROTATION_HISTORY_DEFAULT_LIMIT,
+        ge=1,
+        le=ROTATION_HISTORY_MAX_LIMIT,
+        description=(
+            "Safety limit across all rows returned. When start and end are both "
+            f"omitted, a trailing {DEFAULT_HISTORY_WINDOW_WEEKS}-week window is also applied."
+        ),
+    ),
 ):
     """
     Sector leadership rotation over time (weekly), MySQL 5.7 compatible.
@@ -367,13 +408,26 @@ def leadership_rotation_history(
     engine = get_engine()
     ex = _norm_exchange(exchange) if exchange else None
 
+    # Service shaping, applied behind the payment boundary alongside the query
+    # it bounds — not in the pre-payment validator, which only rejects requests
+    # the query string alone already makes unanswerable.
+    effective_start, effective_end, window_source = resolve_history_window(
+        start=start,
+        end=end,
+        anchor_weekdate=lambda: _latest_weekdate(engine, ex, type),
+    )
+    limit_source = (
+        LIMIT_SOURCE_CALLER if "limit" in request.query_params else LIMIT_SOURCE_DEFAULT
+    )
+
     sql, params = _rotation_summary_sql(
         type_=type,
         exchange=ex,
-        start=start,
-        end=end,
+        start=effective_start,
+        end=effective_end,
         min_constituents=min_constituents,
         top_k=top_k,
+        limit=probe_limit(limit),
     )
 
     try:
@@ -385,10 +439,23 @@ def leadership_rotation_history(
             detail={"request_id": request.state.request_id, "error": "db_query_failed", "message": str(e)},
         )
 
-    flat = [dict(r) for r in rows]
+    bounded_rows, truncated_by_limit = split_probe_rows(list(rows), limit)
+    flat = [dict(r) for r in bounded_rows]
     # clean up internal variable helper columns if present
     for d in flat:
         d.pop("_wk_set", None)
+
+    applied_bounds = build_applied_bounds(
+        start=effective_start,
+        end=effective_end,
+        window_source=window_source,
+        limit=limit,
+        limit_source=limit_source,
+        max_limit=ROTATION_HISTORY_MAX_LIMIT,
+        rows_returned=len(flat),
+        truncated_by_limit=truncated_by_limit,
+        widen_with=ROTATION_HISTORY_WIDEN_HINT,
+    )
 
     if not group_by_week:
         return {
@@ -397,6 +464,7 @@ def leadership_rotation_history(
             "start": start,
             "end": end,
             "filters": {"type": type, "min_constituents": min_constituents, "top_k": top_k},
+            "applied_bounds": applied_bounds,
             "count": len(flat),
             "data": flat,
         }
@@ -422,6 +490,7 @@ def leadership_rotation_history(
         "start": start,
         "end": end,
         "filters": {"type": type, "min_constituents": min_constituents, "top_k": top_k},
+        "applied_bounds": applied_bounds,
         "week_count": len(weeks),
         "count": len(flat),
         "weeks": weeks,

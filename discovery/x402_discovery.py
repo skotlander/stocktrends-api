@@ -19,8 +19,13 @@ from discovery.endpoint_metadata import (
     SERVICE_NAME,
     TOOLS_MANIFEST_URL,
     WORKFLOWS_URL,
+    X402_DISCOVERY_PATH,
     build_input_schema,
     get_endpoint_metadata,
+)
+from discovery.service_meta import (
+    SERVICE_EVALUATION_GUIDANCE_SOURCE,
+    SERVICE_EVALUATION_GUIDANCE_SUMMARY,
 )
 import payments.policy_provider as payment_policy
 import payments.x402_contract as x402_contract
@@ -31,7 +36,9 @@ from services.intelligence_artifact_availability import (
 logger = logging.getLogger("stocktrends_api.x402_discovery")
 
 DISCOVERY_SCHEMA = "stocktrends.x402-discovery.v1"
-CANONICAL_DISCOVERY_PATH = "/.well-known/x402"
+# Same value as before; sourced from the shared constant so the path exists in
+# one place rather than being spelled out in two modules.
+CANONICAL_DISCOVERY_PATH = X402_DISCOVERY_PATH
 CANONICAL_DISCOVERY_URL = f"{PUBLIC_API_BASE_URL}{CANONICAL_DISCOVERY_PATH}"
 CANONICAL_OPENAPI_URL = f"{PUBLIC_API_BASE_URL}/v1/openapi.json"
 
@@ -383,6 +390,58 @@ def build_x402_discovery(*, strict: bool = True) -> dict[str, Any]:
             "workflows_url": WORKFLOWS_URL,
             "pricing_catalog_url": PRICING_CATALOG_URL,
             "ai_context_url": AI_CONTEXT_URL,
+        },
+        # Service-level, not per-resource. A client reading this manifest is by
+        # definition deciding whether a payable resource is worth acquiring, so
+        # the evaluation procedure belongs here — once, as a reference. Repeating
+        # it on every resource entry would bloat the manifest and give the same
+        # sentence as many places to drift apart.
+        #
+        # It is procedural and states no conclusion: it says how to evaluate, not
+        # that anything is worth buying. It names only public, non-metered
+        # resources, so following it cannot cause paid execution, and it adds no
+        # price of its own — /v1/pricing/catalog remains the price source.
+        "acquisition_evaluation": {
+            "guidance": SERVICE_EVALUATION_GUIDANCE_SUMMARY,
+            "canonical_source": SERVICE_EVALUATION_GUIDANCE_SOURCE,
+            "inspect_before_deciding": {
+                "what_is_offered": [
+                    CANONICAL_DISCOVERY_URL,
+                    TOOLS_MANIFEST_URL,
+                    WORKFLOWS_URL,
+                ],
+                "how_to_interpret_it": [
+                    _absolute_url("/v1/meta/inference"),
+                    _absolute_url("/v1/meta/stim"),
+                    _absolute_url("/v1/meta/indicators"),
+                ],
+                "what_evidence_exists": [
+                    _absolute_url("/v1/selections/stim-select/outcomes/summary"),
+                    _absolute_url("/v1/stocktrends/portfolios"),
+                    _absolute_url("/v1/ai/proof/market-edge"),
+                ],
+                "what_it_costs": [
+                    PRICING_CATALOG_URL,
+                    _absolute_url("/v1/cost-estimate"),
+                ],
+            },
+            "category_separation": (
+                "A service description is not methodology, and methodology is not "
+                "evidence. Read each from its own source."
+            ),
+            "availability_is_not_evidence": (
+                "Listing a resource here says nothing about whether its output is "
+                "useful for a given task."
+            ),
+            "scope_rule": "Inspect only the resources relevant to the task.",
+            "no_payment_required_to_evaluate": (
+                "Every resource named here is public and non-metered. Reading them "
+                "does not execute paid work."
+            ),
+            "decision_is_the_callers": (
+                "This describes how to evaluate. It states no conclusion and "
+                "recommends acquiring nothing."
+            ),
         },
         "x402": {
             "versions_supported": [x402_contract.X402_VERSION],

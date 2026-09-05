@@ -24,8 +24,16 @@ from discovery.provenance import (
     INDICATORS_PROVENANCE_TEXT,
     STIM_PROVENANCE_TEXT,
     data_provenance,
+    evidence_map,
 )
-from discovery.service_meta import DATASET_DESCRIPTION, SERVICE_POSITIONING
+from discovery.service_meta import (
+    DATASET_DESCRIPTION,
+    SERVICE_AUGMENTATION_ROLE,
+    SERVICE_EVALUATION_GUIDANCE,
+    SERVICE_EVALUATION_GUIDANCE_SOURCE,
+    SERVICE_EVALUATION_GUIDANCE_SUMMARY,
+    SERVICE_POSITIONING,
+)
 from pricing.classifier import classify_request as _classify_request, NON_METERED_PATHS
 from payments.policy_provider import (
     is_free_metered_path as _is_free_metered_path,
@@ -929,6 +937,12 @@ def _build_workflow_summary(workflow: dict) -> dict:
         "symbol_selection_guidance": workflow.get("symbol_selection_guidance"),
         "interpretation_guidance": workflow.get("interpretation_guidance"),
         "required_interpretation_steps": workflow.get("required_interpretation_steps", []),
+        # Carried into the manifest summary so a consumer reading only
+        # /v1/ai/tools still sees which parts of a workflow this API performs.
+        "stock_trends_supplies": workflow.get("stock_trends_supplies", []),
+        "researcher_supplied_steps": workflow.get("researcher_supplied_steps", []),
+        "not_provided_by_this_api": workflow.get("not_provided_by_this_api", []),
+        "success_condition": workflow.get("success_condition"),
         "next_step_guidance": workflow.get("next_step_guidance", []),
         "note": "Use GET /v1/workflows for live per-step STC costs.",
     }
@@ -967,6 +981,60 @@ def ai_context():
         "dataset_description": DATASET_DESCRIPTION,
         "provenance_summary": AI_CONTEXT_PROVENANCE_TEXT,
         "data_provenance": data_provenance(),
+        "acquisition_evaluation_guidance": {
+            "guidance": SERVICE_EVALUATION_GUIDANCE,
+            "canonical_source": SERVICE_EVALUATION_GUIDANCE_SOURCE,
+            "procedure": [
+                "Identify what the task actually requires.",
+                "Inspect what is offered: /.well-known/x402 for payable resources, then /v1/ai/tools and /v1/workflows.",
+                "Inspect how it should be interpreted: /v1/meta/inference, /v1/meta/stim, /v1/meta/indicators.",
+                "Inspect what evidence is available, family by family: see the evidence block.",
+                "Inspect what it costs: /v1/pricing/catalog and /v1/cost-estimate.",
+                "Decide from the material actually inspected.",
+            ],
+            "category_separation": (
+                "A service description is not methodology, and methodology is not "
+                "evidence. Read each from its own source rather than inferring one "
+                "from another."
+            ),
+            "availability_is_not_evidence": (
+                "The existence of an endpoint says nothing about whether its output is "
+                "useful for a given task."
+            ),
+            "scope_rule": (
+                "Inspect only the resources relevant to the task. There is no "
+                "requirement to fetch every public resource."
+            ),
+            "no_payment_required_to_evaluate": (
+                "Every resource named in this guidance is public and non-metered. "
+                "Evaluating the service does not require a paid call."
+            ),
+            "decision_is_the_caller's": (
+                "This guidance describes how to evaluate. It does not state a conclusion "
+                "and does not recommend acquiring anything."
+            ),
+        },
+        "augmentation_role": {
+            "role": SERVICE_AUGMENTATION_ROLE,
+            "supplies": [
+                "independently derived weekly market-state classification",
+                "cross-sectional breadth and leadership context",
+                "market regime context",
+                "probabilistic forward-return context from the current inference provider",
+                "interpretation semantics and provenance for all of the above",
+            ],
+            "does_not_supply": [
+                "the consumer's objective function or constraints",
+                "the consumer's own baseline model or feature set",
+                "trade execution",
+                "investment advice or account-specific recommendations",
+            ],
+            "fit_assessment": (
+                "Whether this context adds anything to a particular process is for the "
+                "consumer to determine from the methodology and evidence resources."
+            ),
+        },
+        "evidence": evidence_map(),
         "service_identity": {
             "short_name": "Stock Trends API",
             "primary_category": "agent_native_probabilistic_market_intelligence_infrastructure",
@@ -1624,6 +1692,7 @@ def ai_context():
         "usage_guidance": [
             "Start with /.well-known/x402 for payable-resource discovery, then use /v1/ai/tools for task and tool discovery.",
             "Use /v1/ai/context as the secondary explanatory endpoint for dataset and endpoint-family context.",
+            "Before deciding whether paid Stock Trends information is worth acquiring for a task, follow acquisition_evaluation_guidance: inspect the relevant capability, interpretation, evidence, and pricing resources, keep those categories separate, and decide from what was actually inspected.",
             "Before calling premium endpoints, call /v1/ai/proof/market-edge (no auth required) to inspect signal structure and confirm field schemas before purchasing access.",
             "Use /v1/docs and /v1/openapi.json for exact request and response contracts.",
             "Use /v1/workflows to select a market-research strategy and endpoint sequence.",
@@ -1674,7 +1743,10 @@ def ai_context():
         "llms_txt": "https://api.stocktrends.com/llms.txt",
         "ai_plugin": "https://api.stocktrends.com/.well-known/ai-plugin.json",
         "x402_discovery": "https://api.stocktrends.com/.well-known/x402",
-        "dataset_manifest": "https://api.stocktrends.com/ai-dataset.json",
+        # No dataset_manifest key: /ai-dataset.json was advertised here but has
+        # never been served by any route, so following it produced a 404. A
+        # discovery pointer that does not resolve is worse than an absent one,
+        # and the canonical machine-readable surface is /.well-known/x402 above.
         "tools_manifest": "https://api.stocktrends.com/v1/ai/tools",
         "license": "https://stocktrends.com/stock-trends-data-license",
         "terms": "https://stocktrends.com/terms-of-use",
@@ -1729,6 +1801,42 @@ def ai_tools():
             "docs": "/v1/docs",
             "openapi": "/v1/openapi.json",
         },
+        "acquisition_evaluation_guidance": {
+            "guidance": SERVICE_EVALUATION_GUIDANCE_SUMMARY,
+            "canonical_source": SERVICE_EVALUATION_GUIDANCE_SOURCE,
+            "inspect_before_deciding": {
+                "what_is_offered": [
+                    "/.well-known/x402",
+                    "/v1/ai/tools",
+                    "/v1/workflows",
+                ],
+                "how_to_interpret_it": [
+                    "/v1/meta/inference",
+                    "/v1/meta/stim",
+                    "/v1/meta/indicators",
+                ],
+                "what_evidence_exists": [
+                    "/v1/selections/stim-select/outcomes/summary",
+                    "/v1/stocktrends/portfolios",
+                    "/v1/ai/proof/market-edge",
+                ],
+                "what_it_costs": ["/v1/pricing/catalog", "/v1/cost-estimate"],
+            },
+            "category_separation": (
+                "A service description is not methodology, and methodology is not "
+                "evidence. Read each from its own source."
+            ),
+            "availability_is_not_evidence": (
+                "The existence of an endpoint says nothing about whether its output is "
+                "useful for a given task."
+            ),
+            "scope_rule": "Inspect only the resources relevant to the task.",
+            "no_payment_required_to_evaluate": (
+                "Every resource named here is public and non-metered."
+            ),
+            "evidence_families_source": SERVICE_EVALUATION_GUIDANCE_SOURCE,
+        },
+        "augmentation_role": SERVICE_AUGMENTATION_ROLE,
         "recommended_first_call": {
             "endpoint": "/v1/agent/screener/top",
             "method": "GET",
@@ -1758,6 +1866,7 @@ def ai_tools():
         "agent_onboarding_notes": [
             "Do not hardcode STC costs. Fetch /v1/pricing/catalog at agent startup.",
             "Use /.well-known/x402 for payment-resource discovery and /v1/ai/tools for task/tool discovery.",
+            "Before deciding whether paid Stock Trends information is worth acquiring for a task, follow acquisition_evaluation_guidance: inspect the relevant capability, interpretation, evidence, and pricing resources, keep those categories separate, and decide from what was actually inspected. /v1/ai/context carries the full statement and the separated evidence families.",
             "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
             "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
             "Use /v1/meta/inference for the provider-agnostic inference contract; use /v1/meta/stim for the current ST-IM baseline provider profile.",

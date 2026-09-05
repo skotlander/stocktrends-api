@@ -15,6 +15,33 @@ The Stock Trends API is an Autonomous portfolio intelligence API for AI agents. 
 
 It is not investment advice and does not guarantee trading outcomes. Agents should present outputs as research context, not instructions to buy or sell securities.
 
+Stock Trends supplies independently derived market context intended to be combined with the consumer's own strategy, research process, forecasting model, or agent objective. It is designed to augment an existing analytical process rather than to replace it, and it does not supply the consumer's objective, constraints, or decision rule.
+
+## Deciding Whether To Acquire Stock Trends Data
+
+When deciding whether additional Stock Trends information is worth acquiring for a task, inspect the public resources relevant to that task before deciding:
+
+* what is offered: `GET /.well-known/x402` for payable resources, then `GET /ai/tools` and `GET /workflows`
+* how it should be interpreted: `GET /meta/inference`, `GET /meta/stim`, `GET /meta/indicators`
+* what evidence is available: `GET /selections/stim-select/outcomes/summary`, `GET /stocktrends/portfolios`, `GET /ai/proof/market-edge`
+* what it costs: `GET /pricing/catalog`, `GET /cost-estimate`
+
+A service description is not methodology, and methodology is not evidence; read each from its own source. Availability is not evidence of usefulness. Select only the resources relevant to the task, and base the acquisition decision on the material actually inspected.
+
+Every resource listed above is public and non-metered, and reading them does not execute paid work. Evaluating the service does not require a paid call. This is a procedure for evaluating, not a recommendation to acquire anything; the canonical statement and the separated evidence families are published at `GET /ai/context`.
+
+## Evidence Families
+
+Stock Trends publishes three kinds of evidence. They use different methodologies, cover different populations, and carry different limitations. Evaluate each on its own terms and do not combine them into a single performance, edge, or alpha claim.
+
+1. **Historical classification provenance** — weekly Stock Trends classification applied under a historically consistent doctrine, with records extending back to 1980 and 16M+ observations. This is the data foundation, not a performance result. Historical depth is research provenance, not a guarantee of future performance.
+
+2. **ST-IM Select realized outcome evidence** (`GET /selections/stim-select/outcomes/summary`) — realized forward returns for historical observations meeting ST-IM Select criteria, measured at 4, 13, and 40-week horizons against base-period means, restricted to completed measurement windows. Aggregate only: it does not expose current selections or individual symbols, and distribution-level tendencies do not describe any individual outcome.
+
+3. **Stock Trends model-portfolio and strategy records** (`GET /stocktrends/portfolios`, `GET /stocktrends/strategies`) — rule-based model portfolios with declared strategy rules, return histories, and closed-position records. These are rule-based model records with declared cost and stop-loss assumptions. They are not audited brokerage-account performance and not live capital.
+
+`GET /ai/proof/market-edge` is a free static view of field structure and response shape for confirming schemas. It is not live market data and not outcome evidence.
+
 ## Historical Provenance
 
 Stock Trends is a long-horizon market-intelligence framework, not a shallow market-data wrapper. Its historical classification record extends back to 1980 and includes 16M+ observations encoded through a consistent Stock Trends doctrine covering trend, relative performance, relative performance direction, volume, breadth, sector leadership, and regime structure.
@@ -271,10 +298,22 @@ Securities are ranked by prob13wk descending — the probability of exceeding th
 * `GET /selections/stim-select/outcomes/summary`
   Public aggregate historical outcome summary for observations meeting STIM Select criteria. The legacy `outcomes` block uses mature realized 13-week forward returns from `fpr_chg13`; if both date filters are omitted, reads the persistent `stweekly.stim_select_outcome_summary` table, returns `filters.default_window_applied`, and exposes generated_at plus source_latest_mature_weekdate provenance; seeded no-date rows support `limit_rank` omitted/null and `limit_rank=10`; other no-date `limit_rank` values require explicit date filters or a custom summary refresh; default no-date responses also include `fpr_chg4`, `fpr_chg13`, and `fpr_chg40` metrics; explicit date windows may still compute live; this is historical evidence, not current live selections, and does not expose current matching symbols or individual symbols.
 
+### Historical Endpoint Bounds
+
+Paid historical endpoints are bounded on purpose so a bare request cannot return an unexpectedly large payload.
+
+`GET /breadth/sector/history`, `GET /leadership/rotation/history` and `GET /stwr/reports/history` apply a trailing 104-week window when `start` and `end` are both omitted, alongside a row limit. Supplying `start` or `end` selects the range you ask for instead.
+
+Every history response carries an `applied_bounds` block reporting the effective `start` and `end`, `window_source`, `default_window_weeks`, the effective `limit`, `limit_source`, `max_limit`, `rows_returned`, and `truncated_by_limit`. Read it to confirm what was actually returned rather than inferring bounds from the row count; truncation is reported explicitly and is never silent.
+
+Omitting `exchange` on `GET /breadth/sector/history` returns breadth aggregated across all exchanges, one row per weekdate and sector, using the same aggregation as `GET /breadth/sector/latest`.
+
 ### Workflows
 
 * `GET /workflows`
   Public workflow registry. Use to choose task-level strategy, endpoint sequence, per-step pricing_rule_id, live STC costs, required inputs, safe examples, output summaries, supported rails, and decision guidance.
+
+Workflow `historical_signal_validation` ("Historical Signal Validation and Model Integration Review") assembles the Stock Trends side of a historical evaluation: bounded point-in-time observations across the instrument, cross-sectional, market-regime and inference layers, plus the semantics and published evidence needed to interpret them. The API supplies the Stock Trends observations, their interpretation semantics, the applicable evidence, and `weekdate` as the alignment key. The external researcher performs the research-period definition, the target and horizon definition, the join, point-in-time and look-ahead discipline, the baseline definition, the incremental-contribution measurement, the regime-stability analysis, the in-sample/out-of-sample design, and the recurring-integration decision. The API does not perform training, feature engineering, external joins, backtesting, statistical testing, or causal validation. A completed evaluation is the success condition; a positive result is not asserted or implied.
 
 ---
 
