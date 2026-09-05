@@ -7,10 +7,29 @@ from sqlalchemy import text
 
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
+from utils.history_bounds import (
+    LIMIT_SOURCE_CALLER,
+    LIMIT_SOURCE_DEFAULT,
+    WINDOW_SOURCE_CALLER,
+    WINDOW_SOURCE_NOT_APPLIED,
+    build_applied_bounds,
+    history_default_limit,
+    history_max_limit,
+    probe_limit,
+    split_probe_rows,
+)
 
 from routers.signals import VALID_EXCHANGES, parse_symbol_exchange
 
 router = APIRouter(prefix="/indicators", tags=["indicators"])
+
+
+# Row bounds for this endpoint, read from the shared table so the runtime
+# Query, the OpenAPI schema derived from it, and the discovery registry cannot
+# state different numbers. Existing values are unchanged.
+HISTORY_PATH = "/v1/indicators/history"
+HISTORY_DEFAULT_LIMIT = history_default_limit(HISTORY_PATH)
+HISTORY_MAX_LIMIT = history_max_limit(HISTORY_PATH)
 
 
 def _norm_symbol(s: str) -> str:
@@ -179,7 +198,16 @@ def indicators_history(
     cs_only: bool = Query(default=True, description="Filter to Common Stocks only (type='CS')"),
     start: str | None = Query(default=None, description="Start date YYYY-MM-DD (inclusive)"),
     end: str | None = Query(default=None, description="End date YYYY-MM-DD (inclusive)"),
-    limit: int = Query(default=260, ge=1, le=2600, description="Max rows to return"),
+    limit: int = Query(
+        default=HISTORY_DEFAULT_LIMIT,
+        ge=1,
+        le=HISTORY_MAX_LIMIT,
+        description=(
+            "Max rows to return. This endpoint applies no default date window; the "
+            "applied_bounds block on the response reports the limit that was used and "
+            "whether the result was truncated."
+        ),
+    ),
 ):
     """
     Weekly Stock Trends indicator history for a specific instrument.
@@ -193,7 +221,16 @@ def indicators_history(
     )
 
     where_dates = ""
-    params = {"symbol": s, "exchange": ex, "cs_only": 1 if cs_only else 0, "limit": limit}
+    # One row beyond the limit, so truncation is observed rather than inferred
+    # from a row count that happens to equal the limit. The probe row is dropped
+    # before the response is built, so the caller never receives more than
+    # `limit` rows and the existing ordering is untouched.
+    params = {
+        "symbol": s,
+        "exchange": ex,
+        "cs_only": 1 if cs_only else 0,
+        "limit": probe_limit(limit),
+    }
 
     if start:
         where_dates += " AND weekdate >= :start"
@@ -252,7 +289,8 @@ def indicators_history(
             },
         )
 
-    data = [dict(r) for r in reversed(rows)]
+    bounded_rows, truncated_by_limit = split_probe_rows(list(rows), limit)
+    data = [dict(r) for r in reversed(bounded_rows)]
     for d in data:
         d["symbol_exchange"] = f'{d["symbol"]}-{d["exchange"]}'
 
@@ -262,6 +300,28 @@ def indicators_history(
         "cs_only": cs_only,
         "start": start,
         "end": end,
+        "applied_bounds": build_applied_bounds(
+            start=start,
+            end=end,
+            window_source=(
+                WINDOW_SOURCE_CALLER if (start or end) else WINDOW_SOURCE_NOT_APPLIED
+            ),
+            default_window_weeks=None,
+            limit=limit,
+            limit_source=(
+                LIMIT_SOURCE_CALLER
+                if "limit" in request.query_params
+                else LIMIT_SOURCE_DEFAULT
+            ),
+            max_limit=HISTORY_MAX_LIMIT,
+            rows_returned=len(data),
+            truncated_by_limit=truncated_by_limit,
+            widen_with=(
+                "Supply start and/or end to select a range, and raise limit up to "
+                f"{HISTORY_MAX_LIMIT} for more rows. This endpoint applies no default "
+                "date window."
+            ),
+        ),
         "count": len(data),
         "data": data,
     }

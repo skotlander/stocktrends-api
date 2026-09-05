@@ -588,8 +588,14 @@ def test_cost_estimate_tool_exposes_workflow_id_examples():
         "stim_forecast_review",
         "portfolio_build",
         "portfolio_compare_review",
+        "historical_signal_validation",
     }
     assert set(workflow_id_schema["enum"]) == expected
+    # The enum and the registry are two lists that must not drift apart: an id
+    # offered for cost estimation that the registry cannot resolve is a 404.
+    assert set(workflow_id_schema["enum"]) == {
+        w["workflow_id"] for w in WORKFLOW_REGISTRY
+    }
     assert workflow_id_schema["example"] == "portfolio_build"
     assert tool["safe_example_request"]["query"]["workflow_id"] == "portfolio_build"
 

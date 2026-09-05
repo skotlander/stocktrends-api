@@ -10,8 +10,26 @@ from sqlalchemy import text
 
 from db import get_engine
 from services import regime_service
+from utils.history_bounds import (
+    LIMIT_SOURCE_CALLER,
+    LIMIT_SOURCE_DEFAULT,
+    WINDOW_SOURCE_CALLER,
+    WINDOW_SOURCE_NOT_APPLIED,
+    build_applied_bounds,
+    history_default_limit,
+    history_max_limit,
+    probe_limit,
+    split_probe_rows,
+)
 
 router = APIRouter(prefix="/market", tags=["market"])
+
+# Row bounds read from the shared table so runtime, OpenAPI and discovery cannot
+# state different numbers. Existing values are unchanged: this endpoint returns
+# the most recent eligible weeks and has never paged backwards through history.
+REGIME_HISTORY_PATH = "/v1/market/regime/history"
+REGIME_HISTORY_DEFAULT_LIMIT = history_default_limit(REGIME_HISTORY_PATH)
+REGIME_HISTORY_MAX_LIMIT = history_max_limit(REGIME_HISTORY_PATH)
 
 
 @router.get(
@@ -133,14 +151,22 @@ def market_regime_latest(request: Request):
 def market_regime_history(
     request: Request,
     limit: int = Query(
-        default=12,
+        default=REGIME_HISTORY_DEFAULT_LIMIT,
         ge=1,
-        le=52,
-        description="Number of weekly periods to return. Default 12, max 52.",
+        le=REGIME_HISTORY_MAX_LIMIT,
+        description=(
+            "Number of weekly periods to return. Default 12, max 52. The most recent "
+            "eligible weeks are returned; the applied_bounds block on the response "
+            "reports the limit used and whether more eligible weeks existed."
+        ),
     ),
     start_date: date | None = Query(
         default=None,
-        description="Optional earliest weekdate to include (YYYY-MM-DD).",
+        description=(
+            "Optional earliest weekdate to include (YYYY-MM-DD). This filters which "
+            "weeks are eligible; it does not move the window backwards. With the 52-week "
+            "ceiling the endpoint covers recent regime history, not an arbitrary period."
+        ),
     ),
 ):
     engine = get_engine()
@@ -160,7 +186,7 @@ def market_regime_history(
                     LIMIT :limit
                     """
                 ),
-                {"start_date": start_date, "limit": limit},
+                {"start_date": start_date, "limit": probe_limit(limit)},
             ).mappings().all()
         else:
             weekdate_rows = conn.execute(
@@ -173,10 +199,13 @@ def market_regime_history(
                     LIMIT :limit
                     """
                 ),
-                {"limit": limit},
+                {"limit": probe_limit(limit)},
             ).mappings().all()
 
+        # Trim the probe week before aggregation, so observing truncation costs
+        # one extra weekdate lookup and no extra aggregation work.
         weekdates = [r["weekdate"] for r in weekdate_rows if r["weekdate"]]
+        weekdates, truncated_by_limit = split_probe_rows(weekdates, limit)
 
         if not weekdates:
             raise HTTPException(
@@ -260,6 +289,32 @@ def market_regime_history(
 
     return {
         "history": history,
+        "applied_bounds": build_applied_bounds(
+            # This endpoint has an earliest-eligible-week filter and no end bound,
+            # so `start` carries start_date and `end` is genuinely absent rather
+            # than defaulted to something the endpoint does not support.
+            start=str(start_date) if start_date else None,
+            end=None,
+            window_source=(
+                WINDOW_SOURCE_CALLER if start_date else WINDOW_SOURCE_NOT_APPLIED
+            ),
+            default_window_weeks=None,
+            limit=limit,
+            limit_source=(
+                LIMIT_SOURCE_CALLER
+                if "limit" in request.query_params
+                else LIMIT_SOURCE_DEFAULT
+            ),
+            max_limit=REGIME_HISTORY_MAX_LIMIT,
+            rows_returned=len(history),
+            truncated_by_limit=truncated_by_limit,
+            widen_with=(
+                "Raise limit up to "
+                f"{REGIME_HISTORY_MAX_LIMIT} for more weeks, and use start_date to set "
+                "the earliest eligible week. The most recent eligible weeks are returned; "
+                "this endpoint does not page backwards through history."
+            ),
+        ),
         "count": len(history),
         "limit": limit,
         "start_date": str(start_date) if start_date else None,

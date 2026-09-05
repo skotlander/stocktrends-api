@@ -11,9 +11,35 @@ from sqlalchemy import text
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
+from utils.history_bounds import (
+    DEFAULT_HISTORY_WINDOW_WEEKS,
+    LIMIT_SOURCE_CALLER,
+    LIMIT_SOURCE_DEFAULT,
+    build_applied_bounds,
+    history_default_limit,
+    history_max_limit,
+    probe_limit,
+    resolve_history_window,
+    split_probe_rows,
+)
 from utils.volume import volume_to_actual_shares
 
 router = APIRouter(prefix="/stwr", tags=["stwr"])
+
+# Bounds for /stwr/reports/history.  The previous 200000-row default over an
+# unbounded date range is the same hazard the breadth history endpoint had.
+# 500 matches the default the static tools manifest has always advertised, so
+# this aligns runtime with published discovery rather than moving it.
+REPORTS_HISTORY_PATH = "/v1/stwr/reports/history"
+REPORTS_HISTORY_DEFAULT_LIMIT = history_default_limit(REPORTS_HISTORY_PATH)
+# The pre-existing explicit ceiling is retained for callers already raising it.
+REPORTS_HISTORY_MAX_LIMIT = history_max_limit(REPORTS_HISTORY_PATH)
+REPORTS_HISTORY_WIDEN_HINT = (
+    "Supply start and/or end to select a different range, and raise limit up to "
+    f"{REPORTS_HISTORY_MAX_LIMIT} for more rows. When start and end are both "
+    f"omitted, a trailing {DEFAULT_HISTORY_WINDOW_WEEKS}-week window ending at "
+    "the latest available weekdate for the exchange is applied."
+)
 
 
 def _norm_exchange(ex: str) -> str:
@@ -54,6 +80,31 @@ def _where_date_clause(alias: str, params: dict[str, Any], start: str | None, en
         w += f" AND {alias}.weekdate <= :end"
         params["end"] = end
     return w
+
+
+def _week_primary_order(report_order_by: str) -> str:
+    """
+    Make weekdate the primary sort key, keeping the report ranking as secondary.
+
+    Every report builder returns an ordering expressed purely in ranking terms
+    (`ORDER BY d.rsi DESC, d.shortname ASC`, `ORDER BY mom_index DESC`, ...).
+    That is correct for `/reports/latest`, which is scoped to a single weekdate.
+
+    On `/reports/history` it is not: rows from every week in range interleave by
+    rank, so the `group_by_week` bucketer — which closes a bucket only when the
+    weekdate changes — emits the same weekdate as many fragmented buckets.  It
+    also makes `limit` truncation cut an arbitrary rank-ordered cross-section
+    rather than a time-ordered prefix.
+
+    Prefixing the week key fixes both without touching any report's own ranking:
+    within each week the rows keep exactly the order that report defines.
+    """
+    ranking = report_order_by.strip()
+    if ranking.upper().startswith("ORDER BY "):
+        ranking = ranking[len("ORDER BY "):].strip()
+    if not ranking:
+        return " ORDER BY d.weekdate ASC "
+    return f" ORDER BY d.weekdate ASC, {ranking} "
 
 
 def _select_core(include_mast: bool) -> str:
@@ -964,7 +1015,15 @@ def stwr_reports_history(
     end: str | None = Query(default=None, description="End date YYYY-MM-DD (inclusive)"),
     group_by_week: bool = Query(default=True, description="Group results by weekdate"),
     include_mast: bool = Query(default=False),
-    limit: int = Query(default=200000, ge=1, le=500000, description="Safety limit across all weeks"),
+    limit: int = Query(
+        default=REPORTS_HISTORY_DEFAULT_LIMIT,
+        ge=1,
+        le=REPORTS_HISTORY_MAX_LIMIT,
+        description=(
+            "Safety limit across all weeks. When start and end are both omitted, "
+            f"a trailing {DEFAULT_HISTORY_WINDOW_WEEKS}-week window is also applied."
+        ),
+    ),
 
     # Common knobs
     min_price: float = Query(default=2.0),
@@ -992,11 +1051,22 @@ def stwr_reports_history(
     engine = get_engine()
     rep = REPORTS[rpt]
 
+    # Service shaping behind the payment boundary; the pre-payment validator
+    # above still owns rejection of unanswerable rpt/exchange combinations.
+    effective_start, effective_end, window_source = resolve_history_window(
+        start=start,
+        end=end,
+        anchor_weekdate=lambda: _latest_weekdate_st_data(engine, ex),
+    )
+    limit_source = (
+        LIMIT_SOURCE_CALLER if "limit" in request.query_params else LIMIT_SOURCE_DEFAULT
+    )
+
     sql_base, params, order_by, _default_limit = rep.build(
         exchange=ex,
         weekdate=None,
-        start=start,
-        end=end,
+        start=effective_start,
+        end=effective_end,
         include_mast=include_mast,
         # common
         min_price=min_price,
@@ -1018,8 +1088,8 @@ def stwr_reports_history(
     if rpt == "toptrend":
         params["min_price"] = float(tt_min_price)
 
-    sql = text(f"{sql_base}{order_by} LIMIT :limit")
-    params["limit"] = int(limit)
+    sql = text(f"{sql_base}{_week_primary_order(order_by)} LIMIT :limit")
+    params["limit"] = probe_limit(limit)
 
     try:
         with engine.connect() as conn:
@@ -1030,10 +1100,23 @@ def stwr_reports_history(
             detail={"request_id": request.state.request_id, "error": "db_query_failed", "message": str(e)},
         )
 
-    flat = [dict(r) for r in rows]
+    bounded_rows, truncated_by_limit = split_probe_rows(list(rows), limit)
+    flat = [dict(r) for r in bounded_rows]
     for d in flat:
         d["symbol_exchange"] = f'{d["symbol"]}-{d["exchange"]}'
         d["volume"] = volume_to_actual_shares(d.get("volume"))
+
+    applied_bounds = build_applied_bounds(
+        start=effective_start,
+        end=effective_end,
+        window_source=window_source,
+        limit=limit,
+        limit_source=limit_source,
+        max_limit=REPORTS_HISTORY_MAX_LIMIT,
+        rows_returned=len(flat),
+        truncated_by_limit=truncated_by_limit,
+        widen_with=REPORTS_HISTORY_WIDEN_HINT,
+    )
 
     if not group_by_week:
         return {
@@ -1043,6 +1126,7 @@ def stwr_reports_history(
             "exchange": ex,
             "start": start,
             "end": end,
+            "applied_bounds": applied_bounds,
             "count": len(flat),
             "data": flat,
         }
@@ -1069,8 +1153,12 @@ def stwr_reports_history(
         "exchange": ex,
         "start": start,
         "end": end,
+        "applied_bounds": applied_bounds,
         "week_count": len(weeks),
         "count": len(flat),
         "weeks": weeks,
-        "note": "Grouped by weekdate; ordering is report-specific.",
+        "note": (
+            "Grouped by weekdate ascending; within each week the ordering is "
+            "report-specific. Each weekdate appears at most once."
+        ),
     }

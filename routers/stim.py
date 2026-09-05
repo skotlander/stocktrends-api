@@ -7,10 +7,28 @@ from sqlalchemy import text
 
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
+from utils.history_bounds import (
+    LIMIT_SOURCE_CALLER,
+    LIMIT_SOURCE_DEFAULT,
+    WINDOW_SOURCE_CALLER,
+    WINDOW_SOURCE_NOT_APPLIED,
+    build_applied_bounds,
+    history_default_limit,
+    history_max_limit,
+    probe_limit,
+    split_probe_rows,
+)
 
 from routers.signals import VALID_EXCHANGES, parse_symbol_exchange
 
 router = APIRouter(prefix="/stim", tags=["stim"])
+
+
+# Row bounds read from the shared table so runtime, OpenAPI and discovery
+# cannot state different numbers. Existing values are unchanged.
+HISTORY_PATH = "/v1/stim/history"
+HISTORY_DEFAULT_LIMIT = history_default_limit(HISTORY_PATH)
+HISTORY_MAX_LIMIT = history_max_limit(HISTORY_PATH)
 
 
 def _norm_symbol(s: str) -> str:
@@ -215,7 +233,16 @@ def stim_history(
     exchange: str | None = Query(default=None, description="Exchange code: N,Q,A,B,T,I"),
     start: str | None = Query(default=None, description="Start date YYYY-MM-DD (inclusive)"),
     end: str | None = Query(default=None, description="End date YYYY-MM-DD (inclusive)"),
-    limit: int = Query(default=260, ge=1, le=2600, description="Safety limit"),
+    limit: int = Query(
+        default=HISTORY_DEFAULT_LIMIT,
+        ge=1,
+        le=HISTORY_MAX_LIMIT,
+        description=(
+            "Safety limit. This endpoint applies no default date window; the "
+            "applied_bounds block on the response reports the limit that was used and "
+            "whether the result was truncated."
+        ),
+    ),
     include_gaps: bool = Query(
         default=False,
         description="If true, include missing weekdates versus the available market weeks within start/end (may be slower).",
@@ -229,7 +256,10 @@ def stim_history(
     )
 
     where_dates = ""
-    params: dict = {"symbol": s, "exchange": ex, "limit": limit}
+    # One row beyond the limit so truncation is observed, not inferred. The probe
+    # row is dropped before the response — and before gap inference below — so the
+    # caller never sees more than `limit` rows.
+    params: dict = {"symbol": s, "exchange": ex, "limit": probe_limit(limit)}
 
     if start:
         where_dates += " AND weekdate >= :start"
@@ -264,7 +294,8 @@ def stim_history(
             detail={"request_id": request.state.request_id, "error": "db_query_failed", "message": str(e)},
         )
 
-    data = [dict(r) for r in reversed(rows)]
+    bounded_rows, truncated_by_limit = split_probe_rows(list(rows), limit)
+    data = [dict(r) for r in reversed(bounded_rows)]
     for d in data:
         d["symbol_exchange"] = f'{d["symbol"]}-{d["exchange"]}'
 
@@ -329,6 +360,28 @@ def stim_history(
         "symbol_exchange": f"{s}-{ex}",
         "start": start,
         "end": end,
+        "applied_bounds": build_applied_bounds(
+            start=start,
+            end=end,
+            window_source=(
+                WINDOW_SOURCE_CALLER if (start or end) else WINDOW_SOURCE_NOT_APPLIED
+            ),
+            default_window_weeks=None,
+            limit=limit,
+            limit_source=(
+                LIMIT_SOURCE_CALLER
+                if "limit" in request.query_params
+                else LIMIT_SOURCE_DEFAULT
+            ),
+            max_limit=HISTORY_MAX_LIMIT,
+            rows_returned=len(data),
+            truncated_by_limit=truncated_by_limit,
+            widen_with=(
+                "Supply start and/or end to select a range, and raise limit up to "
+                f"{HISTORY_MAX_LIMIT} for more rows. This endpoint applies no default "
+                "date window."
+            ),
+        ),
         "count": len(data),
         "data": data,
         "include_gaps": include_gaps,

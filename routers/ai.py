@@ -24,8 +24,16 @@ from discovery.provenance import (
     INDICATORS_PROVENANCE_TEXT,
     STIM_PROVENANCE_TEXT,
     data_provenance,
+    evidence_map,
 )
-from discovery.service_meta import DATASET_DESCRIPTION, SERVICE_POSITIONING
+from discovery.service_meta import (
+    DATASET_DESCRIPTION,
+    SERVICE_AUGMENTATION_ROLE,
+    SERVICE_EVALUATION_GUIDANCE,
+    SERVICE_EVALUATION_GUIDANCE_SOURCE,
+    SERVICE_EVALUATION_GUIDANCE_SUMMARY,
+    SERVICE_POSITIONING,
+)
 from pricing.classifier import classify_request as _classify_request, NON_METERED_PATHS
 from payments.policy_provider import (
     is_free_metered_path as _is_free_metered_path,
@@ -197,16 +205,19 @@ _TOOL_TEMPLATES = [
     },
     {
         "name": "ai_proof_market_edge",
-        "title": "Proof of Value - Market Edge",
+        "title": "Market Context - Static Schema Illustration",
         "description": (
-            "Free synthetic-only planning helper. Shows Stock Trends signal fields, trend codes, "
-            "RSI baseline semantics, and agent workflow value without exposing paid market data."
+            "Free synthetic-only schema reference. Shows Stock Trends signal fields, trend codes, "
+            "RSI baseline semantics, and how the context layers compose in a response, without "
+            "exposing paid market data. It measures nothing: not empirical evidence, not realized "
+            "outcomes, and not predictive or investment performance."
         ),
         "endpoint": "/v1/ai/proof/market-edge",
         "method": "GET",
         "category": "discovery",
+        "classification": "illustrative_capability_example",
         "input_schema": {"type": "object", "properties": {}, "required": []},
-        "output_summary": "Synthetic signal example and next-step payment guidance.",
+        "output_summary": "Synthetic response-structure example and access-mechanics reference.",
     },
     {
         "name": "pricing_metadata",
@@ -735,6 +746,11 @@ _TOOL_TEMPLATES = [
 
 _REGISTRY_TOOL_TEMPLATE_OVERRIDES = frozenset({
     ("/v1/agent/screener/top", "GET"),
+    # The hand-authored template published an empty input schema, so the tools
+    # manifest advertised no parameters at all for regime history while the
+    # canonical registry carried `limit` and `start_date`. Let the registry win
+    # so all three machine surfaces state one contract.
+    ("/v1/market/regime/history", "GET"),
     ("/v1/indicators/latest", "GET"),
     ("/v1/indicators/history", "GET"),
     ("/v1/prices/latest", "GET"),
@@ -929,6 +945,12 @@ def _build_workflow_summary(workflow: dict) -> dict:
         "symbol_selection_guidance": workflow.get("symbol_selection_guidance"),
         "interpretation_guidance": workflow.get("interpretation_guidance"),
         "required_interpretation_steps": workflow.get("required_interpretation_steps", []),
+        # Carried into the manifest summary so a consumer reading only
+        # /v1/ai/tools still sees which parts of a workflow this API performs.
+        "stock_trends_supplies": workflow.get("stock_trends_supplies", []),
+        "researcher_supplied_steps": workflow.get("researcher_supplied_steps", []),
+        "not_provided_by_this_api": workflow.get("not_provided_by_this_api", []),
+        "success_condition": workflow.get("success_condition"),
         "next_step_guidance": workflow.get("next_step_guidance", []),
         "note": "Use GET /v1/workflows for live per-step STC costs.",
     }
@@ -967,6 +989,60 @@ def ai_context():
         "dataset_description": DATASET_DESCRIPTION,
         "provenance_summary": AI_CONTEXT_PROVENANCE_TEXT,
         "data_provenance": data_provenance(),
+        "acquisition_evaluation_guidance": {
+            "guidance": SERVICE_EVALUATION_GUIDANCE,
+            "canonical_source": SERVICE_EVALUATION_GUIDANCE_SOURCE,
+            "procedure": [
+                "Identify what the task actually requires.",
+                "Inspect what is offered: /.well-known/x402 for payable resources, then /v1/ai/tools and /v1/workflows.",
+                "Inspect how it should be interpreted: /v1/meta/inference, /v1/meta/stim, /v1/meta/indicators.",
+                "Inspect what evidence is available, family by family: see the evidence block.",
+                "Inspect what it costs: /v1/pricing/catalog and /v1/cost-estimate.",
+                "Decide from the material actually inspected.",
+            ],
+            "category_separation": (
+                "A service description is not methodology, and methodology is not "
+                "evidence. Read each from its own source rather than inferring one "
+                "from another."
+            ),
+            "availability_is_not_evidence": (
+                "The existence of an endpoint says nothing about whether its output is "
+                "useful for a given task."
+            ),
+            "scope_rule": (
+                "Inspect only the resources relevant to the task. There is no "
+                "requirement to fetch every public resource."
+            ),
+            "no_payment_required_to_evaluate": (
+                "Every resource named in this guidance is public and non-metered. "
+                "Evaluating the service does not require a paid call."
+            ),
+            "decision_is_the_caller's": (
+                "This guidance describes how to evaluate. It does not state a conclusion "
+                "and does not recommend acquiring anything."
+            ),
+        },
+        "augmentation_role": {
+            "role": SERVICE_AUGMENTATION_ROLE,
+            "supplies": [
+                "independently derived weekly market-state classification",
+                "cross-sectional breadth and leadership context",
+                "market regime context",
+                "probabilistic forward-return context from the current inference provider",
+                "interpretation semantics and provenance for all of the above",
+            ],
+            "does_not_supply": [
+                "the consumer's objective function or constraints",
+                "the consumer's own baseline model or feature set",
+                "trade execution",
+                "investment advice or account-specific recommendations",
+            ],
+            "fit_assessment": (
+                "Whether this context adds anything to a particular process is for the "
+                "consumer to determine from the methodology and evidence resources."
+            ),
+        },
+        "evidence": evidence_map(),
         "service_identity": {
             "short_name": "Stock Trends API",
             "primary_category": "agent_native_probabilistic_market_intelligence_infrastructure",
@@ -1624,7 +1700,8 @@ def ai_context():
         "usage_guidance": [
             "Start with /.well-known/x402 for payable-resource discovery, then use /v1/ai/tools for task and tool discovery.",
             "Use /v1/ai/context as the secondary explanatory endpoint for dataset and endpoint-family context.",
-            "Before calling premium endpoints, call /v1/ai/proof/market-edge (no auth required) to inspect signal structure and confirm field schemas before purchasing access.",
+            "Before deciding whether paid Stock Trends information is worth acquiring for a task, follow acquisition_evaluation_guidance: inspect the relevant capability, interpretation, evidence, and pricing resources, keep those categories separate, and decide from what was actually inspected.",
+            "Use /v1/ai/proof/market-edge (no auth required) to inspect response structure and confirm field schemas. It returns a static synthetic body and is an illustration, not evidence of usefulness.",
             "Use /v1/docs and /v1/openapi.json for exact request and response contracts.",
             "Use /v1/workflows to select a market-research strategy and endpoint sequence.",
             "Use planning helpers (/v1/cost-estimate, /v1/instruments/lookup, /v1/instruments/resolve, /v1/stwr/reports/catalog, /v1/meta/indicators, /v1/meta/inference, /v1/meta/stim, /v1/meta/stwr, /v1/leadership/definitions) to resolve symbols, estimate costs, and understand metadata before paid calls.",
@@ -1674,7 +1751,10 @@ def ai_context():
         "llms_txt": "https://api.stocktrends.com/llms.txt",
         "ai_plugin": "https://api.stocktrends.com/.well-known/ai-plugin.json",
         "x402_discovery": "https://api.stocktrends.com/.well-known/x402",
-        "dataset_manifest": "https://api.stocktrends.com/ai-dataset.json",
+        # No dataset_manifest key: /ai-dataset.json was advertised here but has
+        # never been served by any route, so following it produced a 404. A
+        # discovery pointer that does not resolve is worse than an absent one,
+        # and the canonical machine-readable surface is /.well-known/x402 above.
         "tools_manifest": "https://api.stocktrends.com/v1/ai/tools",
         "license": "https://stocktrends.com/stock-trends-data-license",
         "terms": "https://stocktrends.com/terms-of-use",
@@ -1729,10 +1809,70 @@ def ai_tools():
             "docs": "/v1/docs",
             "openapi": "/v1/openapi.json",
         },
+        "acquisition_evaluation_guidance": {
+            "guidance": SERVICE_EVALUATION_GUIDANCE_SUMMARY,
+            "canonical_source": SERVICE_EVALUATION_GUIDANCE_SOURCE,
+            "inspect_before_deciding": {
+                "what_is_offered": [
+                    "/.well-known/x402",
+                    "/v1/ai/tools",
+                    "/v1/workflows",
+                ],
+                "how_to_interpret_it": [
+                    "/v1/meta/inference",
+                    "/v1/meta/stim",
+                    "/v1/meta/indicators",
+                ],
+                "what_evidence_exists": [
+                    "/v1/selections/stim-select/outcomes/summary",
+                    "/v1/stocktrends/portfolios",
+                ],
+                "what_it_costs": ["/v1/pricing/catalog", "/v1/cost-estimate"],
+            },
+            # Deliberately not an evidence category. This endpoint returns a
+            # static synthetic body illustrating response structure; it measures
+            # nothing and must not be read as an outcome or performance record.
+            "illustrative_capability_example": {
+                "endpoint": "/v1/ai/proof/market-edge",
+                "shows": "response structure and how context layers compose",
+                "is_not": (
+                    "not empirical evidence, not realized outcomes, not predictive "
+                    "performance, and not investment performance"
+                ),
+            },
+            "category_separation": (
+                "A service description is not methodology, and methodology is not "
+                "evidence. Read each from its own source."
+            ),
+            "availability_is_not_evidence": (
+                "The existence of an endpoint says nothing about whether its output is "
+                "useful for a given task."
+            ),
+            "scope_rule": "Inspect only the resources relevant to the task.",
+            "no_payment_required_to_evaluate": (
+                "Every resource named here is public and non-metered."
+            ),
+            "evidence_families_source": SERVICE_EVALUATION_GUIDANCE_SOURCE,
+        },
+        "augmentation_role": SERVICE_AUGMENTATION_ROLE,
         "recommended_first_call": {
+            # Framed procedurally. This says what the endpoint does and where it sits
+            # in the sequence; it does not rank paid endpoints by worth, and the
+            # discovery surfaces that come first are named below.
             "endpoint": "/v1/agent/screener/top",
             "method": "GET",
-            "reason": "Returns top-ranked actionable screener results — highest immediate value for agent portfolio and signal workflows.",
+            "reason": (
+                "A common first paid call once a task has been chosen: it returns ranked "
+                "Stock Trends signal candidates that downstream symbol, decision and "
+                "portfolio steps consume. Whether it suits a given task is for the caller "
+                "to determine from the resources named in acquisition_evaluation_guidance."
+            ),
+            "read_first": [
+                "/.well-known/x402",
+                "/v1/ai/tools",
+                "/v1/workflows",
+                "/v1/pricing/catalog",
+            ],
             "auth_required": True,
             "supported_rails": ["subscription", "x402", "mpp"],
             "expected_flow": [
@@ -1758,6 +1898,7 @@ def ai_tools():
         "agent_onboarding_notes": [
             "Do not hardcode STC costs. Fetch /v1/pricing/catalog at agent startup.",
             "Use /.well-known/x402 for payment-resource discovery and /v1/ai/tools for task/tool discovery.",
+            "Before deciding whether paid Stock Trends information is worth acquiring for a task, follow acquisition_evaluation_guidance: inspect the relevant capability, interpretation, evidence, and pricing resources, keep those categories separate, and decide from what was actually inspected. /v1/ai/context carries the full statement and the separated evidence families.",
             "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
             "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
             "Use /v1/meta/inference for the provider-agnostic inference contract; use /v1/meta/stim for the current ST-IM baseline provider profile.",
@@ -1825,36 +1966,49 @@ def ai_tools():
             },
         },
         "agent_conversion_path": {
+            # Key name retained because clients pin this response shape. Its value is
+            # access and discovery mechanics — the order in which public surfaces are
+            # read and how the rails work — not a funnel toward a purchase.
+            "content_type": "access_and_discovery_mechanics",
+            # Key retained for response-shape compatibility; the endpoint it names is
+            # a schema illustration, not proof of anything.
             "proof_endpoint": "/v1/ai/proof/market-edge",
-            "proof_description": (
-                "Free, non-metered. Demonstrates signal structure and value proposition "
-                "without requiring payment or authentication."
+            "schema_illustration_endpoint": "/v1/ai/proof/market-edge",
+            "schema_illustration_description": (
+                "Free, non-metered. Returns a static synthetic body illustrating response "
+                "structure and field semantics. It is an illustration, not evidence: it "
+                "measures no outcome and demonstrates no usefulness."
             ),
             "conversion_steps": [
                 {
                     "step": 1,
-                    "call": "GET /v1/ai/proof/market-edge",
-                    "note": "No auth needed. See signal structure and value proposition.",
+                    "call": "GET /.well-known/x402",
+                    "note": "Canonical payable-resource discovery. Public, non-metered.",
                 },
                 {
                     "step": 2,
+                    "call": "GET /v1/ai/proof/market-edge",
+                    "note": "No auth needed. Inspect response structure and confirm field schemas.",
+                },
+                {
+                    "step": 3,
                     "call": "GET /v1/workflows",
                     "note": "Choose a strategy and endpoint sequence for the research task.",
                 },
                 {
-                    "step": 3,
+                    "step": 4,
                     "call": "GET /v1/pricing/catalog",
                     "note": "Resolve live STC costs for target endpoints.",
                 },
                 {
-                    "step": 4,
+                    "step": 5,
                     "call": "GET /v1/pricing",
                     "note": "Inspect payment rails, identity headers, and accepted payment method guidance.",
                 },
                 {
-                    "step": 5,
+                    "step": 6,
                     "call": "GET /v1/agent/screener/top",
-                    "note": "First premium call. Supports subscription, x402, mpp.",
+                    "note": "A paid call, once a task has been chosen. Supports subscription, x402, mpp.",
                 },
             ],
             "payment_methods_supported": ["subscription", "x402", "mpp"],
@@ -1885,8 +2039,14 @@ def ai_tools():
 
 
 # ---------------------------------------------------------------------------
-# GET /v1/ai/proof/market-edge — free, non-metered, public proof-of-value
-# No auth, no DB calls, no billing record.  All data is synthetic/illustrative.
+# GET /v1/ai/proof/market-edge — free, non-metered, public schema illustration.
+# No auth, no DB calls, no billing record.  All data is synthetic.
+#
+# The path is retained for client compatibility, but this endpoint proves
+# nothing: it shows the shape of a response and how the context layers compose.
+# It measures no outcome, so it must not carry performance, edge, or timing
+# claims, and it is classified apart from the three real evidence families in
+# discovery/provenance.py.
 # ---------------------------------------------------------------------------
 
 _PROOF_CACHE_MAX_AGE = 3600  # seconds
@@ -1901,8 +2061,14 @@ _PROOF_STATIC_BODY: dict = {
     },
     "agent_guidance": {
         "purpose": (
-            "Demonstrates Stock Trends signal structure and value proposition "
-            "without requiring payment or authentication."
+            "Illustrates Stock Trends response structure and field semantics without "
+            "requiring payment or authentication."
+        ),
+        "classification": "illustrative_capability_example",
+        "is_not": (
+            "Not empirical evidence, not realized outcomes, not predictive performance, "
+            "and not investment performance. For measured evidence see the evidence "
+            "families published at /v1/ai/context."
         ),
         "next_steps": [
             {
@@ -1932,20 +2098,27 @@ _PROOF_STATIC_BODY: dict = {
     },
     "value_proposition": {
         "headline": (
-            "Stock Trends delivers processed, ranked, actionable signals — not raw prices."
+            "What a Stock Trends response contains: weekly classification state and "
+            "context layers, in structured JSON."
+        ),
+        "note": (
+            "This block describes composition, not benefit. Whether that composition is "
+            "useful for a task is for the caller to determine from the methodology and "
+            "evidence resources listed at /v1/ai/context."
         ),
         "differentiators": [
-            "Proprietary trend classification across 2000+ North American equities and ETFs",
-            "Weekly structured signals: trend state, trend persistence (trend_cnt), trend maturity (mt_cnt), relative strength (rsi), volume context (vol_tag)",
+            "Trend classification applied to North American equities and ETFs",
+            "Weekly structured fields: trend state, trend persistence (trend_cnt), trend maturity (mt_cnt), relative performance (rsi, baseline 100), volume context (vol_tag)",
             "ST-IM (Stock Trends Inference Model): forward return expectations and statistical distributions across 4, 13, and 40-week horizons",
-            "Sector breadth context for market regime detection",
-            "Agent-optimized structured JSON with consistent scoring fields",
+            "Sector breadth and leadership as cross-sectional context layers",
+            "Structured JSON with consistent field names across endpoints",
             "Multi-rail payments: subscription, x402 (per-request), MPP (session-based)",
         ],
         "vs_raw_price": (
-            "A raw price API returns a number. Stock Trends returns a ranked trend signal set, "
-            "regime context, and a structured workflow-ready response "
-            "— all in one call."
+            "A raw price API returns price fields. A Stock Trends response returns "
+            "classification state plus cross-sectional and regime context fields in the "
+            "same structure. This is a difference in response composition, not a claim "
+            "about results."
         ),
     },
     "market_snapshot": {
@@ -2017,23 +2190,29 @@ _PROOF_STATIC_BODY: dict = {
         {
             "signal_type": "bullish_trend_entry",
             "description": (
-                "Illustrative: instruments in bullish trend states (^+, ^-) with high "
-                "RSI and persistent trend_cnt represent top-ranked candidates in the screener."
+                "Illustrative only: shows how instruments in bullish trend states "
+                "(^+, ^-) with rsi above the 100 baseline and a persistent trend_cnt "
+                "appear in the screener ordering. No claim is made about what follows."
             ),
             "note": "Live ranked signals available via /v1/agent/screener/top.",
         },
         {
             "signal_type": "sector_rotation",
             "description": (
-                "Illustrative: sector breadth signals identify regime shifts "
-                "before they appear in index prices."
+                "Illustrative only: shows how sector breadth fields express "
+                "cross-sectional participation alongside a regime reading. Breadth "
+                "describes participation in the observed week; it is not a leading "
+                "indicator of index prices."
             ),
             "note": "Live sector context available via /v1/breadth/sector/latest.",
         },
     ],
     "sample_workflow": {
-        "name": "agent_market_edge",
-        "description": "Recommended workflow to extract signal edge from Stock Trends",
+        "name": "agent_market_context",
+        "description": (
+            "Illustrative call sequence showing how the endpoints compose. See "
+            "/v1/workflows for the maintained workflow registry with live costs."
+        ),
         "steps": [
             {
                 "step": 1,
@@ -2063,11 +2242,16 @@ _PROOF_STATIC_BODY: dict = {
         ],
     },
     "conversion_prompt": {
+        # Key name retained for response-shape compatibility. The content is
+        # access mechanics — how the rails work — not a prompt to buy.
+        "content_type": "access_mechanics",
         "action": (
-            "Access live signals by authenticating with a subscription API key, "
-            "or initiate per-request payment via x402 or a session via MPP."
+            "Live endpoints are reached with a subscription API key, a per-request x402 "
+            "payment, or an MPP session. This states how access works; it does not "
+            "recommend acquiring anything."
         ),
-        "start_here": "/v1/ai/tools",
+        "evaluate_before_deciding": "/v1/ai/context",
+        "start_here": "/.well-known/x402",
         "pricing": "/v1/pricing",
         "payment_methods": ["subscription", "x402", "mpp"],
         "payment_notes": {
@@ -2091,12 +2275,14 @@ _PROOF_STATIC_BODY: dict = {
 
 @router.get(
     "/proof/market-edge",
-    summary="Free proof-of-value endpoint for agent discovery",
+    summary="Free static schema illustration for agent discovery",
     description=(
-        "Public, non-metered. Returns a static, synthetic demonstration of Stock Trends "
-        "signal structure and value proposition. No authentication required. "
+        "Public, non-metered. Returns a static, synthetic illustration of Stock Trends "
+        "response structure and field semantics. No authentication required. "
         "No live or real-time market data is included — all instrument data is fictional. "
-        "Intended as a no-cost entry point for autonomous agents evaluating the API."
+        "This endpoint measures nothing: it is not empirical evidence, not realized "
+        "outcomes, and not predictive or investment performance. For measured evidence, "
+        "see the evidence families at /v1/ai/context."
     ),
 )
 def ai_proof_market_edge(response: Response) -> dict:
