@@ -36,6 +36,44 @@ A governed route that lacks canonical metadata or a safe example causes
 manifest construction and completeness tests to fail unless a deliberate,
 audited discovery exception is recorded.
 
+## Resource Tags
+
+x402 `ResourceInfo.tags` is a small per-resource budget that indexers read, so
+it describes one endpoint rather than repeating the service taxonomy. Service
+identity travels on `serviceName`, `iconUrl`, and the Bazaar `info` block.
+
+The composition is:
+
+* two stable domain anchors, `finance` and `equities`, so the payable surface
+  stays findable as a whole;
+* up to three endpoint-discriminating capability tags declared beside the rest
+  of that endpoint's semantics in `discovery.endpoint_metadata`.
+
+`discovery.endpoint_metadata.get_x402_resource_tags` is the only accessor
+payment code may use. `payments/x402.py` consumes it and names no endpoint
+path of its own; a second path-to-tags table inside payment code would drift
+from the registry that defines what an endpoint means. Tags are deliberate
+metadata, never derived from path tokenization at request time.
+
+The hard ceiling is five tags per resource. Every tag must be truthful under
+`docs/STOCK_TRENDS_SEMANTIC_CONTRACT.md` and must add discovery meaning; a
+generic term that every resource could carry wastes a scarce slot.
+
+## Advertised-Example Probeability
+
+Discovery metadata must be sufficient, not merely present: a standards-aware
+consumer that reads the emitted representation has to be able to construct a
+request that runtime validation accepts.
+
+The contract is enforced against what is emitted — the Bazaar input metadata
+carried by both the full and the compact challenge — rather than against the
+registry field behind it, and the two challenge shapes must advertise the same
+method, path, and input. For a request-probeable paid resource the advertised
+example must reach `402` unpaid. Paid Intelligence artifact routes are the only
+exception, and only because their availability gate legitimately answers first;
+their examples must still be serviceable requests once a matching artifact
+exists.
+
 ## Discovery Is Not Execution
 
 Reading the manifest is public/free and must not:
