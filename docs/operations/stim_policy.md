@@ -94,12 +94,28 @@ Logging:
 
 ---
 
-### 5. Sandbox Plan
+### 5. Subscription Plans and STIM Entitlement
+
+Active subscription plans — `sandbox`, `research`, `pro`, `enterprise` — all
+receive API-key access to the full protected endpoint set, including `/v1/stim*`.
 
 Behavior:
 
-* access denied at auth layer
-* no metering recorded
+* an active subscription on any plan code may call `/v1/stim/latest` and
+  `/v1/stim/history` via subscription access (Access Mode 1 above)
+* normal metering and quota accounting still apply; entitlement is not a
+  metering bypass
+* plans are differentiated by quota, rate limit, burst limit and commercial
+  terms — not by excluding an endpoint family
+
+Sandbox is the entry-level development/evaluation subscription, not a restricted
+endpoint subset.
+
+Non-subscription plan codes (`free`, `trial`, `test`) are not subscription
+entitlements and remain denied at the auth layer.
+
+x402 and MPP remain separate supported rails for `/v1/stim*` and are unaffected
+by subscription entitlement.
 
 ---
 

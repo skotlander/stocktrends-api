@@ -502,3 +502,54 @@ refused with `402 unsupported_payment_rail`, listing the accepted methods.
 
 **Prevention rule.** In an enforcement path, an unmatched case is a refusal, not
 a pass. Write the fall-through before the branches.
+
+---
+
+## 2026-09-17 — A plan tier was denied an endpoint family the product contract sold it
+
+**Problem.** A newly issued API key on the active `sandbox` subscription plan
+returned 200 on `/v1/prices/latest` but 403 on `/v1/stim/latest` with
+`Plan 'sandbox' does not allow this endpoint` — while the published plans page
+stated that subscription plans cover API-key access to the full endpoint set.
+
+**Root cause.** The Sandbox exclusion was encoded twice, in two layers, as a
+hard-coded plan-tier list rather than derived from the subscription contract.
+`ApiKeyMiddleware.is_plan_allowed` carried a `research_plus` set that
+excluded Sandbox from any `/v1/stim` path — this is what produced the 403.
+`pricing/classifier.py` independently classified Sandbox as non-paid via
+`_is_paid_plan` plus an explicit `sandbox_plan_denied` branch. Both predated
+the per-endpoint payment policies for `/v1/stim/latest` and `/v1/stim/history`
+(`allowed_rails=(subscription, x402, mpp)`). Once those were registered, GET
+requests to both routes classify in the registered-policy lane, so the
+classifier branch was latent there — reachable only through the `/v1/stim`
+prefix fallback lane (unregistered methods such as HEAD, or unregistered
+`/v1/stim*` paths). The live denial came from the middleware alone.
+
+**Fix.** Both legacy Sandbox exclusions were removed, one per layer. The
+middleware gates `/v1/` on a single `subscription_plans` allowlist with no
+STIM special case; the classifier no longer lists Sandbox as non-paid and the
+`sandbox_plan_denied` branch is gone. Rails, pricing rules, STC values, quota
+and metering were not touched: Sandbox GET STIM traffic resolves to the same
+`subscription` rail, the same `stim_latest_paid` / `stim_history_paid`
+pricing rule and the same `is_metered=1` as every other plan.
+
+This is a bounded correction, not a consolidation. Plan-code literals still
+live in two places — the middleware allowlist (`sandbox`, `research`, `pro`,
+`enterprise`) and the classifier's non-paid denylist (`free`, `trial`,
+`test`) — and the payment-policy provider models rails per endpoint, not plan
+entitlement. Adding or retiring a plan code still requires checking both.
+
+**Prevention rule.** A plan-tier list hard-coded in one layer is a second
+source of truth beside the product contract and the endpoint payment
+policies, and it will drift toward the older product. When changing what a
+plan may access, grep every layer for plan-code literals (`is_plan_allowed`,
+`_is_paid_plan`, and any `plan_code ==` comparison) and change them together,
+with a test at each layer. Do not let a zero-diff in one layer imply the
+others agree — a shadowed branch still encodes a stale rule.
+
+**Corollary.** A commercial plan boundary is a product contract, not an
+implementation detail. Differentiate plans through the usage envelope — quota,
+rate, burst, commercial terms — which is enforced downstream and is visible in
+billing. Differentiating by excluding an endpoint family puts the published
+pricing page and the running code on separate release cycles, and the customer
+finds the gap before the team does.
