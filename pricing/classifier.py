@@ -192,7 +192,10 @@ def _is_paid_plan(plan_code: str | None) -> bool:
     if not normalized:
         return False
 
-    return normalized not in {"sandbox", "free", "trial", "test"}
+    # `sandbox` is an active subscription plan and is entitled to the same
+    # subscription-backed lane as research/pro/enterprise.  Only non-subscription
+    # plan codes are treated as unpaid here.
+    return normalized not in {"free", "trial", "test"}
 
 
 def _is_identified_agent(agent_identifier: str | None) -> bool:
@@ -317,11 +320,6 @@ def classify_request(
         # traffic here is on a known agent-pay enforcement scope.
         if ENABLE_AGENT_PAY and not has_paid_auth:
             return _agent_pay_decision("x402", pricing_rule_id="stim_paid")
-
-        # Sandbox/free/test callers are not entitled to STIM subscription access.
-        normalized_plan = (plan_code or "").strip().lower()
-        if normalized_plan == "sandbox":
-            return _deny_decision("sandbox_plan_denied")
 
         if not has_paid_auth:
             return _deny_decision("authentication_required")

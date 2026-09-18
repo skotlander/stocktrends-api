@@ -391,13 +391,14 @@ class ApiKeyMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     def is_plan_allowed(self, path: str, plan_code: str) -> bool:
-        sandbox_plus = {"sandbox", "research", "pro", "enterprise"}
-        research_plus = {"research", "pro", "enterprise"}
-
-        if path.startswith("/v1/stim"):
-            return plan_code in research_plus
+        # Active subscription plans all receive API-key access to the full
+        # protected endpoint set.  Plans are differentiated by quota, rate and
+        # burst limits and commercial terms -- enforced downstream -- not by
+        # excluding an endpoint family here.  Sandbox is the entry-level
+        # subscription, not a restricted endpoint subset.
+        subscription_plans = {"sandbox", "research", "pro", "enterprise"}
 
         if path.startswith("/v1/"):
-            return plan_code in sandbox_plus
+            return plan_code in subscription_plans
 
         return True
