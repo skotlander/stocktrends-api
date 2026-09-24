@@ -293,7 +293,7 @@
       "name": "indicators_latest",
       "analytical_role": "symbol_signal_intelligence",
       "title": "Indicators Latest",
-      "description": "Current stock analytics for equity research and pre-trade analysis. Returns the latest Stock Trends indicator snapshot for a symbol: trend state, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, and related signal metadata. RSI baseline is 100. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Current weekly stock analytics for equity research and pre-trade analysis. Returns the latest Stock Trends indicator snapshot for a symbol: trend state, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, and related signal metadata. RSI baseline is 100. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/indicators/latest",
       "auth_required": true,

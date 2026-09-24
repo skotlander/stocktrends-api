@@ -111,7 +111,7 @@ https://developer.stocktrends.com/mpp
 ### Indicators
 
 * `GET /indicators/latest`
-  Current stock analytics for equity research and pre-trade analysis. Returns the latest Stock Trends indicator snapshot for a symbol: trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, and related signal metadata.
+  Current weekly stock analytics for equity research and pre-trade analysis. Returns the latest Stock Trends indicator snapshot for a symbol: trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, and related signal metadata.
 * `GET /indicators/history`
   Historical weekly Stock Trends indicator rows for signal persistence, trend maturity, relative performance, and volume-context review.
 

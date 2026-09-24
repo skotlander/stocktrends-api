@@ -503,7 +503,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         category="indicators",
         pricing_rule_id="indicators_latest_paid",
         resource_description=(
-            "Current stock analytics for equity research and pre-trade analysis. "
+            "Current weekly stock analytics for equity research and pre-trade analysis. "
             "Returns the latest Stock Trends indicator snapshot for a symbol. "
             f"{INDICATORS_PROVENANCE_TEXT}"
         ),
