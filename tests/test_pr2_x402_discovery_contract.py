@@ -807,6 +807,88 @@ def test_runtime_resource_tags_are_the_canonical_registry_tags(runtime_challenge
             assert pair.by_mode(mode).tags == expected, f"{pair.key} [{mode}]"
 
 
+def test_targeted_intent_metadata_reaches_x402_challenges_and_discovery_manifest(
+    payment_harness, runtime_challenges
+):
+    """The metadata indexers consume carries the two discovery bridges exactly."""
+    expected = {
+        ("GET", "/v1/agent/screener/top"): {
+            "description_terms": ("stock screener", "trend"),
+            "tags": [
+                "finance",
+                "equities",
+                "stock-screening",
+                "trend-screening",
+                "strong-trends",
+            ],
+            "analytical_role": "market_intelligence_filter",
+            "pricing_rule_id": "agent_screener_top",
+            "safe_example_request": {
+                "method": "GET",
+                "path": "/v1/agent/screener/top",
+                "query": {"limit": 10, "min_rsi": 40},
+            },
+        },
+        ("GET", "/v1/indicators/latest"): {
+            "description_terms": ("stock analytics", "Stock Trends", "1980"),
+            "tags": [
+                "finance",
+                "equities",
+                "stock-analytics",
+                "technical-analysis",
+                "trend-analysis",
+            ],
+            "analytical_role": "symbol_signal_intelligence",
+            "pricing_rule_id": "indicators_latest_paid",
+            "safe_example_request": {
+                "method": "GET",
+                "path": "/v1/indicators/latest",
+                "query": {"symbol_exchange": "IBM-N", "cs_only": True},
+            },
+        },
+        ("POST", "/v1/decision/evaluate-symbol"): {
+            "description_terms": ("deterministic", "pre-trade", "stock analysis", "regime"),
+            "tags": [
+                "finance",
+                "equities",
+                "stock-evaluation",
+                "stock-analysis",
+                "decision-support",
+            ],
+            "analytical_role": "symbol_decision_engine",
+            "pricing_rule_id": "evaluate_symbol",
+            "safe_example_request": {
+                "method": "POST",
+                "path": "/v1/decision/evaluate-symbol",
+                "json": {"symbol_exchange": "IBM-N"},
+            },
+        },
+    }
+    challenges = {pair.key: pair for pair in runtime_challenges}
+    manifest_resources = {
+        (resource["method"], resource["path"]): resource
+        for resource in _served_manifest(payment_harness.client)["resources"]
+    }
+
+    for key, contract in expected.items():
+        manifest_resource = manifest_resources[key]
+        assert manifest_resource["analytical_role"] == contract["analytical_role"]
+        assert manifest_resource["pricing_rule_id"] == contract["pricing_rule_id"]
+        assert manifest_resource["safe_example_request"] == contract["safe_example_request"]
+
+        description = manifest_resource["description"]
+        for term in contract["description_terms"]:
+            assert term.lower() in description.lower(), f"{key}: missing {term!r}"
+
+        for mode in _CHALLENGE_MODES:
+            resource = challenges[key].by_mode(mode).resource
+            assert resource["description"] == description
+            assert resource["tags"] == contract["tags"]
+            assert len(resource["tags"]) == X402_RESOURCE_TAG_LIMIT
+            assert resource["tags"][:2] == list(X402_DOMAIN_ANCHOR_TAGS)
+            assert len(set(resource["tags"])) == len(resource["tags"])
+
+
 def test_runtime_resource_tags_carry_anchors_plus_capability_semantics(runtime_challenges):
     for pair in runtime_challenges:
         tags = pair.compact.tags
@@ -923,7 +1005,7 @@ def test_baseline_capability_semantics_are_advertised(runtime_challenges):
         ("GET", "/v1/stim/history"): ["probabilistic-returns", "forward-returns"],
         ("GET", "/v1/selections/latest"): ["stock-selection"],
         ("GET", "/v1/selections/published/latest"): ["stim-select"],
-        ("GET", "/v1/agent/screener/top"): ["stock-screening", "technical-analysis"],
+        ("GET", "/v1/agent/screener/top"): ["stock-screening", "trend-screening"],
         ("POST", "/v1/decision/evaluate-symbol"): ["stock-evaluation", "stock-analysis"],
         ("POST", "/v1/portfolio/evaluate"): ["portfolio-evaluation"],
         ("POST", "/v1/portfolio/construct"): ["portfolio-construction"],

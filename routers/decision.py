@@ -136,7 +136,8 @@ def _signal_notes(
     "/evaluate-symbol",
     summary="Symbol-level decision evaluation",
     description=(
-        "Evaluates a single symbol's current trend context against the live market regime "
+        "Provides deterministic pre-trade stock analysis and equity evaluation by assessing a "
+        "single symbol's current trend context against the live market regime "
         "to produce a synthesized bias, confidence score, and decision_score (0–1). "
         "Fully deterministic — no ML. Uses the same regime logic as /market/regime/forecast. "
         "Fetch /v1/pricing/catalog for current STC cost."

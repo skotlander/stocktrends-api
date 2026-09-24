@@ -103,7 +103,8 @@ def _validate_screener_values(request: Request, values: dict) -> None:
     "/top",
     summary="Top-ranked instruments screener",
     description=(
-        "Returns a ranked list of instruments from the latest Stock Trends signal data. "
+        "Screens stocks for stronger or persistent trend candidates and returns a ranked list "
+        "of instruments from the latest Stock Trends signal data. "
         "Filters by trend code (default: bullish states ^+, ^-, v^), RSI (relative performance "
         "vs benchmark, baseline 100), trend persistence (trend_cnt), and trend maturity (mt_cnt). "
         "Ranked by RSI or mt_cnt. Each result includes trend, trend_cnt, mt_cnt, rsi, rsi_updn, "

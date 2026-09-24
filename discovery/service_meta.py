@@ -91,7 +91,8 @@ SERVICE_OPENAPI_GUIDANCE = (
 
 SERVICE_POSITIONING = (
     "Autonomous portfolio intelligence API for AI agents. "
-    "Agent-native probabilistic market intelligence infrastructure: "
+    "Agent-native probabilistic market intelligence infrastructure for stock analytics, "
+    "pre-trade research context, and trend screening: "
     f"multi-decade Stock Trends classification history from {HISTORICAL_COVERAGE_START_YEAR} "
     f"with {APPROXIMATE_OBSERVATION_COUNT} observations, "
     "ST-IM (Stock Trends Inference Model) forward-return distributions, "
