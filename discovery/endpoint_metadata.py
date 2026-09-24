@@ -432,8 +432,9 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         category="screener",
         pricing_rule_id="agent_screener_top",
         resource_description=(
-            "Ranked Stock Trends signal screener for agent workflows, using trend state, "
-            "trend persistence, trend maturity, relative performance, and volume signal fields."
+            "Stock screener for finding and ranking stronger or persistent trend equity candidates "
+            "using Stock Trends trend state, trend persistence, trend maturity, relative performance, "
+            "and volume signal fields."
         ),
         bazaar_output_description=(
             "Returns ranked instruments with trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, "
@@ -441,8 +442,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         ),
         purpose="Find a ranked candidate set from the latest Stock Trends signal data.",
         investment_agent_value=(
-            "Gives agents a compact first paid call for discovering securities with directional "
-            "Stock Trends signal context before deeper symbol, ST-IM, or portfolio analysis."
+            "Gives agents a compact first paid call for candidate discovery before deeper symbol, "
+            "ST-IM, or portfolio analysis."
         ),
         workflow_role="Candidate discovery and ranking.",
         output_summary="Ranked instruments with Stock Trends signal fields and filter summary.",
@@ -492,7 +493,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         ],
         related_endpoints=["/v1/decision/evaluate-symbol", "/v1/portfolio/construct", "/v1/stim/latest"],
         next_recommended_calls=["/v1/decision/evaluate-symbol", "/v1/portfolio/construct"],
-        tags=["technical-analysis", "stock-screening", "trend-indicators"],
+        tags=["stock-screening", "trend-screening", "strong-trends"],
     ),
     "/v1/indicators/latest": _metadata(
         path="/v1/indicators/latest",
@@ -502,7 +503,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         category="indicators",
         pricing_rule_id="indicators_latest_paid",
         resource_description=(
-            "Latest Stock Trends indicator snapshot for a symbol. "
+            "Current weekly stock analytics for equity research and pre-trade analysis. "
+            "Returns the latest Stock Trends indicator snapshot for a symbol. "
             f"{INDICATORS_PROVENANCE_TEXT}"
         ),
         bazaar_output_description=(
@@ -557,7 +559,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         analytical_role=ROLE_SYMBOL_SIGNAL_INTELLIGENCE,
         related_endpoints=["/v1/indicators/history", "/v1/stim/latest", "/v1/selections/history"],
         next_recommended_calls=["/v1/indicators/history", "/v1/stim/latest"],
-        tags=["technical-analysis", "trend-analysis", "trend-indicators"],
+        tags=["stock-analytics", "technical-analysis", "trend-analysis"],
     ),
     "/v1/indicators/history": _metadata(
         path="/v1/indicators/history",
@@ -1229,7 +1231,10 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         title="Symbol Decision Evaluation",
         category="decision",
         pricing_rule_id="evaluate_symbol",
-        resource_description="Deterministic symbol-level decision evaluation combining Stock Trends signal context with market regime context.",
+        resource_description=(
+            "Deterministic pre-trade stock analysis and equity evaluation combining Stock Trends "
+            "signal context with market regime context for investment research and decision support."
+        ),
         bazaar_output_description="Returns bias, confidence, decision_score, alignment, symbol_context, regime_context, and signal_notes for a requested symbol.",
         purpose="Evaluate one symbol for directional decision-support bias in regime context.",
         investment_agent_value="Combines signal and regime context into a compact decision object for agent workflows.",

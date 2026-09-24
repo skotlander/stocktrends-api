@@ -11,7 +11,7 @@ The developer portal (https://developer.stocktrends.com) is for onboarding, plan
 
 ## Overview
 
-The Stock Trends API is an Autonomous portfolio intelligence API for AI agents. Agent-native probabilistic market intelligence infrastructure: multi-decade Stock Trends classification history from 1980 with 16M+ observations, ST-IM (Stock Trends Inference Model) forward-return distributions, market regime analysis, sector breadth confirmation, leadership rotation analytics, STIM Select probabilistic stock lists, portfolio construction and evaluation, and symbol decision scoring across 4, 13, and 40-week investment horizons. Built for agentic research workflows using x402 and MPP payment rails. Outputs are processed, ranked, and interpretation-ready — not raw price data.
+The Stock Trends API is an Autonomous portfolio intelligence API for AI agents. Agent-native probabilistic market intelligence infrastructure for stock analytics, pre-trade research context, and trend screening: multi-decade Stock Trends classification history from 1980 with 16M+ observations, ST-IM (Stock Trends Inference Model) forward-return distributions, market regime analysis, sector breadth confirmation, leadership rotation analytics, STIM Select probabilistic stock lists, portfolio construction and evaluation, and symbol decision scoring across 4, 13, and 40-week investment horizons. Built for agentic research workflows using x402 and MPP payment rails. Outputs are processed, ranked, and interpretation-ready — not raw price data.
 
 It is not investment advice and does not guarantee trading outcomes. Agents should present outputs as research context, not instructions to buy or sell securities.
 
@@ -106,12 +106,12 @@ https://developer.stocktrends.com/mpp
 ### Decision
 
 * `POST /decision/evaluate-symbol`
-  Symbol-level decision evaluation
+  Deterministic pre-trade stock analysis and equity evaluation using Stock Trends signal and market regime context for investment research and decision support.
 
 ### Indicators
 
 * `GET /indicators/latest`
-  Latest Stock Trends indicator snapshot for a symbol: trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, and related signal metadata.
+  Current weekly stock analytics for equity research and pre-trade analysis. Returns the latest Stock Trends indicator snapshot for a symbol: trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, and related signal metadata.
 * `GET /indicators/history`
   Historical weekly Stock Trends indicator rows for signal persistence, trend maturity, relative performance, and volume-context review.
 
@@ -251,7 +251,7 @@ Use these helper endpoints during autonomous planning before paid execution:
 ### Agent Screener
 
 * `GET /agent/screener/top`
-  Top-ranked instruments screener. Filters by trend code (bullish default: ^+, ^-, v^), RSI (relative performance vs S&P 500 benchmark, baseline 100), trend_cnt, and mt_cnt.
+  Stock screener for finding and ranking stronger or persistent trend equity candidates. Filters by trend code (bullish default: ^+, ^-, v^), RSI (relative performance vs S&P 500 benchmark, baseline 100), trend_cnt, and mt_cnt.
 
 ### ST-IM (Stock Trends Inference Model)
 

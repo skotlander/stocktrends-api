@@ -111,7 +111,8 @@ def indicators_latest(
     cs_only: bool = Query(default=True, description="Filter to Common Stocks only (type='CS')"),
 ):
     """
-    Latest weekly Stock Trends indicators for a specific instrument.
+    Current stock analytics for equity research and pre-trade analysis: latest
+    weekly Stock Trends indicators for a specific instrument.
     """
     s, ex = _resolve_symbol_exchange(
         request=request,
