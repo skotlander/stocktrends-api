@@ -414,9 +414,10 @@ SEMANTIC_VALIDATION_REQUIRED: dict[tuple[str, str], str] = {
     ("GET", "/v1/agent/screener/top"):
         "class 3 — sort / exchange / trend-code vocabulary moved; latest weekdate "
         "and whether any signal rows match stay post-payment",
-    ("GET", "/v1/breadth/sector/history"): "class 1 — optional exchange code",
+    ("GET", "/v1/breadth/sector/history"):
+        "class 1 — optional exchange code and population vs legacy cs_only conflict",
     ("GET", "/v1/breadth/sector/latest"):
-        "class 3 — optional exchange code moved; latest weekdate stays post-payment",
+        "class 3 — optional exchange code and population vs legacy cs_only conflict moved; latest weekdate stays post-payment",
     ("POST", "/v1/decision/evaluate-symbol"):
         "class 3 — resolvable instrument identity moved; weekdate availability, "
         "symbol_not_found and regime computation stay post-payment",
@@ -436,7 +437,9 @@ SEMANTIC_VALIDATION_REQUIRED: dict[tuple[str, str], str] = {
         "only the request-only id check; no store access is in the validator",
     ("GET", "/v1/leadership/rotation/history"): "class 1 — optional exchange code",
     ("GET", "/v1/leadership/summary/latest"):
-        "class 3 — optional exchange code moved; latest weekdate stays post-payment",
+        "class 3 — unsupported exchange and type=EQ constraints moved; latest weekdate stays post-payment",
+    ("GET", "/v1/market/epoch/history"):
+        "class 1 — start_date/end_date ordering",
     ("POST", "/v1/portfolio/compare"):
         "class 3 — both sides' position lists moved; per-symbol existence stays "
         "post-payment",
@@ -493,8 +496,9 @@ NO_SEMANTIC_VALIDATION_REQUIRED: dict[tuple[str, str], str] = {
         "Query and type declarations",
     ("GET", "/v1/market/regime/latest"):
         "class 2 — takes no parameters beyond the request itself",
+    ("GET", "/v1/market/epoch/latest"):
+        "class 2 — takes no parameters beyond the request itself",
 }
-
 
 def _governed_surface() -> set[tuple[str, str]]:
     """The payment-governed route/method surface, derived from runtime policy."""
@@ -806,8 +810,8 @@ def test_45d_metering_backstop_still_reads_the_matched_route():
 # silently skipped by a guard that iterates only what it happens to know about.
 CLASS_1_PROBES: dict[tuple[str, str], tuple[str, dict]] = {
     ("GET", "/v1/agent/screener/top"): ("/v1/agent/screener/top?sort=bogus", {}),
-    ("GET", "/v1/breadth/sector/history"): ("/v1/breadth/sector/history?exchange=ZZ", {}),
-    ("GET", "/v1/breadth/sector/latest"): ("/v1/breadth/sector/latest?exchange=ZZ", {}),
+    ("GET", "/v1/breadth/sector/history"): ("/v1/breadth/sector/history?population=equities&cs_only=true", {}),
+    ("GET", "/v1/breadth/sector/latest"): ("/v1/breadth/sector/latest?population=equities&cs_only=true", {}),
     ("POST", "/v1/decision/evaluate-symbol"): ("/v1/decision/evaluate-symbol", {"json": {}}),
     ("GET", "/v1/indicators/history"): ("/v1/indicators/history?symbol_exchange=IBM", {}),
     ("GET", "/v1/indicators/latest"): ("/v1/indicators/latest?symbol_exchange=IBM", {}),
@@ -821,7 +825,10 @@ CLASS_1_PROBES: dict[tuple[str, str], tuple[str, dict]] = {
         "/v1/leadership/rotation/history?exchange=ZZ", {},
     ),
     ("GET", "/v1/leadership/summary/latest"): (
-        "/v1/leadership/summary/latest?exchange=ZZ", {},
+        "/v1/leadership/summary/latest?type=EQ", {},
+    ),
+    ("GET", "/v1/market/epoch/history"): (
+        "/v1/market/epoch/history?start_date=2026-09-25&end_date=2026-09-18", {},
     ),
     ("POST", "/v1/portfolio/compare"): (
         "/v1/portfolio/compare",

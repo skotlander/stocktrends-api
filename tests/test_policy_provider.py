@@ -552,6 +552,8 @@ class TestGetAcceptedPaymentMethodsForPath:
             ("/v1/market/regime/latest", "market_regime_latest", "GET"),
             ("/v1/market/regime/history", "market_regime_history", "GET"),
             ("/v1/market/regime/forecast", "market_regime_forecast", "GET"),
+            ("/v1/market/epoch/latest", "market_epoch_latest", "GET"),
+            ("/v1/market/epoch/history", "market_epoch_history", "GET"),
             ("/v1/decision/evaluate-symbol", "evaluate_symbol", "POST"),
             ("/v1/portfolio/construct", "portfolio_construct", "POST"),
             ("/v1/portfolio/evaluate", "portfolio_evaluate", "POST"),

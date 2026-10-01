@@ -115,6 +115,38 @@ persistence, taxonomy population, or taxonomy coverage.
 
 ---
 
+## Market Epoch v1
+
+**Market Epoch** is a frozen unsupervised K=3 market-state classifier based on
+aggregate weekly Stock Trends features. It is contextual market state. It is not a trade signal, not a forward-return forecast, and not causal AI.
+
+The frozen v1 labels are:
+
+- `BROAD_BULLISH` / Broad Bullish
+- `BEARISH_MATURITY` / Bearish Maturity
+- `BULLISH_MATURITY` / Bullish Maturity
+
+### Epoch fields
+
+- `epoch_id` — persisted descriptive state identifier.
+- `epoch_name` — persisted human-readable descriptive state name.
+- `raw_cluster_id` — persisted frozen classifier cluster identifier; API consumers
+  must not reinterpret or remap it.
+- `weeks_in_epoch` — consecutive official weekly persistence of the current
+  assigned Epoch.
+- `changed_this_week` — persisted `0` or `1` flag indicating whether the assigned
+  Epoch differs from the immediately previous official weekly Epoch.
+- `assigned_distance` — distance to the assigned frozen centroid in standardized
+  feature space.
+- `second_nearest_distance` — distance to the second-nearest frozen centroid in
+  standardized feature space.
+- `separation_margin` — `second_nearest_distance - assigned_distance`.
+
+`separation_margin` is not a probability and not forecast confidence. The
+descriptive word “Maturity” does not imply that a reversal must follow.
+
+---
+
 ### trend_cnt
 
 **Definition:**

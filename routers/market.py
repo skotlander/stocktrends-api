@@ -8,8 +8,9 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from api.routing import pre_payment_semantic_validator
 from db import get_engine
-from services import regime_queries, regime_service
+from services import epoch_queries, regime_queries, regime_service
 from services.market_semantics import BEARISH_TRENDS, BULLISH_TRENDS, NEUTRAL_TRENDS
 from utils.history_bounds import (
     LIMIT_SOURCE_CALLER,
@@ -32,6 +33,9 @@ router = APIRouter(prefix="/market", tags=["market"])
 REGIME_HISTORY_PATH = "/v1/market/regime/history"
 REGIME_HISTORY_DEFAULT_LIMIT = history_default_limit(REGIME_HISTORY_PATH)
 REGIME_HISTORY_MAX_LIMIT = history_max_limit(REGIME_HISTORY_PATH)
+EPOCH_HISTORY_PATH = "/v1/market/epoch/history"
+EPOCH_HISTORY_DEFAULT_LIMIT = history_default_limit(EPOCH_HISTORY_PATH)
+EPOCH_HISTORY_MAX_LIMIT = history_max_limit(EPOCH_HISTORY_PATH)
 
 
 def _no_signal_data(request: Request, message: str) -> HTTPException:
@@ -110,6 +114,130 @@ def _regime_snapshot(weekdate: date, rows: list[Any]) -> dict[str, Any] | None:
         "neutral_count": neutral_count,
         "unclassified_count": unclassified_count,
         "population": "equities",
+    }
+
+
+def _epoch_snapshot(row: Any) -> dict[str, Any]:
+    """Expose one persisted Epoch snapshot without recomputation or remapping."""
+    return dict(row)
+
+
+def _validate_epoch_history_date_range(request: Request, values: dict[str, Any]) -> None:
+    """Reject an inverted request-only Epoch history range before payment."""
+    start_date = values.get("start_date")
+    end_date = values.get("end_date")
+    if start_date is not None and end_date is not None and start_date > end_date:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "request_id": getattr(request.state, "request_id", None),
+                "error": "invalid_date_range",
+                "message": "start_date must be before or equal to end_date.",
+            },
+        )
+
+
+@router.get(
+    "/epoch/latest",
+    summary="Latest persisted Market Epoch v1 state",
+    description=(
+        "Returns the latest persisted snapshot from the frozen Market Epoch v1 unsupervised "
+        "K=3 market-state classifier, based on six aggregate weekly Stock Trends features. "
+        "Epoch labels (BROAD_BULLISH, BEARISH_MATURITY, and BULLISH_MATURITY) describe "
+        "contextual market state; they are not trade signals, forward-return forecasts, or "
+        "investment recommendations. changed_this_week is a persisted 0/1 flag indicating the assigned Epoch differs from "
+        "the immediately previous official weekly Epoch; weeks_in_epoch is its consecutive "
+        "weekly persistence. assigned_distance and second_nearest_distance are frozen-centroid "
+        "distances in standardized feature space. separation_margin is their difference, not "
+        "a probability or forecast confidence. The word Maturity does not imply a reversal must "
+        "follow. Fetch /v1/pricing/catalog for current STC cost."
+    ),
+)
+def market_epoch_latest(request: Request):
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = epoch_queries.fetch_latest_epoch_row(conn)
+    if row is None:
+        raise _no_signal_data(request, "No persisted Market Epoch v1 snapshot is available.")
+    return _epoch_snapshot(row)
+
+
+@router.get(
+    "/epoch/history",
+    summary="Persisted Market Epoch v1 history",
+    description=(
+        "Returns newest-first persisted snapshots from the frozen Market Epoch v1 unsupervised "
+        "K=3 market-state classifier, based on six aggregate weekly Stock Trends features. "
+        "Epoch state is contextual, not a trade signal or forward-return forecast. "
+        "separation_margin is the second-nearest frozen-centroid distance minus assigned "
+        "distance in standardized feature space; it is not a probability or forecast confidence. "
+        "The descriptive word Maturity does not imply a reversal must follow. "
+        "Fetch /v1/pricing/catalog for current STC cost."
+    ),
+)
+@pre_payment_semantic_validator(_validate_epoch_history_date_range)
+def market_epoch_history(
+    request: Request,
+    limit: int = Query(
+        default=EPOCH_HISTORY_DEFAULT_LIMIT,
+        ge=1,
+        le=EPOCH_HISTORY_MAX_LIMIT,
+        description=(
+            "Number of persisted weekly Epoch snapshots to return. Default 52, max 2600. "
+            "The response reports the applied limit and whether more matching rows existed."
+        ),
+    ),
+    start_date: date | None = Query(
+        default=None,
+        description="Optional inclusive earliest weekdate (YYYY-MM-DD).",
+    ),
+    end_date: date | None = Query(
+        default=None,
+        description="Optional inclusive latest weekdate (YYYY-MM-DD).",
+    ),
+):
+    engine = get_engine()
+    with engine.connect() as conn:
+        probed_rows = epoch_queries.fetch_epoch_history_rows(
+            conn,
+            limit=probe_limit(limit),
+            start_date=start_date,
+            end_date=end_date,
+        )
+    rows, truncated_by_limit = split_probe_rows(probed_rows, limit)
+    if not rows:
+        raise _no_signal_data(request, "No persisted Market Epoch v1 snapshots are available.")
+    history = [_epoch_snapshot(row) for row in rows]
+
+    return {
+        "history": history,
+        "count": len(history),
+        "limit": limit,
+        "start_date": str(start_date) if start_date else None,
+        "end_date": str(end_date) if end_date else None,
+        "applied_bounds": build_applied_bounds(
+            start=str(start_date) if start_date else None,
+            end=str(end_date) if end_date else None,
+            window_source=(
+                WINDOW_SOURCE_CALLER
+                if start_date or end_date
+                else WINDOW_SOURCE_NOT_APPLIED
+            ),
+            default_window_weeks=None,
+            limit=limit,
+            limit_source=(
+                LIMIT_SOURCE_CALLER
+                if "limit" in request.query_params
+                else LIMIT_SOURCE_DEFAULT
+            ),
+            max_limit=EPOCH_HISTORY_MAX_LIMIT,
+            rows_returned=len(history),
+            truncated_by_limit=truncated_by_limit,
+            widen_with=(
+                f"Raise limit up to {EPOCH_HISTORY_MAX_LIMIT} for more persisted weeks, "
+                "and use inclusive start_date and end_date to select the period."
+            ),
+        ),
     }
 
 

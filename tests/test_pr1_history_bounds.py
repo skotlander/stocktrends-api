@@ -332,7 +332,7 @@ def test_bare_breadth_history_request_is_bounded_on_both_axes(client, anchored_e
     assert params["limit"] < 200000
 
 
-def test_canonical_summary_history_anchors_to_shadow_not_newer_raw_week(client, anchored_engine):
+def test_stale_canonical_summary_history_falls_back_to_raw_week(client, anchored_engine):
     shadow_week = "2026-08-21"
     raw_week = "2026-08-28"
 
@@ -348,9 +348,11 @@ def test_canonical_summary_history_anchors_to_shadow_not_newer_raw_week(client, 
 
     assert response.status_code == 200
     anchors = [(sql, params) for sql, params in engine.executed if "MAX(weekdate)" in sql]
-    assert len(anchors) == 1
-    assert "st_sector_summary_shadow" in anchors[0][0]
-    assert response.json()["applied_bounds"]["end"] == shadow_week
+    assert any("st_sector_summary_shadow" in sql for sql, _ in anchors)
+    assert any("FROM st_data" in sql for sql, _ in anchors)
+    sql, _ = engine.only_data_statement()
+    assert "FROM st_data d" in sql
+    assert response.json()["applied_bounds"]["end"] == raw_week
 
 
 @pytest.mark.parametrize(
@@ -381,6 +383,8 @@ def test_explicit_in_shadow_breadth_history_keeps_shadow_path(client, anchored_e
     def responder(sql, params):
         if "MIN(weekdate)" in sql:
             return [{"min_weekdate": "1993-01-01", "max_weekdate": "2026-08-21"}]
+        if "MAX(weekdate)" in sql:
+            return [{"weekdate": "2026-08-21", "wd": "2026-08-21"}]
         return []
 
     engine = anchored_engine(breadth_router, responder)
@@ -390,6 +394,59 @@ def test_explicit_in_shadow_breadth_history_keeps_shadow_path(client, anchored_e
     assert response.status_code == 200
     sql, _ = engine.only_data_statement()
     assert "FROM st_sector_summary_shadow ss" in sql
+
+
+@pytest.mark.parametrize("shadow_state", ["missing", "empty"], ids=["missing", "empty"])
+def test_unusable_canonical_breadth_shadow_falls_back_to_raw_history(
+    client, anchored_engine, shadow_state
+):
+    def responder(sql, _params):
+        if "st_sector_summary_shadow" in sql and "MAX(weekdate)" in sql:
+            if shadow_state == "missing":
+                raise RuntimeError("st_sector_summary_shadow does not exist")
+            return []
+        if "MAX(weekdate)" in sql:
+            return [{"weekdate": ANCHOR_WEEKDATE, "wd": ANCHOR_WEEKDATE}]
+        return []
+
+    engine = anchored_engine(breadth_router, responder)
+    response = client.get("/v1/breadth/sector/history", headers=x402_headers())
+
+    assert response.status_code == 200
+    sql, _ = engine.only_data_statement()
+    assert "FROM st_data d" in sql
+    assert "stdata" not in "\n".join(sql for sql, _ in engine.executed).lower()
+
+
+def test_current_canonical_breadth_shadow_keeps_latest_fast_path(client, anchored_engine):
+    def responder(sql, _params):
+        if "MAX(weekdate)" in sql:
+            return [{"weekdate": ANCHOR_WEEKDATE, "wd": ANCHOR_WEEKDATE}]
+        return []
+
+    engine = anchored_engine(breadth_router, responder)
+    response = client.get("/v1/breadth/sector/latest", headers=x402_headers())
+
+    assert response.status_code == 200
+    sql, _ = engine.only_data_statement()
+    assert "FROM st_sector_summary_shadow ss" in sql
+
+
+def test_stale_canonical_breadth_shadow_falls_back_to_raw_latest(client, anchored_engine):
+    def responder(sql, _params):
+        if "MAX(weekdate)" in sql and "st_sector_summary_shadow" in sql:
+            return [{"weekdate": "2026-08-21", "wd": "2026-08-21"}]
+        if "MAX(weekdate)" in sql:
+            return [{"weekdate": ANCHOR_WEEKDATE, "wd": ANCHOR_WEEKDATE}]
+        return []
+
+    engine = anchored_engine(breadth_router, responder)
+    response = client.get("/v1/breadth/sector/latest", headers=x402_headers())
+
+    assert response.status_code == 200
+    assert response.json()["weekdate"] == ANCHOR_WEEKDATE
+    sql, _ = engine.only_data_statement()
+    assert "FROM st_data d" in sql
 
 
 def test_bare_breadth_history_can_no_longer_produce_the_observed_payload(
@@ -614,9 +671,81 @@ def test_leadership_explicit_bounds_are_preserved(client, anchored_engine):
     assert params["start"] == "2019-01-04"
     assert "end" not in params
     assert params["limit"] == probe_limit(7)
-    assert engine.executed == engine.data_statements, (
-        "an explicitly bounded request performed an unnecessary anchor lookup"
-    )
+    anchors = [(sql, params) for sql, params in engine.executed if "MAX(weekdate)" in sql]
+    assert any("st_sector_summary_shadow" in sql for sql, _ in anchors)
+    assert any("FROM st_data" in sql for sql, _ in anchors)
+
+
+@pytest.mark.parametrize("shadow_state", ["missing", "empty", "stale"], ids=["missing", "empty", "stale"])
+def test_unusable_rotation_shadow_falls_back_to_raw_history(
+    client, anchored_engine, shadow_state
+):
+    def responder(sql, _params):
+        if "st_sector_summary_shadow" in sql and "MAX(weekdate)" in sql:
+            if shadow_state == "missing":
+                raise RuntimeError("st_sector_summary_shadow does not exist")
+            if shadow_state == "empty":
+                return []
+            return [{"weekdate": "2026-08-21", "wd": "2026-08-21"}]
+        if "MAX(weekdate)" in sql:
+            return [{"weekdate": ANCHOR_WEEKDATE, "wd": ANCHOR_WEEKDATE}]
+        return []
+
+    engine = anchored_engine(leadership_router, responder)
+    response = client.get("/v1/leadership/rotation/history", headers=x402_headers())
+
+    assert response.status_code == 200
+    assert response.json()["exchange"] == "*"
+    sql, _ = engine.only_data_statement()
+    assert "FROM st_data d" in sql
+    assert "d.exchange IN ('A','N','Q','T')" in sql
+    assert "stdata" not in "\n".join(sql for sql, _ in engine.executed).lower()
+
+
+def test_current_rotation_shadow_keeps_summary_fast_path(client, anchored_engine):
+    def responder(sql, _params):
+        if "MAX(weekdate)" in sql:
+            return [{"weekdate": ANCHOR_WEEKDATE, "wd": ANCHOR_WEEKDATE}]
+        return []
+
+    engine = anchored_engine(leadership_router, responder)
+    response = client.get("/v1/leadership/rotation/history", headers=x402_headers())
+
+    assert response.status_code == 200
+    sql, _ = engine.only_data_statement()
+    assert "FROM st_sector_summary_shadow ss" in sql
+
+
+def test_b_or_i_only_newer_raw_week_does_not_stale_default_rotation_shadow(
+    client, anchored_engine
+):
+    canonical_week = "2026-09-25"
+    legacy_only_newer_week = "2026-10-02"
+
+    def responder(sql, _params):
+        if "st_sector_summary_shadow" in sql and "MAX(weekdate)" in sql:
+            return [{"weekdate": canonical_week, "wd": canonical_week}]
+        if "MAX(weekdate)" in sql and "FROM st_data" in sql:
+            # A B/I-only newer row is visible only to an incorrectly broad raw
+            # query; the canonical A/N/Q/T freshness scope remains current.
+            weekdate = (
+                canonical_week
+                if "d.exchange IN ('A','N','Q','T')" in sql
+                else legacy_only_newer_week
+            )
+            return [{"weekdate": weekdate, "wd": weekdate}]
+        return []
+
+    engine = anchored_engine(leadership_router, responder)
+    response = client.get("/v1/leadership/rotation/history", headers=x402_headers())
+
+    assert response.status_code == 200
+    assert response.json()["exchange"] == "*"
+    sql, _ = engine.only_data_statement()
+    assert "FROM st_sector_summary_shadow ss" in sql
+    raw_anchors = [sql for sql, _ in engine.executed if "MAX(weekdate)" in sql and "FROM st_data" in sql]
+    assert raw_anchors
+    assert all("d.exchange IN ('A','N','Q','T')" in sql for sql in raw_anchors)
 
 
 # ===========================================================================
@@ -762,6 +891,7 @@ AUDITED_HISTORY_ROUTES: dict[str, str] = {
     "/v1/prices/history": "already bounded (260/2600), symbol-scoped — static default corrected 52 -> 260",
     "/v1/stim/history": "already bounded (260/2600), symbol-scoped — static default corrected 52 -> 260",
     "/v1/market/regime/history": "already bounded (12/52) and self-describing — reference model, no change",
+    "/v1/market/epoch/history": "persisted serving-only history bounded at 52/2600 with inclusive date filters and applied_bounds",
 }
 
 

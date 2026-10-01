@@ -33,7 +33,7 @@ from discovery.x402_discovery import build_x402_discovery
 from payments import policy_provider
 from routers.ai import ai_context, ai_proof_market_edge, ai_tools
 from routers.workflows import WORKFLOW_REGISTRY
-from services import regime_queries
+from services import epoch_queries, regime_queries
 from utils.history_bounds import HISTORY_ENDPOINT_BOUNDS, probe_limit
 
 # ===========================================================================
@@ -309,6 +309,7 @@ BOUNDS_ENDPOINTS = {
     "/v1/prices/history": ("routers.prices", "?symbol_exchange=IBM-N"),
     "/v1/stim/history": ("routers.stim", "?symbol_exchange=IBM-N"),
     "/v1/market/regime/history": ("routers.market", ""),
+    "/v1/market/epoch/history": ("routers.market", ""),
     "/v1/breadth/sector/history": ("routers.breadth", ""),
     "/v1/leadership/rotation/history": ("routers.leadership", ""),
     "/v1/stwr/reports/history": ("routers.stwr", "?rpt=bullcross&exchange=N"),
@@ -334,6 +335,16 @@ def _install(monkeypatch, module_name: str, row_count: int):
         if "DISTINCT weekdate" in sql:
             weeks = [date(2026, 8, 28) - timedelta(weeks=i) for i in range(row_count)]
             return [{"weekdate": w} for w in weeks]
+        if "FROM st_market_epoch" in sql:
+            return [
+                {
+                    "weekdate": date(2026, 8, 28) - timedelta(weeks=index),
+                    "model_version": "epoch_v1_2026-09-25",
+                    "epoch_id": "BROAD_BULLISH",
+                    "epoch_name": "Broad Bullish",
+                }
+                for index in range(min(row_count, params.get("limit", row_count)))
+            ]
         if module_name == "routers.market":
             return [
                 {
@@ -354,6 +365,7 @@ def _install(monkeypatch, module_name: str, row_count: int):
     monkeypatch.setattr(module, "get_engine", lambda: engine)
     if module_name == "routers.market":
         monkeypatch.setattr(regime_queries, "text", lambda sql: sql)
+        monkeypatch.setattr(epoch_queries, "text", lambda sql: sql)
     else:
         monkeypatch.setattr(module, "text", lambda sql: sql)
     return engine

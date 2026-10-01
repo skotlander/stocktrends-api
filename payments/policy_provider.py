@@ -301,6 +301,20 @@ def _default_policy_config() -> RuntimePaymentPolicyConfig:
                 pricing_rule_id="market_regime_forecast",
             ),
             EndpointPaymentPolicy(
+                endpoint_id="market_epoch_latest",
+                path_pattern="/v1/market/epoch/latest",
+                method="GET",
+                allowed_rails=("subscription", "x402", "mpp"),
+                pricing_rule_id="market_epoch_latest",
+            ),
+            EndpointPaymentPolicy(
+                endpoint_id="market_epoch_history",
+                path_pattern="/v1/market/epoch/history",
+                method="GET",
+                allowed_rails=("subscription", "x402", "mpp"),
+                pricing_rule_id="market_epoch_history",
+            ),
+            EndpointPaymentPolicy(
                 endpoint_id="evaluate_symbol",
                 path_pattern="/v1/decision/evaluate-symbol",
                 method="POST",

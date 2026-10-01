@@ -38,6 +38,7 @@ import pytest
 import routers.decision as decision_router
 import routers.breadth as breadth_router
 import routers.leadership as leadership_router
+import routers.market as market_router
 import routers.portfolio as portfolio_router
 import routers.prices as prices_router
 import routers.screener as screener_router
@@ -66,6 +67,13 @@ _PRICE_ROW = {
 }
 
 _VALID_PRICES_QUERY = "/v1/prices/history?symbol_exchange=IBM-N"
+_EPOCH_ROW = {
+    "weekdate": "2026-09-25",
+    "model_version": "epoch_v1_2026-09-25",
+    "epoch_id": "BROAD_BULLISH",
+    "epoch_name": "Broad Bullish",
+    "changed_this_week": 0,
+}
 
 
 @pytest.fixture
@@ -150,6 +158,21 @@ def test_04_invalid_exchange_domain_does_not_settle(payment_harness, priced_engi
     )
 
     assert response.status_code == 400
+    _assert_no_settlement(payment_harness)
+
+
+def test_04b_epoch_inverted_range_does_not_verify_or_settle(payment_harness, monkeypatch):
+    engine, queries = counting_engine([_EPOCH_ROW])
+    monkeypatch.setattr(market_router, "get_engine", lambda: engine)
+
+    response = payment_harness.client.get(
+        "/v1/market/epoch/history?start_date=2026-09-25&end_date=2026-09-18",
+        headers=x402_headers(),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"]["error"] == "invalid_date_range"
+    assert queries == []
     _assert_no_settlement(payment_harness)
 
 
@@ -243,9 +266,8 @@ def test_breadth_population_conflict_unpaid_never_settles_or_executes(
         headers=unpaid_headers(),
     )
 
-    # Current generic middleware may challenge an unpaid request before its
-    # endpoint wrapper runs. Either way it cannot settle or execute data.
-    assert response.status_code in {400, 402}
+    # Unpaid requests are challenged before the endpoint wrapper runs.
+    assert response.status_code == 402
     assert executed is False
     _assert_no_settlement(payment_harness)
 
@@ -262,6 +284,42 @@ def test_leadership_summary_star_exchange_rejects_before_settlement_or_data(
     )
     assert response.status_code == 400
     _assert_no_settlement(payment_harness)
+
+
+def test_leadership_summary_eq_rejects_before_settlement_or_data(
+    payment_harness, monkeypatch
+):
+    def forbidden_engine():
+        raise AssertionError("summary/latest type=EQ reached data execution")
+
+    monkeypatch.setattr(leadership_router, "get_engine", forbidden_engine)
+    response = payment_harness.client.get(
+        "/v1/leadership/summary/latest?type=EQ",
+        headers=x402_headers(reference="summary-eq"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Invalid type 'EQ'. leadership summary supports its CS-compatible types only."
+    )
+    _assert_no_settlement(payment_harness)
+
+
+def test_leadership_summary_eq_rejects_before_mpp_authorization(
+    payment_harness, monkeypatch
+):
+    monkeypatch.setattr(
+        leadership_router,
+        "get_engine",
+        lambda: (_ for _ in ()).throw(AssertionError("summary/latest type=EQ reached data execution")),
+    )
+    response = payment_harness.client.get(
+        "/v1/leadership/summary/latest?type=EQ", headers=mpp_headers(reference="summary-eq-mpp")
+    )
+
+    assert response.status_code == 400
+    assert payment_harness.mpp.authorize_count == 0
+    assert payment_harness.mpp.capture_count == 0
 
 
 # ===========================================================================
@@ -382,6 +440,20 @@ def test_12_valid_paid_get_settles_exactly_once(payment_harness, priced_engines)
     assert payment_harness.verify_count == 1
     assert payment_harness.settle_count == 1
     assert "payment-response" in response.headers
+
+
+def test_12b_valid_epoch_history_reaches_paid_execution(payment_harness, monkeypatch):
+    monkeypatch.setattr(market_router, "get_engine", lambda: rows_engine([_EPOCH_ROW]))
+
+    response = payment_harness.client.get(
+        "/v1/market/epoch/history?start_date=2026-09-18&end_date=2026-09-25",
+        headers=x402_headers(),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["history"][0]["epoch_id"] == "BROAD_BULLISH"
+    assert payment_harness.verify_count == 1
+    assert payment_harness.settle_count == 1
 
 
 def test_13_valid_paid_post_settles_exactly_once(payment_harness, monkeypatch):
