@@ -128,6 +128,11 @@ HISTORY_ENDPOINT_BOUNDS: dict[str, HistoryBounds] = {
         "max_limit": 52,
         "default_window_weeks": None,
     },
+    "/v1/market/epoch/history": {
+        "default_limit": 52,
+        "max_limit": 2600,
+        "default_window_weeks": None,
+    },
 }
 
 

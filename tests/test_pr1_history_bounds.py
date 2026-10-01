@@ -762,6 +762,7 @@ AUDITED_HISTORY_ROUTES: dict[str, str] = {
     "/v1/prices/history": "already bounded (260/2600), symbol-scoped — static default corrected 52 -> 260",
     "/v1/stim/history": "already bounded (260/2600), symbol-scoped — static default corrected 52 -> 260",
     "/v1/market/regime/history": "already bounded (12/52) and self-describing — reference model, no change",
+    "/v1/market/epoch/history": "persisted serving-only history bounded at 52/2600 with inclusive date filters and applied_bounds",
 }
 
 

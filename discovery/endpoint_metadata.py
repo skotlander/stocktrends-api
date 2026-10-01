@@ -73,6 +73,7 @@ COMPACT_SAFE_EXAMPLE_MAX_BYTES = 384
 # ---------------------------------------------------------------------------
 ROLE_MARKET_INTELLIGENCE_FILTER = "market_intelligence_filter"
 ROLE_MARKET_REGIME_CLASSIFIER = "market_regime_classifier"
+ROLE_MARKET_EPOCH_CLASSIFIER = "market_epoch_classifier"
 ROLE_MARKET_BREADTH_CONTEXT = "market_breadth_context"
 ROLE_LEADERSHIP_INTELLIGENCE = "leadership_intelligence"
 ROLE_PROBABILISTIC_FORWARD_INFERENCE = "probabilistic_forward_inference"
@@ -216,6 +217,20 @@ REGIME_INTERPRETATION_GUIDANCE = {
         "Confirm with /v1/breadth/sector/latest and /v1/leadership/summary/latest."
     ),
     "confirmation_endpoints": ["/v1/breadth/sector/latest", "/v1/leadership/summary/latest"],
+}
+
+EPOCH_INTERPRETATION_GUIDANCE = {
+    "model": "Frozen unsupervised K=3 market-state classifier based on six aggregate weekly Stock Trends features.",
+    "states": ["BROAD_BULLISH", "BEARISH_MATURITY", "BULLISH_MATURITY"],
+    "interpretation_rules": [
+        "An Epoch state is contextual market state, not a trade signal or forward-return forecast.",
+        "changed_this_week is a persisted 0/1 flag indicating whether the assigned Epoch differs from the immediately previous official weekly Epoch.",
+        "weeks_in_epoch is consecutive weekly persistence of the current assigned Epoch.",
+        "assigned_distance is distance to the assigned frozen centroid in standardized feature space.",
+        "second_nearest_distance is distance to the second-nearest frozen centroid.",
+        "separation_margin = second_nearest_distance - assigned_distance; it is not a probability or forecast confidence.",
+        "The descriptive word Maturity does not imply that a reversal must follow.",
+    ],
 }
 
 STIM_SELECT_INTERPRETATION_GUIDANCE = {
@@ -1200,6 +1215,108 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         next_recommended_calls=["/v1/market/regime/forecast"],
         interpretation_guidance=REGIME_INTERPRETATION_GUIDANCE,
         tags=["market-regime", "regime-classification", "regime-history"],
+    ),
+    "/v1/market/epoch/latest": _metadata(
+        path="/v1/market/epoch/latest",
+        method="GET",
+        tool_name="market_epoch_latest",
+        title="Market Epoch Latest",
+        category="market",
+        pricing_rule_id="market_epoch_latest",
+        resource_description=(
+            "Latest persisted Market Epoch v1 snapshot from a frozen unsupervised K=3 "
+            "market-state classifier based on six aggregate weekly Stock Trends features."
+        ),
+        bazaar_output_description=(
+            "Returns persisted Epoch state, raw cluster, feature values, distance diagnostics, "
+            "transition fields, and frozen-model provenance. separation_margin is diagnostic, "
+            "not forecast probability or confidence."
+        ),
+        purpose="Retrieve the current persisted contextual market Epoch state.",
+        investment_agent_value="Provides frozen, auditable market-state context alongside independent market context products.",
+        workflow_role="Persisted market Epoch context.",
+        safe_example_request={"method": "GET", "path": "/v1/market/epoch/latest", "query": {}},
+        response_shape=[
+            "weekdate", "model_version", "epoch_id", "epoch_name", "raw_cluster_id",
+            "weeks_in_epoch", "changed_this_week", "previous_epoch_id", "previous_raw_cluster_id",
+            "assigned_distance", "second_nearest_distance", "separation_margin", "bullish_ratio",
+            "avg_mt_cnt_bull", "avg_mt_cnt_bear", "avg_trend_cnt", "pct_trend_cnt_ge_4",
+            "rsi_median", "classified_count", "rsi_valid_count", "model_payload_sha256",
+            "classifier_code_sha", "classified_at",
+        ],
+        example_object={
+            "weekdate": "YYYY-MM-DD", "model_version": "epoch_v1_2026-09-25",
+            "epoch_id": "BROAD_BULLISH", "epoch_name": "Broad Bullish",
+        },
+        output_summary="Latest frozen persisted Market Epoch state and provenance.",
+        analytical_role=ROLE_MARKET_EPOCH_CLASSIFIER,
+        notes=[
+            "BROAD_BULLISH, BEARISH_MATURITY, and BULLISH_MATURITY are descriptive market states.",
+            "separation_margin is a distance diagnostic, not a probability or forecast confidence.",
+        ],
+        related_endpoints=["/v1/market/epoch/history", "/v1/market/regime/latest"],
+        next_recommended_calls=["/v1/market/epoch/history"],
+        interpretation_guidance=EPOCH_INTERPRETATION_GUIDANCE,
+        tags=["market-epoch", "market-state", "clustering"],
+    ),
+    "/v1/market/epoch/history": _metadata(
+        path="/v1/market/epoch/history",
+        method="GET",
+        tool_name="market_epoch_history",
+        title="Market Epoch History",
+        category="market",
+        pricing_rule_id="market_epoch_history",
+        resource_description=(
+            "Newest-first persisted Market Epoch v1 history from a frozen unsupervised K=3 "
+            "market-state classifier based on six aggregate weekly Stock Trends features."
+        ),
+        bazaar_output_description=(
+            "Returns bounded persisted Epoch snapshots with transition, diagnostic, feature, and "
+            "frozen-model provenance fields. separation_margin is diagnostic, not forecast probability "
+            "or confidence."
+        ),
+        purpose="Review persisted historical contextual Market Epoch states.",
+        investment_agent_value="Provides bounded, auditable context for reviewing Epoch persistence and changes.",
+        workflow_role="Historical persisted market Epoch context.",
+        optional_inputs={
+            "limit": _limit_input("/v1/market/epoch/history"),
+            "start_date": {
+                "type": "string", "required": False, "format": "date", "example": "2025-01-03",
+                "description": "Optional inclusive earliest weekdate in YYYY-MM-DD format.",
+            },
+            "end_date": {
+                "type": "string", "required": False, "format": "date", "example": "2025-12-26",
+                "description": "Optional inclusive latest weekdate in YYYY-MM-DD format.",
+            },
+        },
+        safe_example_request={"method": "GET", "path": "/v1/market/epoch/history", "query": {"limit": 52}},
+        response_shape=[
+            "history[].weekdate", "history[].model_version", "history[].epoch_id", "history[].epoch_name",
+            "history[].raw_cluster_id", "history[].weeks_in_epoch", "history[].changed_this_week",
+            "history[].previous_epoch_id", "history[].previous_raw_cluster_id",
+            "history[].assigned_distance", "history[].second_nearest_distance",
+            "history[].separation_margin", "history[].bullish_ratio", "history[].avg_mt_cnt_bull",
+            "history[].avg_mt_cnt_bear", "history[].avg_trend_cnt", "history[].pct_trend_cnt_ge_4",
+            "history[].rsi_median", "history[].classified_count", "history[].rsi_valid_count",
+            "history[].model_payload_sha256", "history[].classifier_code_sha", "history[].classified_at",
+            "count", "limit", "start_date", "end_date",
+            "applied_bounds.start", "applied_bounds.end", "applied_bounds.window_source",
+            "applied_bounds.default_window_weeks", "applied_bounds.limit", "applied_bounds.limit_source",
+            "applied_bounds.max_limit", "applied_bounds.rows_returned", "applied_bounds.truncated_by_limit",
+            "applied_bounds.widen_with",
+        ],
+        example_object={"count": 1, "history": [{"weekdate": "YYYY-MM-DD", "epoch_id": "BROAD_BULLISH"}]},
+        output_summary="Bounded persisted Market Epoch history, newest first.",
+        analytical_role=ROLE_MARKET_EPOCH_CLASSIFIER,
+        notes=[
+            "Returns at most 2600 persisted weekly Epoch observations, newest first.",
+            "start_date and end_date are inclusive bounds; no default date window is applied.",
+            "separation_margin is a distance diagnostic, not a probability or forecast confidence.",
+        ],
+        related_endpoints=["/v1/market/epoch/latest", "/v1/market/regime/history"],
+        next_recommended_calls=["/v1/market/epoch/latest"],
+        interpretation_guidance=EPOCH_INTERPRETATION_GUIDANCE,
+        tags=["market-epoch", "market-state", "clustering"],
     ),
     "/v1/market/regime/forecast": _metadata(
         path="/v1/market/regime/forecast",

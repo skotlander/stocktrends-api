@@ -437,6 +437,8 @@ SEMANTIC_VALIDATION_REQUIRED: dict[tuple[str, str], str] = {
     ("GET", "/v1/leadership/rotation/history"): "class 1 — optional exchange code",
     ("GET", "/v1/leadership/summary/latest"):
         "class 3 — optional exchange code moved; latest weekdate stays post-payment",
+    ("GET", "/v1/market/epoch/history"):
+        "class 1 — start_date/end_date ordering",
     ("POST", "/v1/portfolio/compare"):
         "class 3 — both sides' position lists moved; per-symbol existence stays "
         "post-payment",
@@ -493,8 +495,9 @@ NO_SEMANTIC_VALIDATION_REQUIRED: dict[tuple[str, str], str] = {
         "Query and type declarations",
     ("GET", "/v1/market/regime/latest"):
         "class 2 — takes no parameters beyond the request itself",
+    ("GET", "/v1/market/epoch/latest"):
+        "class 2 — takes no parameters beyond the request itself",
 }
-
 
 def _governed_surface() -> set[tuple[str, str]]:
     """The payment-governed route/method surface, derived from runtime policy."""
@@ -822,6 +825,9 @@ CLASS_1_PROBES: dict[tuple[str, str], tuple[str, dict]] = {
     ),
     ("GET", "/v1/leadership/summary/latest"): (
         "/v1/leadership/summary/latest?exchange=ZZ", {},
+    ),
+    ("GET", "/v1/market/epoch/history"): (
+        "/v1/market/epoch/history?start_date=2026-09-25&end_date=2026-09-18", {},
     ),
     ("POST", "/v1/portfolio/compare"): (
         "/v1/portfolio/compare",

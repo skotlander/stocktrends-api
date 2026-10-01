@@ -1085,6 +1085,70 @@
       "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
     },
     {
+      "name": "market_epoch_latest",
+      "analytical_role": "market_epoch_classifier",
+      "interpretation_guidance": {
+        "model": "Frozen unsupervised K=3 market-state classifier based on six aggregate weekly Stock Trends features.",
+        "states": ["BROAD_BULLISH", "BEARISH_MATURITY", "BULLISH_MATURITY"],
+        "interpretation_rules": [
+          "An Epoch state is contextual market state, not a trade signal or forward-return forecast.",
+          "changed_this_week is a persisted 0/1 flag indicating whether the assigned Epoch differs from the immediately previous official weekly Epoch.",
+          "weeks_in_epoch is consecutive weekly persistence of the current assigned Epoch.",
+          "assigned_distance is distance to the assigned frozen centroid in standardized feature space.",
+          "second_nearest_distance is distance to the second-nearest frozen centroid.",
+          "separation_margin = second_nearest_distance - assigned_distance; it is not a probability or forecast confidence.",
+          "The descriptive word Maturity does not imply that a reversal must follow."
+        ]
+      },
+      "title": "Market Epoch Latest",
+      "description": "Returns the latest persisted frozen Market Epoch v1 market-state snapshot. changed_this_week is a persisted 0/1 flag. Epoch labels are contextual market states, not trade signals or forward-return forecasts. separation_margin is a distance diagnostic, not a probability or forecast confidence. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/market/epoch/latest",
+      "auth_required": true,
+      "category": "market",
+      "pricing_rule_id": "market_epoch_latest",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
+    },
+    {
+      "name": "market_epoch_history",
+      "analytical_role": "market_epoch_classifier",
+      "interpretation_guidance": {
+        "model": "Frozen unsupervised K=3 market-state classifier based on six aggregate weekly Stock Trends features.",
+        "states": ["BROAD_BULLISH", "BEARISH_MATURITY", "BULLISH_MATURITY"],
+        "interpretation_rules": [
+          "An Epoch state is contextual market state, not a trade signal or forward-return forecast.",
+          "changed_this_week is a persisted 0/1 flag indicating whether the assigned Epoch differs from the immediately previous official weekly Epoch.",
+          "weeks_in_epoch is consecutive weekly persistence of the current assigned Epoch.",
+          "assigned_distance is distance to the assigned frozen centroid in standardized feature space.",
+          "second_nearest_distance is distance to the second-nearest frozen centroid.",
+          "separation_margin = second_nearest_distance - assigned_distance; it is not a probability or forecast confidence.",
+          "The descriptive word Maturity does not imply that a reversal must follow."
+        ]
+      },
+      "title": "Market Epoch History",
+      "description": "Returns newest-first persisted frozen Market Epoch v1 snapshots. start_date and end_date are inclusive; no default date window is applied. separation_margin is a distance diagnostic, not a probability or forecast confidence. Fetch /v1/pricing/catalog for current STC cost.",
+      "method": "GET",
+      "path": "/market/epoch/history",
+      "auth_required": true,
+      "category": "market",
+      "parameters": [
+        {"name": "limit", "in": "query", "input_location": "query", "parameter_source": "query", "type": "integer", "required": false, "default": 52, "minimum": 1, "maximum": 2600, "description": "Number of persisted weekly Epoch snapshots to return. Default 52, maximum 2600."},
+        {"name": "start_date", "in": "query", "input_location": "query", "parameter_source": "query", "type": "string", "format": "date", "required": false, "example": "2025-01-03", "description": "Optional inclusive earliest weekdate in YYYY-MM-DD format."},
+        {"name": "end_date", "in": "query", "input_location": "query", "parameter_source": "query", "type": "string", "format": "date", "required": false, "example": "2025-12-26", "description": "Optional inclusive latest weekdate in YYYY-MM-DD format."}
+      ],
+      "response_shape": [
+        "history[].weekdate", "history[].model_version", "history[].epoch_id", "history[].epoch_name", "history[].raw_cluster_id", "history[].weeks_in_epoch", "history[].changed_this_week", "history[].previous_epoch_id", "history[].previous_raw_cluster_id", "history[].assigned_distance", "history[].second_nearest_distance", "history[].separation_margin", "history[].bullish_ratio", "history[].avg_mt_cnt_bull", "history[].avg_mt_cnt_bear", "history[].avg_trend_cnt", "history[].pct_trend_cnt_ge_4", "history[].rsi_median", "history[].classified_count", "history[].rsi_valid_count", "history[].model_payload_sha256", "history[].classifier_code_sha", "history[].classified_at", "count", "limit", "start_date", "end_date", "applied_bounds.start", "applied_bounds.end", "applied_bounds.window_source", "applied_bounds.default_window_weeks", "applied_bounds.limit", "applied_bounds.limit_source", "applied_bounds.max_limit", "applied_bounds.rows_returned", "applied_bounds.truncated_by_limit", "applied_bounds.widen_with"
+      ],
+      "pricing_rule_id": "market_epoch_history",
+      "stc_cost": null,
+      "estimated_usd_cost": null,
+      "supported_rails": ["subscription", "x402", "mpp"],
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
+    },
+    {
       "name": "market_regime_forecast",
       "analytical_role": "market_regime_classifier",
       "title": "Market Regime Forecast",
