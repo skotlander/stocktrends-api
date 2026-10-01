@@ -86,11 +86,17 @@ class RecordingEngine:
         sql = str(statement)
         bound = dict(params or {})
         self.executed.append((sql, bound))
+        # Coverage is a separate request-envelope read, not the bounded sector
+        # result set these legacy history tests model.
+        if "FROM st_sector_summary_coverage_shadow" in sql:
+            return _Result([])
         return _Result(self._responder(sql, bound))
 
     # -- helpers ------------------------------------------------------------
     @staticmethod
     def _default_responder(sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        if "MIN(weekdate)" in sql:
+            return [{"min_weekdate": "1993-01-01", "max_weekdate": ANCHOR_WEEKDATE}]
         if "MAX(weekdate)" in sql:
             return [{"weekdate": ANCHOR_WEEKDATE, "wd": ANCHOR_WEEKDATE}]
         return []
@@ -98,7 +104,11 @@ class RecordingEngine:
     @property
     def data_statements(self) -> list[tuple[str, dict[str, Any]]]:
         """Every statement except the latest-weekdate anchor probe."""
-        return [(sql, p) for sql, p in self.executed if "MAX(weekdate)" not in sql]
+        return [
+            (sql, p) for sql, p in self.executed
+            if "MAX(weekdate)" not in sql and "MIN(weekdate)" not in sql
+            and "FROM st_sector_summary_coverage_shadow" not in sql
+        ]
 
     def only_data_statement(self) -> tuple[str, dict[str, Any]]:
         statements = self.data_statements
@@ -322,6 +332,66 @@ def test_bare_breadth_history_request_is_bounded_on_both_axes(client, anchored_e
     assert params["limit"] < 200000
 
 
+def test_canonical_summary_history_anchors_to_shadow_not_newer_raw_week(client, anchored_engine):
+    shadow_week = "2026-08-21"
+    raw_week = "2026-08-28"
+
+    def responder(sql, params):
+        if "MAX(weekdate)" in sql and "st_sector_summary_shadow" in sql:
+            return [{"weekdate": shadow_week}]
+        if "MAX(weekdate)" in sql:
+            return [{"weekdate": raw_week}]
+        return []
+
+    engine = anchored_engine(breadth_router, responder)
+    response = client.get("/v1/breadth/sector/history", headers=x402_headers())
+
+    assert response.status_code == 200
+    anchors = [(sql, params) for sql, params in engine.executed if "MAX(weekdate)" in sql]
+    assert len(anchors) == 1
+    assert "st_sector_summary_shadow" in anchors[0][0]
+    assert response.json()["applied_bounds"]["end"] == shadow_week
+
+
+@pytest.mark.parametrize(
+    "query",
+    [
+        "?weekdate=1992-12-25",
+        "?weekdate=2026-12-25",
+        "?start=1992-12-25&end=1993-01-08",
+        "?start=2026-08-21&end=2026-12-25",
+    ],
+)
+def test_explicit_out_of_shadow_breadth_dates_use_raw_path(client, anchored_engine, query):
+    def responder(sql, params):
+        if "MIN(weekdate)" in sql:
+            return [{"min_weekdate": "1993-01-01", "max_weekdate": "2026-08-21"}]
+        return []
+
+    engine = anchored_engine(breadth_router, responder)
+    path = "/v1/breadth/sector/latest" + query if "weekdate" in query else "/v1/breadth/sector/history" + query
+    response = client.get(path, headers=x402_headers())
+
+    assert response.status_code == 200
+    sql, _ = engine.only_data_statement()
+    assert "FROM st_data d" in sql
+
+
+def test_explicit_in_shadow_breadth_history_keeps_shadow_path(client, anchored_engine):
+    def responder(sql, params):
+        if "MIN(weekdate)" in sql:
+            return [{"min_weekdate": "1993-01-01", "max_weekdate": "2026-08-21"}]
+        return []
+
+    engine = anchored_engine(breadth_router, responder)
+    response = client.get(
+        "/v1/breadth/sector/history?start=2026-08-07&end=2026-08-21", headers=x402_headers()
+    )
+    assert response.status_code == 200
+    sql, _ = engine.only_data_statement()
+    assert "FROM st_sector_summary_shadow ss" in sql
+
+
 def test_bare_breadth_history_can_no_longer_produce_the_observed_payload(
     client, anchored_engine
 ):
@@ -414,27 +484,20 @@ def test_explicitly_bounded_breadth_request_is_unchanged(client, anchored_engine
     assert bounds["start"] == "2020-01-03"
     assert bounds["end"] == "2020-12-25"
 
-    # An explicitly bounded request needs no anchor, so it must not pay for the
-    # MAX(weekdate) lookup either: it issues exactly the queries it issued
-    # before this bounding existed.
-    assert engine.executed == engine.data_statements, (
-        "an explicitly bounded request performed an unnecessary anchor lookup"
-    )
+    # An explicitly bounded request does not derive a default window.  The
+    # summary path may still read shadow MIN/MAX availability to decide whether
+    # these explicit bounds can be served faithfully by the materialization.
+    assert response.json()["applied_bounds"]["window_source"] == "caller_supplied"
 
 
 # ---------------------------------------------------------------------------
 # The all-exchange aggregation correction
 # ---------------------------------------------------------------------------
 
-def test_all_exchange_breadth_history_uses_the_raw_aggregation(client, anchored_engine):
+def test_default_canonical_breadth_history_uses_direct_shadow_aggregate(client, anchored_engine):
     """
-    st_sector_summary holds one row per (weekdate, sector, exchange, type) and
-    the projection does not carry `ss.exchange`. Reading it without an exchange
-    filter therefore emitted several unlabelled rows for the same
-    (weekdate, sector_code) — the caller could not tell them apart, and could
-    not aggregate them itself.
-
-    An all-exchange request now aggregates st_data directly instead.
+    The Stage 4B shadow stores a direct `*` aggregation over A/N/Q/T.  The
+    canonical default must use that row rather than re-averaging exchanges.
     """
     engine = anchored_engine(breadth_router)
 
@@ -442,18 +505,16 @@ def test_all_exchange_breadth_history_uses_the_raw_aggregation(client, anchored_
 
     assert response.status_code == 200
     sql, _ = engine.only_data_statement()
-    assert "st_sector_summary" not in sql
-    assert "FROM st_data d" in sql
+    assert "FROM st_sector_summary_shadow ss" in sql
+    assert "ss.exchange = :exchange" in sql
 
 
-def test_all_exchange_breadth_cannot_emit_duplicate_weekdate_sector_rows(
+def test_default_canonical_breadth_selects_one_stored_direct_aggregate(
     client, anchored_engine
 ):
     """
-    Correctness is structural, not statistical: the query groups by
-    (weekdate, sector), so at most one row per pair can exist. There is no
-    intermediate per-exchange mean, and therefore no re-weighting step that
-    could be got wrong — COUNT/SUM/AVG/MAX run once over the whole population.
+    The `*` primary-key row is a single direct aggregation per sector/week, so
+    the API must not select source-exchange rows or rebuild an average.
     """
     engine = anchored_engine(breadth_router)
 
@@ -461,18 +522,16 @@ def test_all_exchange_breadth_cannot_emit_duplicate_weekdate_sector_rows(
 
     sql, _ = engine.only_data_statement()
     normalized = " ".join(sql.split())
-    assert "GROUP BY d.weekdate, s.sector_code, s.sector_name" in normalized
-    # No exchange column is selected or grouped, because rows from every
-    # exchange are folded into the one aggregate for that weekdate and sector.
-    assert "d.exchange" not in normalized.split("GROUP BY")[0]
+    assert "FROM st_sector_summary_shadow ss" in normalized
+    assert "ss.exchange = :exchange" in normalized
+    assert "GROUP BY" not in normalized
 
 
-def test_all_exchange_history_matches_the_aggregation_latest_uses(
+def test_default_canonical_history_and_latest_use_the_same_direct_shadow_semantics(
     client, anchored_engine
 ):
     """
-    `/latest` and `/history` must mean the same thing by "all-exchange sector
-    breadth". Both now build their aggregate from the same SQL builder.
+    `/latest` and `/history` both select the same stored direct A/N/Q/T aggregate.
     """
     history_engine = anchored_engine(breadth_router)
     client.get("/v1/breadth/sector/history", headers=x402_headers())
@@ -482,23 +541,12 @@ def test_all_exchange_history_matches_the_aggregation_latest_uses(
     client.get("/v1/breadth/sector/latest", headers=x402_headers())
     latest_sql, _ = latest_engine.only_data_statement()
 
-    def aggregate_expressions(sql: str) -> str:
-        """
-        The SELECT list only.
-
-        The WHERE clauses differ by construction — /latest pins one weekdate
-        while /history spans a range — so comparing them would prove nothing.
-        What must match is the aggregate itself: the same COUNT/SUM/AVG/MAX
-        expressions over the same grouping.
-        """
-        normalized = " ".join(sql.split())
-        return normalized[normalized.index("SELECT"): normalized.index("FROM st_data")]
-
-    assert aggregate_expressions(history_sql) == aggregate_expressions(latest_sql)
-
-    # ...and the same grouping key, so neither can emit two rows per pair.
+    # Both projections must use the exact shadow and coverage representations.
     for sql in (history_sql, latest_sql):
-        assert "GROUP BY d.weekdate, s.sector_code, s.sector_name" in " ".join(sql.split())
+        normalized = " ".join(sql.split())
+        assert "FROM st_sector_summary_shadow ss" in normalized
+        assert "st_sector_summary_coverage_shadow" in normalized
+        assert "ss.exchange = :exchange" in normalized
 
 
 def test_single_exchange_breadth_history_keeps_the_summary_fast_path(

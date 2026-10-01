@@ -221,8 +221,9 @@ def test_candidate_sql_has_no_alphabetical_limit():
     conn = engine.connect.return_value.__enter__.return_value
 
     with patch("routers.portfolio.text") as mock_text:
-        with patch("routers.portfolio.get_engine", return_value=engine):
-            resp = _client.post("/v1/portfolio/construct", json={"count": 5})
+        with patch("services.regime_queries.text", mock_text):
+            with patch("routers.portfolio.get_engine", return_value=engine):
+                resp = _client.post("/v1/portfolio/construct", json={"count": 5})
 
     assert resp.status_code == 200, resp.text
 
@@ -569,8 +570,9 @@ def test_construct_issues_four_db_queries():
     engine = _mock_engine(candidates)
 
     with patch("routers.portfolio.text") as mock_text:
-        with patch("routers.portfolio.get_engine", return_value=engine):
-            resp = _client.post("/v1/portfolio/construct", json={"count": 1})
+        with patch("services.regime_queries.text", mock_text):
+            with patch("routers.portfolio.get_engine", return_value=engine):
+                resp = _client.post("/v1/portfolio/construct", json={"count": 1})
 
     assert resp.status_code == 200, resp.text
     sql_calls = mock_text.call_args_list
@@ -760,8 +762,9 @@ def test_stim_subquery_scoped_to_exchange_universe():
     engine = _mock_engine(candidates)
 
     with patch("routers.portfolio.text") as mock_text:
-        with patch("routers.portfolio.get_engine", return_value=engine):
-            resp = _client.post("/v1/portfolio/construct", json={"count": 1})
+        with patch("services.regime_queries.text", mock_text):
+            with patch("routers.portfolio.get_engine", return_value=engine):
+                resp = _client.post("/v1/portfolio/construct", json={"count": 1})
 
     assert resp.status_code == 200, resp.text
     stim_sql: str = mock_text.call_args_list[3].args[0]

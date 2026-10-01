@@ -9,7 +9,7 @@
 #   GET /v1/breadth/sector/history
 #
 # Notes:
-# - Defaults to CS-only because ETFs duplicate underlying breadth.
+# - Defaults to canonical equities (CS+UN); `cs_only` is retained as a legacy alias.
 # - Volume in st_data is legacy-scaled in your rules (volume * 100); keep vol_scale knob.
 # - Caching for /v1/breadth/sector/latest is handled at nginx, not in app memory.
 
@@ -23,6 +23,7 @@ from sqlalchemy import text
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
+from services.market_semantics import CANONICAL_REPORTING_EXCHANGES
 from utils.history_bounds import (
     DEFAULT_HISTORY_WINDOW_WEEKS,
     LIMIT_SOURCE_CALLER,
@@ -38,6 +39,7 @@ from utils.history_bounds import (
 router = APIRouter(prefix="/breadth", tags=["breadth"])
 
 GroupLevel = Literal["sector", "industry_group", "industry"]
+Population = Literal["equities", "cs", "all"]
 
 # Bounds for /breadth/sector/history.  A bare request previously ran the full
 # multi-decade series through a 200000-row ceiling and returned ~48 MB; these
@@ -61,12 +63,25 @@ HISTORY_WIDEN_HINT = (
 
 def _norm_exchange(ex: str) -> str:
     ex = ex.strip().upper()
-    if ex not in VALID_EXCHANGES:
+    if ex != "*" and ex not in VALID_EXCHANGES:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid exchange '{ex}'. Must be one of {sorted(VALID_EXCHANGES)}",
         )
     return ex
+
+
+def _resolve_population(population: str | None, cs_only: bool | None) -> Population:
+    """Resolve the additive population contract without silently overriding legacy input."""
+    if population is not None and population not in {"equities", "cs", "all"}:
+        raise HTTPException(status_code=400, detail="population must be one of: equities, cs, all")
+    legacy_population = None if cs_only is None else ("cs" if cs_only else "all")
+    if population is not None and legacy_population is not None and population != legacy_population:
+        raise HTTPException(
+            status_code=400,
+            detail="population conflicts with cs_only; use population=cs with cs_only=true or population=all with cs_only=false",
+        )
+    return population or legacy_population or "equities"
 
 
 def _validate_exchange_values(request: Request, values: dict) -> None:
@@ -83,19 +98,56 @@ def _validate_exchange_values(request: Request, values: dict) -> None:
     exchange = values.get("exchange")
     if exchange:
         _norm_exchange(exchange)
+    _resolve_population(values.get("population"), values.get("cs_only"))
 
 
 
-def _latest_weekdate(engine, exchange: str | None) -> Any:
-    if exchange:
+def _latest_weekdate(engine, exchange: str | None, *, canonical: bool = True) -> Any:
+    if exchange and exchange != "*":
         sql = text("SELECT MAX(weekdate) AS weekdate FROM st_data WHERE exchange = :exchange")
         params = {"exchange": exchange}
+    elif canonical or exchange == "*":
+        # The canonical aggregate is only A/N/Q/T.  `*` is persisted in the
+        # shadow summary, but raw fallback needs the same source constraint.
+        sql = text("SELECT MAX(weekdate) AS weekdate FROM st_data WHERE exchange IN ('A','N','Q','T')")
+        params = {}
     else:
         sql = text("SELECT MAX(weekdate) AS weekdate FROM st_data")
         params = {}
     with engine.connect() as conn:
         row = conn.execute(sql, params).mappings().first()
     return row["weekdate"] if row else None
+
+
+def _latest_summary_weekdate(engine, exchange: str | None, population: Population) -> Any:
+    """Anchor canonical fast-path requests to a materialized shadow week."""
+    sql = text(
+        "SELECT MAX(weekdate) AS weekdate FROM st_sector_summary_shadow "
+        "WHERE type = :type AND exchange = :exchange"
+    )
+    params = {"type": "EQ" if population == "equities" else "CS", "exchange": exchange or "*"}
+    with engine.connect() as conn:
+        row = conn.execute(sql, params).mappings().first()
+    return row["weekdate"] if row else None
+
+
+def _explicit_shadow_range_available(
+    engine, exchange: str | None, population: Population, start: str | None, end: str | None,
+) -> bool:
+    """Use shadow only when every explicitly requested boundary is materialized."""
+    sql = text(
+        "SELECT MIN(weekdate) AS min_weekdate, MAX(weekdate) AS max_weekdate "
+        "FROM st_sector_summary_shadow WHERE type = :type AND exchange = :exchange"
+    )
+    params = {"type": "EQ" if population == "equities" else "CS", "exchange": exchange or "*"}
+    with engine.connect() as conn:
+        row = conn.execute(sql, params).mappings().first()
+    if not row or not row.get("min_weekdate") or not row.get("max_weekdate"):
+        return False
+    floor, high_water = str(row["min_weekdate"]), str(row["max_weekdate"])
+    return (start is None or floor <= start <= high_water) and (
+        end is None or floor <= end <= high_water
+    )
 
 
 def _group_cols(level: GroupLevel) -> tuple[str, str]:
@@ -121,7 +173,8 @@ def _group_cols(level: GroupLevel) -> tuple[str, str]:
 def _use_sector_summary(
     *,
     level: GroupLevel,
-    cs_only: bool,
+    population: Population | None = None,
+    cs_only: bool | None = None,
     include_unknown: bool,
     min_price: float | None,
     min_volume: int | None,
@@ -130,32 +183,20 @@ def _use_sector_summary(
     """
     True when st_sector_summary can satisfy the request without raw st_data aggregation.
 
-    `st_sector_summary` is aggregated per (weekdate, sector, exchange, type).  It
+    `st_sector_summary_shadow` is aggregated per (weekdate, sector, exchange, type).  It
     can therefore answer a *single-exchange* request directly: the stored row is
     already the aggregate over exactly the population the caller asked for.
 
-    It cannot answer an all-exchange request by itself.  Selecting without an
-    exchange filter returns one row per exchange for the same
-    (weekdate, sector_code) — and the projection does not even carry
-    `ss.exchange`, so those rows reach the caller as unlabelled duplicates.
-    Recombining them would need a weighted merge whose exactness depends on each
-    stored average having been computed over the same row count as `total`,
-    which the summary table does not record.
-
-    So an all-exchange request falls through to `_breadth_sql`, which computes
-    COUNT/SUM/AVG/MAX directly over the full (weekdate, sector) row population
-    in one pass.  That is the definitional aggregate — there is no intermediate
-    per-exchange mean to re-weight — and it is the identical aggregation
-    `/breadth/sector/latest` already performs, so the two endpoints now agree on
-    what all-exchange sector breadth means.
+    The shadow table has a stored `*` row that is the direct A/N/Q/T aggregate,
+    so an omitted exchange can use it without re-averaging exchange summaries.
     """
     return (
-        exchange is not None
-        and level == "sector"
-        and cs_only is True
+        level == "sector"
+        and (population or ("cs" if cs_only is True else "all" if cs_only is False else "equities")) in {"cs", "equities"}
         and include_unknown is False
         and min_price is None
         and min_volume is None
+        and (exchange is None or exchange == "*" or exchange in CANONICAL_REPORTING_EXCHANGES)
     )
 
 
@@ -164,14 +205,16 @@ def _breadth_summary_sql(
     start: str | None,
     end: str | None,
     exchange: str | None,
+    population: Population = "equities",
 ) -> tuple[str, dict[str, Any]]:
-    """Build SQL against st_sector_summary for default sector breadth history requests."""
-    params: dict[str, Any] = {}
-    where = "WHERE ss.type = 'CS'"
+    """Build exact canonical sector SQL against validated shadow aggregates."""
+    params: dict[str, Any] = {"type": "EQ" if population == "equities" else "CS"}
+    where = "WHERE ss.type = :type"
 
-    if exchange:
+    summary_exchange = exchange or "*"
+    if summary_exchange:
         where += " AND ss.exchange = :exchange"
-        params["exchange"] = exchange
+        params["exchange"] = summary_exchange
 
     if start:
         where += " AND ss.weekdate >= :start"
@@ -186,7 +229,8 @@ def _breadth_summary_sql(
             ss.weekdate,
             ss.sector_code,
             ss.sector_name,
-            ss.total,
+            ss.total AS observed_count,
+            (ss.bullish_count + ss.bearish_count) AS classified_count,
             ss.bullish_count,
             ss.bearish_count,
             ss.neutral_count,
@@ -202,11 +246,54 @@ def _breadth_summary_sql(
             ss.rsi_ge_110_count,
             ss.rsi_ge_120_count,
             ss.young_bullish_count,
-            ss.mature_bullish_count
-        FROM st_sector_summary ss
+            ss.mature_bullish_count,
+            cv.classified_population_count,
+            cv.mapped_classified_count,
+            cv.unmapped_classified_count
+        FROM st_sector_summary_shadow ss
+        LEFT JOIN st_sector_summary_coverage_shadow cv
+          ON cv.weekdate = ss.weekdate
+         AND cv.exchange = ss.exchange
+         AND cv.type = ss.type
         {where}
     """
     return sql, params
+
+
+def _breadth_coverage_sql(
+    *, start: str | None, end: str | None, exchange: str | None, population: Population
+) -> tuple[str, dict[str, Any]]:
+    """Request-level canonical coverage, including all-unmapped populations."""
+    params: dict[str, Any] = {
+        "type": "EQ" if population == "equities" else "CS",
+        "exchange": exchange or "*",
+    }
+    where = "WHERE cv.type = :type AND cv.exchange = :exchange"
+    if start:
+        where += " AND cv.weekdate >= :start"
+        params["start"] = start
+    if end:
+        where += " AND cv.weekdate <= :end"
+        params["end"] = end
+    return f"""
+        SELECT cv.weekdate, cv.classified_population_count,
+               cv.mapped_classified_count, cv.unmapped_classified_count
+        FROM st_sector_summary_coverage_shadow cv
+        {where}
+        ORDER BY cv.weekdate ASC
+    """, params
+
+
+def _postprocess_coverage(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Preserve missing coverage as undefined; never manufacture a denominator."""
+    output: list[dict[str, Any]] = []
+    for row in rows:
+        item = dict(row)
+        denominator = int(item.get("classified_population_count") or 0)
+        mapped = int(item.get("mapped_classified_count") or 0)
+        item["mapped_coverage_ratio"] = (mapped / denominator) if denominator else None
+        output.append(item)
+    return output
 
 
 def _where_clause(
@@ -216,7 +303,7 @@ def _where_clause(
     start: str | None,
     end: str | None,
     exchange: str | None,
-    cs_only: bool,
+    population: Population,
     min_price: float | None,
     min_volume: int | None,
     vol_scale: int,
@@ -224,7 +311,7 @@ def _where_clause(
 ) -> str:
     where = "WHERE 1=1"
 
-    if exchange:
+    if exchange and exchange != "*":
         where += " AND d.exchange = :exchange"
         params["exchange"] = exchange
 
@@ -239,8 +326,13 @@ def _where_clause(
             where += " AND d.weekdate <= :end"
             params["end"] = end
 
-    if cs_only:
+    if population == "cs":
         where += " AND d.type = 'CS'"
+    elif population == "equities":
+        where += " AND d.type IN ('CS','UN')"
+
+    if exchange == "*" or (exchange is None and population != "all"):
+        where += " AND d.exchange IN ('A','N','Q','T')"
 
     if min_price is not None:
         where += " AND d.price >= :min_price"
@@ -267,7 +359,8 @@ def _breadth_sql(
     start: str | None,
     end: str | None,
     exchange: str | None,
-    cs_only: bool,
+    population: Population | None = None,
+    cs_only: bool | None = None,
     min_price: float | None,
     min_volume: int | None,
     vol_scale: int,
@@ -282,7 +375,9 @@ def _breadth_sql(
         start=start,
         end=end,
         exchange=exchange,
-        cs_only=cs_only,
+        population=(population if population is not None else (
+            "cs" if cs_only is True else "all" if cs_only is False else "equities"
+        )),
         min_price=min_price,
         min_volume=min_volume,
         vol_scale=vol_scale,
@@ -298,25 +393,26 @@ def _breadth_sql(
             d.weekdate,
             {sel_group},
 
-            COUNT(*) AS total,
+            COUNT(*) AS observed_count,
 
             SUM(d.trend IN {bullish_set}) AS bullish_count,
             SUM(d.trend IN {bearish_set}) AS bearish_count,
             SUM(d.trend IN {neutral_set}) AS neutral_count,
 
-            AVG(d.trend_cnt) AS avg_trend_cnt,
+            AVG(CASE WHEN d.trend IN ('^+','^-','v^','v-','v+','^v') THEN d.trend_cnt END) AS avg_trend_cnt,
             AVG(CASE WHEN d.trend IN {bullish_set} THEN d.trend_cnt END) AS avg_trend_cnt_bullish,
             AVG(CASE WHEN d.trend IN {bearish_set} THEN d.trend_cnt END) AS avg_trend_cnt_bearish,
             MAX(d.trend_cnt) AS max_trend_cnt,
 
-            AVG(d.mt_cnt) AS avg_mt_cnt,
+            AVG(CASE WHEN d.trend IN ('^+','^-','v^','v-','v+','^v') THEN d.mt_cnt END) AS avg_mt_cnt,
             AVG(CASE WHEN d.trend IN {bullish_set} THEN d.mt_cnt END) AS avg_mt_cnt_bullish,
             AVG(CASE WHEN d.trend IN {bearish_set} THEN d.mt_cnt END) AS avg_mt_cnt_bearish,
             MAX(d.mt_cnt) AS max_mt_cnt,
 
-            AVG(d.rsi) AS avg_rsi,
-            SUM(d.rsi >= 110) AS rsi_ge_110_count,
-            SUM(d.rsi >= 120) AS rsi_ge_120_count,
+            AVG(CASE WHEN d.trend IN ('^+','^-','v^','v-','v+','^v')
+                      AND d.rsi IS NOT NULL AND d.rsi <= 10000 THEN d.rsi END) AS avg_rsi,
+            SUM(CASE WHEN d.rsi IS NOT NULL AND d.rsi <= 10000 AND d.rsi >= 110 THEN 1 ELSE 0 END) AS rsi_ge_110_count,
+            SUM(CASE WHEN d.rsi IS NOT NULL AND d.rsi <= 10000 AND d.rsi >= 120 THEN 1 ELSE 0 END) AS rsi_ge_120_count,
 
             SUM(d.trend IN {bullish_set} AND d.trend_cnt <= 4) AS young_bullish_count,
             SUM(d.trend IN {bullish_set} AND d.trend_cnt >= 20) AS mature_bullish_count
@@ -335,7 +431,7 @@ def _breadth_sql(
 def _postprocess(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for r in rows:
-        total = int(r.get("total") or 0)
+        observed_count = int(r.get("observed_count", r.get("total", 0)) or 0)
         bullish = int(r.get("bullish_count") or 0)
         bearish = int(r.get("bearish_count") or 0)
         neutral = int(r.get("neutral_count") or 0)
@@ -346,19 +442,34 @@ def _postprocess(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         young_bull = int(r.get("young_bullish_count") or 0)
         mature_bull = int(r.get("mature_bullish_count") or 0)
 
-        def pct(x: int) -> float:
-            return (x / total) if total else 0.0
+        classified_count = int(r.get("classified_count") or (bullish + bearish))
+        unclassified_count = observed_count - bullish - bearish - neutral
 
-        r["bullish_pct"] = pct(bullish)
-        r["bearish_pct"] = pct(bearish)
-        r["neutral_pct"] = pct(neutral)
+        def directional_pct(x: int) -> float:
+            return (x / classified_count) if classified_count else 0.0
+
+        def observed_pct(x: int) -> float:
+            return (x / observed_count) if observed_count else 0.0
+
+        # `total` historically named the observed row count.  The canonical
+        # public contract makes it the directional classified denominator.
+        r["total"] = classified_count
+        r["classified_count"] = classified_count
+        r["observed_count"] = observed_count
+        r["unclassified_count"] = max(0, unclassified_count)
+        r["bullish_pct"] = directional_pct(bullish)
+        r["bearish_pct"] = directional_pct(bearish)
+        r["neutral_pct"] = observed_pct(neutral)
         r["net_breadth"] = bullish - bearish
 
-        r["rsi_ge_110_pct"] = pct(rsi110)
-        r["rsi_ge_120_pct"] = pct(rsi120)
+        r["rsi_ge_110_pct"] = observed_pct(rsi110)
+        r["rsi_ge_120_pct"] = observed_pct(rsi120)
 
-        r["young_bullish_pct"] = pct(young_bull)
-        r["mature_bullish_pct"] = pct(mature_bull)
+        r["young_bullish_pct"] = directional_pct(young_bull)
+        r["mature_bullish_pct"] = directional_pct(mature_bull)
+        denominator = int(r.get("classified_population_count") or 0)
+        mapped = int(r.get("mapped_classified_count") or 0)
+        r["mapped_coverage_ratio"] = (mapped / denominator) if denominator else None
 
         out.append(r)
     return out
@@ -375,9 +486,10 @@ def _sort_key_for_level(level: GroupLevel) -> str:
 def breadth_sector_latest(
     request: Request,
     group_level: GroupLevel = Query(default="sector", description="Group by: sector | industry_group | industry"),
-    exchange: str | None = Query(default=None, description="Optional exchange filter (N,Q,A,B,T,I). If omitted: all exchanges."),
+    exchange: str | None = Query(default=None, description="Optional exchange filter (A,N,Q,T; legacy B/I). Omit or use * for canonical A/N/Q/T aggregate."),
     weekdate: str | None = Query(default=None, description="Override weekdate YYYY-MM-DD; default latest."),
-    cs_only: bool = Query(default=True, description="Common Stocks only (recommended for breadth)."),
+    population: Population | None = Query(default=None, description="Population: equities (CS+UN, default), cs, or all (legacy broad)."),
+    cs_only: bool | None = Query(default=None, description="Legacy alias: true=cs; false=all. Omit for canonical equities."),
     include_unknown: bool = Query(default=False, description="Include rows where industry_id mapping is missing."),
     min_price: float | None = Query(default=None, description="Optional min price filter."),
     min_volume: int | None = Query(default=None, description="Optional min weekly volume filter in actual shares traded (e.g., 100000 = 100,000 shares)."),
@@ -387,10 +499,23 @@ def breadth_sector_latest(
     engine = get_engine()
 
     ex = _norm_exchange(exchange) if exchange else None
+    resolved_population = _resolve_population(population, cs_only)
+    use_summary = _use_sector_summary(
+        level=group_level, population=resolved_population, include_unknown=include_unknown,
+        min_price=min_price, min_volume=min_volume, exchange=ex,
+    )
+    if use_summary and weekdate is not None:
+        use_summary = _explicit_shadow_range_available(
+            engine, ex, resolved_population, weekdate, weekdate
+        )
 
     wd = weekdate
     if wd is None:
-        latest = _latest_weekdate(engine, ex)
+        latest = (
+            _latest_summary_weekdate(engine, ex, resolved_population)
+            if use_summary
+            else _latest_weekdate(engine, ex, canonical=resolved_population != "all")
+        )
         if not latest:
             raise HTTPException(
                 status_code=404,
@@ -398,25 +523,31 @@ def breadth_sector_latest(
             )
         wd = str(latest)
 
-    sql_base, params = _breadth_sql(
-        level=group_level,
-        weekdate=wd,
-        start=None,
-        end=None,
-        exchange=ex,
-        cs_only=cs_only,
-        min_price=min_price,
-        min_volume=min_volume,
-        vol_scale=vol_scale,
-        include_unknown=include_unknown,
-    )
+    if use_summary:
+        sql_base, params = _breadth_summary_sql(
+            start=wd, end=wd, exchange=ex, population=resolved_population,
+        )
+        order = " ORDER BY bullish_count DESC, avg_rsi DESC"
+    else:
+        sql_base, params = _breadth_sql(
+            level=group_level, weekdate=wd, start=None, end=None, exchange=ex,
+            population=resolved_population, min_price=min_price, min_volume=min_volume,
+            vol_scale=vol_scale, include_unknown=include_unknown,
+        )
+        order = _sort_key_for_level(group_level)
 
-    sql = text(f"{sql_base}{_sort_key_for_level(group_level)} LIMIT :limit")
+    sql = text(f"{sql_base}{order} LIMIT :limit")
     params["limit"] = int(limit)
 
     try:
         with engine.connect() as conn:
             rows = conn.execute(sql, params).mappings().all()
+            coverage_rows = []
+            if use_summary:
+                coverage_sql, coverage_params = _breadth_coverage_sql(
+                    start=wd, end=wd, exchange=ex, population=resolved_population,
+                )
+                coverage_rows = conn.execute(text(coverage_sql), coverage_params).mappings().all()
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -424,14 +555,17 @@ def breadth_sector_latest(
         )
 
     data = _postprocess([dict(r) for r in rows])
+    coverage = _postprocess_coverage([dict(r) for r in coverage_rows])
 
     return {
         "request_id": request.state.request_id,
         "group_level": group_level,
-        "exchange": ex,
+        "exchange": ex or ("*" if resolved_population != "all" else None),
         "weekdate": wd,
-        "cs_only": cs_only,
+        "population": resolved_population,
+        "cs_only": (resolved_population == "cs") if cs_only is not None else None,
         "include_unknown": include_unknown,
+        "coverage": coverage[0] if coverage else None,
         "count": len(data),
         "data": data,
         "hint": "Use /breadth/sector/history for time series. Defaults are tuned for bot efficiency.",
@@ -443,11 +577,12 @@ def breadth_sector_latest(
 def breadth_sector_history(
     request: Request,
     group_level: GroupLevel = Query(default="sector", description="Group by: sector | industry_group | industry"),
-    exchange: str | None = Query(default=None, description="Optional exchange filter (N,Q,A,B,T,I). If omitted: all exchanges."),
+    exchange: str | None = Query(default=None, description="Optional exchange filter (A,N,Q,T; legacy B/I). Omit or use * for canonical A/N/Q/T aggregate."),
     start: str | None = Query(default=None, description="Start date YYYY-MM-DD (inclusive)"),
     end: str | None = Query(default=None, description="End date YYYY-MM-DD (inclusive)"),
     group_by_week: bool = Query(default=True, description="Group results by weekdate"),
-    cs_only: bool = Query(default=True, description="Common Stocks only (recommended)."),
+    population: Population | None = Query(default=None, description="Population: equities (CS+UN, default), cs, or all (legacy broad)."),
+    cs_only: bool | None = Query(default=None, description="Legacy alias: true=cs; false=all. Omit for canonical equities."),
     include_unknown: bool = Query(default=False),
     min_price: float | None = Query(default=None),
     min_volume: int | None = Query(default=None),
@@ -464,6 +599,15 @@ def breadth_sector_history(
 ):
     engine = get_engine()
     ex = _norm_exchange(exchange) if exchange else None
+    resolved_population = _resolve_population(population, cs_only)
+    use_summary = _use_sector_summary(
+        level=group_level, population=resolved_population, include_unknown=include_unknown,
+        min_price=min_price, min_volume=min_volume, exchange=ex,
+    )
+    if use_summary and (start is not None or end is not None):
+        use_summary = _explicit_shadow_range_available(
+            engine, ex, resolved_population, start, end
+        )
 
     # Bounding runs here, inside paid execution, rather than in the registered
     # pre-payment validator: it shapes the work performed, it does not decide
@@ -471,24 +615,22 @@ def breadth_sector_history(
     effective_start, effective_end, window_source = resolve_history_window(
         start=start,
         end=end,
-        anchor_weekdate=lambda: _latest_weekdate(engine, ex),
+        anchor_weekdate=lambda: (
+            _latest_summary_weekdate(engine, ex, resolved_population)
+            if use_summary
+            else _latest_weekdate(engine, ex, canonical=resolved_population != "all")
+        ),
     )
     limit_source = (
         LIMIT_SOURCE_CALLER if "limit" in request.query_params else LIMIT_SOURCE_DEFAULT
     )
 
-    if _use_sector_summary(
-        level=group_level,
-        cs_only=cs_only,
-        include_unknown=include_unknown,
-        min_price=min_price,
-        min_volume=min_volume,
-        exchange=ex,
-    ):
+    if use_summary:
         sql_base, params = _breadth_summary_sql(
             start=effective_start,
             end=effective_end,
             exchange=ex,
+            population=resolved_population,
         )
         order = " ORDER BY weekdate ASC, bullish_count DESC, avg_rsi DESC"
     else:
@@ -498,7 +640,7 @@ def breadth_sector_history(
             start=effective_start,
             end=effective_end,
             exchange=ex,
-            cs_only=cs_only,
+            population=resolved_population,
             min_price=min_price,
             min_volume=min_volume,
             vol_scale=vol_scale,
@@ -512,6 +654,13 @@ def breadth_sector_history(
     try:
         with engine.connect() as conn:
             rows = conn.execute(sql, params).mappings().all()
+            coverage_rows = []
+            if use_summary:
+                coverage_sql, coverage_params = _breadth_coverage_sql(
+                    start=effective_start, end=effective_end, exchange=ex,
+                    population=resolved_population,
+                )
+                coverage_rows = conn.execute(text(coverage_sql), coverage_params).mappings().all()
     except Exception as e:
         raise HTTPException(
             status_code=500,
@@ -520,6 +669,7 @@ def breadth_sector_history(
 
     bounded_rows, truncated_by_limit = split_probe_rows(list(rows), limit)
     flat = _postprocess([dict(r) for r in bounded_rows])
+    coverage = _postprocess_coverage([dict(r) for r in coverage_rows])
 
     applied_bounds = build_applied_bounds(
         start=effective_start,
@@ -537,11 +687,13 @@ def breadth_sector_history(
         return {
             "request_id": request.state.request_id,
             "group_level": group_level,
-            "exchange": ex,
+            "exchange": ex or ("*" if resolved_population != "all" else None),
             "start": start,
             "end": end,
-            "cs_only": cs_only,
+            "population": resolved_population,
+            "cs_only": (resolved_population == "cs") if cs_only is not None else None,
             "include_unknown": include_unknown,
+            "coverage": coverage,
             "applied_bounds": applied_bounds,
             "count": len(flat),
             "data": flat,
@@ -567,11 +719,13 @@ def breadth_sector_history(
     return {
         "request_id": request.state.request_id,
         "group_level": group_level,
-        "exchange": ex,
+        "exchange": ex or ("*" if resolved_population != "all" else None),
         "start": start,
         "end": end,
-        "cs_only": cs_only,
+        "population": resolved_population,
+        "cs_only": (resolved_population == "cs") if cs_only is not None else None,
         "include_unknown": include_unknown,
+        "coverage": coverage,
         "applied_bounds": applied_bounds,
         "week_count": len(weeks),
         "count": len(flat),

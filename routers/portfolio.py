@@ -9,7 +9,7 @@ from sqlalchemy import text
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES, parse_symbol_exchange
-from services import decision_service, regime_service
+from services import decision_service, regime_queries, regime_service
 
 router = APIRouter(prefix="/portfolio", tags=["portfolio"])
 
@@ -18,6 +18,59 @@ _VALID_UNIVERSES = {"top"}
 _VALID_BIASES = {"auto", "bullish", "bearish"}
 _WEIGHT_SUM_TOLERANCE = 0.01
 _MAX_POSITIONS = 25
+
+
+def _load_regime_context(conn, request_id: str | None) -> dict:
+    """Load shared canonical market-regime context for portfolio endpoints."""
+    weekdates = regime_queries.fetch_eligible_regime_weekdates(
+        conn, limit=_FORECAST_LOOKBACK
+    )
+    if not weekdates:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "request_id": request_id,
+                "error": "no_signal_data",
+                "message": "No Stock Trends weekdates available.",
+            },
+        )
+
+    aggregate_rows = regime_queries.fetch_regime_trend_aggregates(
+        conn, weekdates=weekdates
+    )
+    scores_by_week = regime_service.compute_scores_by_week(weekdates, aggregate_rows)
+    if not scores_by_week:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "request_id": request_id,
+                "error": "no_signal_data",
+                "message": "Cannot compute regime score for the resolved weekdates.",
+            },
+        )
+
+    forecast = regime_service.compute_forecast_signals(scores_by_week)
+    scores = [score for _, score in scores_by_week]
+    _, current_regime_score = scores_by_week[0]
+    current_regime = regime_service.classify_regime(current_regime_score)
+    consistency_count = sum(
+        1 for score in scores if regime_service.classify_regime(score) == current_regime
+    )
+    consistency_pct = consistency_count / len(scores)
+
+    return {
+        "weekdates": weekdates,
+        "latest_weekdate": weekdates[0],
+        "scores_by_week": scores_by_week,
+        "current_regime": current_regime,
+        "current_regime_score": current_regime_score,
+        "regime_confidence": regime_service.classify_confidence(current_regime_score),
+        "forecast": forecast,
+        "consistency_pct": consistency_pct,
+        "forecast_confidence": regime_service.forecast_confidence(
+            consistency_pct, current_regime_score, forecast["avg_delta"]
+        ),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -219,75 +272,17 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
 
     with engine.connect() as conn:
 
-        # --- Query 1: Resolve most recent 5 weekdates ---
-        weekdate_rows = conn.execute(
-            text(
-                """
-                SELECT DISTINCT weekdate
-                FROM st_data
-                WHERE type = 'CS'
-                ORDER BY weekdate DESC
-                LIMIT :limit
-                """
-            ),
-            {"limit": _FORECAST_LOOKBACK},
-        ).mappings().all()
-
-        weekdates = [r["weekdate"] for r in weekdate_rows if r["weekdate"]]
-        if not weekdates:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "request_id": request_id,
-                    "error": "no_signal_data",
-                    "message": "No Stock Trends weekdates available.",
-                },
-            )
-
-        latest_wd = weekdates[0]
-
-        # --- Query 2: Regime aggregation over the 5-week lookback ---
-        # Placeholders built from DB-returned date objects — no user input in SQL
-        week_binds = {f"w{i}": wd for i, wd in enumerate(weekdates)}
-        week_placeholders = ", ".join(f":w{i}" for i in range(len(weekdates)))
-        agg_rows = conn.execute(
-            text(
-                f"""
-                SELECT
-                    weekdate,
-                    trend,
-                    COUNT(*) AS cnt
-                FROM st_data
-                WHERE weekdate IN ({week_placeholders})
-                  AND type = 'CS'
-                GROUP BY weekdate, trend
-                ORDER BY weekdate DESC, trend
-                """
-            ),
-            week_binds,
-        ).mappings().all()
-
-        # Compute regime in Python before resolving trend codes
-        scores_by_week = regime_service.compute_scores_by_week(weekdates, agg_rows)
-        if not scores_by_week:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "request_id": request_id,
-                    "error": "no_signal_data",
-                    "message": "Cannot compute regime score for the resolved weekdates.",
-                },
-            )
-
-        _, current_regime_score = scores_by_week[0]
-        current_regime = regime_service.classify_regime(current_regime_score)
+        regime_context = _load_regime_context(conn, request_id)
+        latest_wd = regime_context["latest_weekdate"]
+        current_regime = regime_context["current_regime"]
+        current_regime_score = regime_context["current_regime_score"]
 
         # Resolve bias → trend codes for candidate SQL
         trend_codes = _resolve_trend_codes(body.bias, current_regime)
         trend_binds = {f"t{i}": code for i, code in enumerate(trend_codes)}
         trend_placeholders = ", ".join(f":t{i}" for i in range(len(trend_codes)))
 
-        # --- Query 3: Full eligible candidate universe ---
+        # --- Query 1: Full eligible candidate universe ---
         # Fetch all eligible candidates; Python ranks by decision_score DESC.
         # No pre-limit — alphabetical ordering must never act as a selection filter.
         candidate_params: dict = {
@@ -297,7 +292,7 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
         # Exchange filter: explicit exchange overrides the US-market default.
         # Default (no exchange): restrict to US-listed exchanges (N, Q, A).
         # Allowed exchange codes: N (NYSE), Q (NASDAQ), A (AMEX), T (TSX).
-        # type = 'CS' already excludes non-tradable instrument types.
+        # Candidate selection is intentionally CS-only, unlike market regime.
         if norm_exchange:
             exchange_clause = "AND exchange = :exchange"
             candidate_params["exchange"] = norm_exchange
@@ -327,7 +322,7 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
             candidate_params,
         ).mappings().all()
 
-        # --- Query 4: ST-IM risk-adjusted returns for tiebreaking ---
+        # --- Query 2: ST-IM risk-adjusted returns for tiebreaking ---
         # Both the MAX(weekdate) subquery and the outer WHERE use the same exchange
         # scope so that a newer weekdate from a different exchange universe cannot
         # cause the in-scope rows to return empty.
@@ -373,19 +368,11 @@ def construct_portfolio(body: ConstructPortfolioRequest, request: Request):
             },
         )
 
-    # --- Compute regime context (Python, no more SQL) ---
-    forecast = regime_service.compute_forecast_signals(scores_by_week)
-    scores = [s_val for _, s_val in scores_by_week]
-    regime_confidence = regime_service.classify_confidence(current_regime_score)
-
-    consistency_count = sum(
-        1 for sv in scores if regime_service.classify_regime(sv) == current_regime
-    )
-    consistency_pct = consistency_count / len(scores)
-
-    fc_confidence = regime_service.forecast_confidence(
-        consistency_pct, current_regime_score, forecast["avg_delta"]
-    )
+    forecast = regime_context["forecast"]
+    scores_by_week = regime_context["scores_by_week"]
+    regime_confidence = regime_context["regime_confidence"]
+    consistency_pct = regime_context["consistency_pct"]
+    fc_confidence = regime_context["forecast_confidence"]
 
     # --- Evaluate each candidate in-process ---
     evaluated: list[dict] = []
@@ -754,55 +741,10 @@ def evaluate_portfolio(body: EvaluatePortfolioRequest, request: Request):
 
     with engine.connect() as conn:
 
-        # --- Query 1: Resolve most recent 5 weekdates ---
-        weekdate_rows = conn.execute(
-            text(
-                """
-                SELECT DISTINCT weekdate
-                FROM st_data
-                WHERE type = 'CS'
-                ORDER BY weekdate DESC
-                LIMIT :limit
-                """
-            ),
-            {"limit": _FORECAST_LOOKBACK},
-        ).mappings().all()
+        regime_context = _load_regime_context(conn, request_id)
+        latest_wd = regime_context["latest_weekdate"]
 
-        weekdates = [r["weekdate"] for r in weekdate_rows if r["weekdate"]]
-        if not weekdates:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "request_id": request_id,
-                    "error": "no_signal_data",
-                    "message": "No Stock Trends weekdates available.",
-                },
-            )
-
-        latest_wd = weekdates[0]
-
-        # --- Query 2: Regime aggregation over the 5-week lookback ---
-        # Placeholders built from DB-returned date objects — no user input in SQL
-        week_binds = {f"w{i}": wd for i, wd in enumerate(weekdates)}
-        week_placeholders = ", ".join(f":w{i}" for i in range(len(weekdates)))
-        agg_rows = conn.execute(
-            text(
-                f"""
-                SELECT
-                    weekdate,
-                    trend,
-                    COUNT(*) AS cnt
-                FROM st_data
-                WHERE weekdate IN ({week_placeholders})
-                  AND type = 'CS'
-                GROUP BY weekdate, trend
-                ORDER BY weekdate DESC, trend
-                """
-            ),
-            week_binds,
-        ).mappings().all()
-
-        # --- Query 3: Batch symbol lookup —
+        # --- Query 1: Batch symbol lookup —
         # OR clauses built from parse_symbol_exchange-validated strings only
         or_parts = " OR ".join(
             f"(symbol = :s{i} AND exchange = :e{i})"
@@ -813,6 +755,7 @@ def evaluate_portfolio(body: EvaluatePortfolioRequest, request: Request):
             sym_binds[f"s{i}"] = s
             sym_binds[f"e{i}"] = ex
 
+        # Supplied portfolio positions remain an explicit CS-only universe.
         sym_rows = conn.execute(
             text(
                 f"""
@@ -838,31 +781,13 @@ def evaluate_portfolio(body: EvaluatePortfolioRequest, request: Request):
         (r["symbol"], r["exchange"]): r for r in sym_rows
     }
 
-    # --- Compute regime context (Python, no more SQL) ---
-    scores_by_week = regime_service.compute_scores_by_week(weekdates, agg_rows)
-    if not scores_by_week:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "request_id": request_id,
-                "error": "no_signal_data",
-                "message": "Cannot compute regime score for the resolved weekdates.",
-            },
-        )
-
-    forecast = regime_service.compute_forecast_signals(scores_by_week)
-    scores = [s_val for _, s_val in scores_by_week]
-    _, current_regime_score = scores_by_week[0]
-    current_regime = regime_service.classify_regime(current_regime_score)
-    regime_confidence = regime_service.classify_confidence(current_regime_score)
-
-    consistency_count = sum(
-        1 for sv in scores if regime_service.classify_regime(sv) == current_regime
-    )
-    consistency_pct = consistency_count / len(scores)
-    fc_confidence = regime_service.forecast_confidence(
-        consistency_pct, current_regime_score, forecast["avg_delta"]
-    )
+    scores_by_week = regime_context["scores_by_week"]
+    forecast = regime_context["forecast"]
+    current_regime_score = regime_context["current_regime_score"]
+    current_regime = regime_context["current_regime"]
+    regime_confidence = regime_context["regime_confidence"]
+    consistency_pct = regime_context["consistency_pct"]
+    fc_confidence = regime_context["forecast_confidence"]
 
     # --- Evaluate each position in-process ---
     evaluated: list[dict] = []   # response positions
@@ -1272,55 +1197,10 @@ def compare_portfolios(body: ComparePortfolioRequest, request: Request):
 
     with engine.connect() as conn:
 
-        # --- Query 1: Resolve most recent 5 weekdates ---
-        weekdate_rows = conn.execute(
-            text(
-                """
-                SELECT DISTINCT weekdate
-                FROM st_data
-                WHERE type = 'CS'
-                ORDER BY weekdate DESC
-                LIMIT :limit
-                """
-            ),
-            {"limit": _FORECAST_LOOKBACK},
-        ).mappings().all()
+        regime_context = _load_regime_context(conn, request_id)
+        latest_wd = regime_context["latest_weekdate"]
 
-        weekdates = [r["weekdate"] for r in weekdate_rows if r["weekdate"]]
-        if not weekdates:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "request_id": request_id,
-                    "error": "no_signal_data",
-                    "message": "No Stock Trends weekdates available.",
-                },
-            )
-
-        latest_wd = weekdates[0]
-
-        # --- Query 2: Shared regime aggregation ---
-        # Placeholders built from DB-returned date objects — no user input in SQL
-        week_binds = {f"w{i}": wd for i, wd in enumerate(weekdates)}
-        week_placeholders = ", ".join(f":w{i}" for i in range(len(weekdates)))
-        agg_rows = conn.execute(
-            text(
-                f"""
-                SELECT
-                    weekdate,
-                    trend,
-                    COUNT(*) AS cnt
-                FROM st_data
-                WHERE weekdate IN ({week_placeholders})
-                  AND type = 'CS'
-                GROUP BY weekdate, trend
-                ORDER BY weekdate DESC, trend
-                """
-            ),
-            week_binds,
-        ).mappings().all()
-
-        # --- Query 3: Combined batch symbol lookup for left ∪ right ---
+        # --- Query 1: Combined batch symbol lookup for left ∪ right ---
         # Sorted for deterministic bind ordering — no user input in SQL structure
         all_pairs = sorted(
             {(s, ex) for s, ex, _ in left_parsed} | {(s, ex) for s, ex, _ in right_parsed}
@@ -1334,6 +1214,7 @@ def compare_portfolios(body: ComparePortfolioRequest, request: Request):
             sym_binds[f"s{i}"] = s
             sym_binds[f"e{i}"] = ex
 
+        # Supplied comparison positions remain an explicit CS-only universe.
         sym_rows = conn.execute(
             text(
                 f"""
@@ -1358,31 +1239,13 @@ def compare_portfolios(body: ComparePortfolioRequest, request: Request):
         (r["symbol"], r["exchange"]): r for r in sym_rows
     }
 
-    # --- Compute shared regime context ---
-    scores_by_week = regime_service.compute_scores_by_week(weekdates, agg_rows)
-    if not scores_by_week:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "request_id": request_id,
-                "error": "no_signal_data",
-                "message": "Cannot compute regime score for the resolved weekdates.",
-            },
-        )
-
-    forecast = regime_service.compute_forecast_signals(scores_by_week)
-    regime_scores = [s_val for _, s_val in scores_by_week]
-    _, current_regime_score = scores_by_week[0]
-    current_regime   = regime_service.classify_regime(current_regime_score)
-    regime_confidence = regime_service.classify_confidence(current_regime_score)
-
-    consistency_count = sum(
-        1 for sv in regime_scores if regime_service.classify_regime(sv) == current_regime
-    )
-    consistency_pct = consistency_count / len(regime_scores)
-    fc_confidence = regime_service.forecast_confidence(
-        consistency_pct, current_regime_score, forecast["avg_delta"]
-    )
+    scores_by_week = regime_context["scores_by_week"]
+    forecast = regime_context["forecast"]
+    current_regime_score = regime_context["current_regime_score"]
+    current_regime = regime_context["current_regime"]
+    regime_confidence = regime_context["regime_confidence"]
+    consistency_pct = regime_context["consistency_pct"]
+    fc_confidence = regime_context["forecast_confidence"]
 
     # --- Evaluate both sides in-process ---
     left_evaluated,  left_internal  = _evaluate_positions_helper(

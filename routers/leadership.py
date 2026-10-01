@@ -10,6 +10,7 @@ from sqlalchemy import text
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES
+from services.market_semantics import CANONICAL_REPORTING_EXCHANGES
 from utils.history_bounds import (
     DEFAULT_HISTORY_WINDOW_WEEKS,
     LIMIT_SOURCE_CALLER,
@@ -42,7 +43,7 @@ ROTATION_HISTORY_WIDEN_HINT = (
 
 def _norm_exchange(ex: str) -> str:
     ex = ex.strip().upper()
-    if ex not in VALID_EXCHANGES:
+    if ex != "*" and ex not in VALID_EXCHANGES:
         raise HTTPException(
             status_code=400,
             detail=f"Invalid exchange '{ex}'. Must be one of {sorted(VALID_EXCHANGES)}",
@@ -66,13 +67,57 @@ def _validate_exchange_values(request: Request, values: dict) -> None:
         _norm_exchange(exchange)
 
 
+def _validate_summary_exchange_values(request: Request, values: dict) -> None:
+    exchange = values.get("exchange")
+    if exchange and _norm_exchange(exchange) == "*":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid exchange '{exchange}'. Must be one of {sorted(VALID_EXCHANGES)}",
+        )
+
+
+
+def _norm_rotation_type(type_: str) -> str:
+    return type_.strip().upper()
+
+
+def _rotation_raw_scope(type_: str, exchange: str | None) -> tuple[str, dict[str, Any]]:
+    params: dict[str, Any] = {}
+    if type_ == "EQ":
+        scope = "d.type IN ('CS','UN')"
+    else:
+        scope = "d.type = :type"
+        params["type"] = type_
+    if exchange == "*":
+        scope += " AND d.exchange IN ('A','N','Q','T')"
+    elif exchange:
+        scope += " AND d.exchange = :exchange"
+        params["exchange"] = exchange
+    return scope, params
+
 
 def _latest_weekdate(engine, exchange: str | None, type_: str) -> Any | None:
-    sql = "SELECT MAX(weekdate) AS wd FROM st_data WHERE type = :type"
-    params: dict[str, Any] = {"type": type_}
-    if exchange:
-        sql += " AND exchange = :exchange"
-        params["exchange"] = exchange
+    type_ = _norm_rotation_type(type_)
+    scope, params = _rotation_raw_scope(type_, exchange)
+    sql = f"SELECT MAX(weekdate) AS wd FROM st_data d WHERE {scope}"
+    with engine.connect() as conn:
+        row = conn.execute(text(sql), params).mappings().first()
+    return row["wd"] if row else None
+
+
+def _use_rotation_summary(type_: str, exchange: str | None) -> bool:
+    return _norm_rotation_type(type_) in {"CS", "EQ"} and (
+        exchange is None or exchange == "*" or exchange in CANONICAL_REPORTING_EXCHANGES
+    )
+
+
+def _latest_rotation_weekdate(engine, exchange: str | None, type_: str) -> Any | None:
+    """Return the exact shadow week for canonical CS/EQ rotation requests."""
+    type_ = _norm_rotation_type(type_)
+    if not _use_rotation_summary(type_, exchange):
+        return _latest_weekdate(engine, exchange, type_)
+    sql = "SELECT MAX(weekdate) AS wd FROM st_sector_summary_shadow WHERE type = :type AND exchange = :exchange"
+    params = {"type": type_, "exchange": exchange or "*"}
     with engine.connect() as conn:
         row = conn.execute(text(sql), params).mappings().first()
     return row["wd"] if row else None
@@ -100,7 +145,7 @@ def _rotation_summary_sql(
     limit: int | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """
-    Build the complete rotation/history SQL against st_sector_summary.
+    Build the complete rotation/history SQL against canonical shadow aggregates.
 
     Preserves the MySQL 5.7 user-variable ranking pattern; applies it to
     the pre-aggregated summary table instead of raw st_data.
@@ -119,9 +164,12 @@ def _rotation_summary_sql(
         " AND ss.total >= :min_constituents"
     )
 
-    if exchange:
+    # The stored '*' row is a direct source aggregation over A/N/Q/T.  Do not
+    # reconstruct it by averaging per-exchange summary rows.
+    summary_exchange = exchange or "*"
+    if summary_exchange:
         where += " AND ss.exchange = :exchange"
-        params["exchange"] = exchange
+        params["exchange"] = summary_exchange
 
     if start:
         where += " AND ss.weekdate >= :start"
@@ -161,7 +209,7 @@ def _rotation_summary_sql(
                     ss.avg_trend_cnt,
                     ss.bull_avg_rsi,
                     ss.leadership_score
-                FROM st_sector_summary ss
+                FROM st_sector_summary_shadow ss
                 {where}
                 ORDER BY ss.weekdate ASC, ss.leadership_score DESC, ss.sector_name ASC
             ) a
@@ -180,6 +228,61 @@ def _rotation_summary_sql(
         params["limit"] = int(limit)
         sql += " LIMIT :limit "
 
+    return sql, params
+
+
+def _rotation_raw_sql(
+    *, type_: str, exchange: str | None, start: str | None, end: str | None,
+    min_constituents: int, top_k: int | None, limit: int | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Legacy non-shadow rotation path for types/exchanges shadow cannot represent."""
+    type_ = _norm_rotation_type(type_)
+    scope, params = _rotation_raw_scope(type_, exchange)
+    params["min_constituents"] = int(min_constituents)
+    where = f"WHERE {scope} AND s.sector_name IS NOT NULL"
+    if start:
+        where += " AND d.weekdate >= :start"
+        params["start"] = start
+    if end:
+        where += " AND d.weekdate <= :end"
+        params["end"] = end
+    bull = "('^+','^-','v^')"
+    bear = "('v-','v+','^v')"
+    sql = f"""
+        SELECT * FROM (
+          SELECT a.*, @r := IF(@wk = a.weekdate, @r + 1, 1) AS rank_in_week,
+                 @wk := a.weekdate AS _wk_set
+          FROM (
+            SELECT d.weekdate, s.sector_code, s.sector_name,
+                   COUNT(*) AS n,
+                   SUM(d.trend IN {bull}) AS bull_n,
+                   SUM(d.trend IN {bull}) / NULLIF(SUM(d.trend IN {bull}) + SUM(d.trend IN {bear}), 0) AS bull_pct,
+                   AVG(CASE WHEN d.trend IN ('^+','^-','v^','v-','v+','^v')
+                            AND d.rsi IS NOT NULL AND d.rsi <= 10000 THEN d.rsi END) AS avg_rsi,
+                   AVG(CASE WHEN d.trend IN ('^+','^-','v^','v-','v+','^v') THEN d.mt_cnt END) AS avg_mt_cnt,
+                   AVG(CASE WHEN d.trend IN ('^+','^-','v^','v-','v+','^v') THEN d.trend_cnt END) AS avg_trend_cnt,
+                   AVG(CASE WHEN d.trend IN {bull} AND d.rsi IS NOT NULL AND d.rsi <= 10000 THEN d.rsi END) AS bull_avg_rsi,
+                   (AVG(CASE WHEN d.trend IN ('^+','^-','v^','v-','v+','^v')
+                              AND d.rsi IS NOT NULL AND d.rsi <= 10000 THEN d.rsi END)
+                    * (SUM(d.trend IN {bull}) / NULLIF(SUM(d.trend IN {bull}) + SUM(d.trend IN {bear}), 0))
+                    + AVG(CASE WHEN d.trend IN ('^+','^-','v^','v-','v+','^v') THEN d.mt_cnt END) * 0.25) AS leadership_score
+            FROM st_data d
+            INNER JOIN st_listsectorsandindustries s ON s.industry_code = d.industry_id
+            {where}
+            GROUP BY d.weekdate, s.sector_code, s.sector_name
+            HAVING COUNT(*) >= :min_constituents
+            ORDER BY d.weekdate ASC, leadership_score DESC, s.sector_name ASC
+          ) a CROSS JOIN (SELECT @wk := NULL, @r := 0) vars
+          ORDER BY a.weekdate ASC, a.leadership_score DESC, a.sector_name ASC
+        ) ranked
+    """
+    if top_k is not None:
+        params["top_k"] = int(top_k)
+        sql += " WHERE ranked.rank_in_week <= :top_k "
+    sql += " ORDER BY ranked.weekdate ASC, ranked.rank_in_week ASC, ranked.sector_name ASC "
+    if limit is not None:
+        params["limit"] = int(limit)
+        sql += " LIMIT :limit "
     return sql, params
 
 
@@ -205,7 +308,7 @@ def leadership_definitions():
 
 
 @router.get("/summary/latest")
-@pre_payment_semantic_validator(_validate_exchange_values)
+@pre_payment_semantic_validator(_validate_summary_exchange_values)
 def leadership_summary_latest(
     request: Request,
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
@@ -381,7 +484,7 @@ def leadership_rotation_history(
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
     start: str | None = Query(default=None, description="Start date YYYY-MM-DD (inclusive)"),
     end: str | None = Query(default=None, description="End date YYYY-MM-DD (inclusive)"),
-    type: str = Query(default="CS", description="Instrument type filter (default CS)"),
+    type: str = Query(default="EQ", description="Canonical rotation population: EQ (CS+UN) by default; CS remains available for compatibility."),
     top_k: int | None = Query(default=5, ge=1, le=50, description="Top K sectors per week (omit for all)"),
     min_constituents: int = Query(default=25, ge=1, le=5000, description="Min # instruments in sector/week"),
     group_by_week: bool = Query(default=True, description="Group results by weekdate"),
@@ -407,6 +510,8 @@ def leadership_rotation_history(
     """
     engine = get_engine()
     ex = _norm_exchange(exchange) if exchange else None
+    normalized_type = _norm_rotation_type(type)
+    use_summary = _use_rotation_summary(normalized_type, ex)
 
     # Service shaping, applied behind the payment boundary alongside the query
     # it bounds — not in the pre-payment validator, which only rejects requests
@@ -414,20 +519,16 @@ def leadership_rotation_history(
     effective_start, effective_end, window_source = resolve_history_window(
         start=start,
         end=end,
-        anchor_weekdate=lambda: _latest_weekdate(engine, ex, type),
+        anchor_weekdate=lambda: _latest_rotation_weekdate(engine, ex, normalized_type),
     )
     limit_source = (
         LIMIT_SOURCE_CALLER if "limit" in request.query_params else LIMIT_SOURCE_DEFAULT
     )
 
-    sql, params = _rotation_summary_sql(
-        type_=type,
-        exchange=ex,
-        start=effective_start,
-        end=effective_end,
-        min_constituents=min_constituents,
-        top_k=top_k,
-        limit=probe_limit(limit),
+    sql_builder = _rotation_summary_sql if use_summary else _rotation_raw_sql
+    sql, params = sql_builder(
+        type_=normalized_type, exchange=ex, start=effective_start, end=effective_end,
+        min_constituents=min_constituents, top_k=top_k, limit=probe_limit(limit),
     )
 
     try:
@@ -460,10 +561,10 @@ def leadership_rotation_history(
     if not group_by_week:
         return {
             "request_id": request.state.request_id,
-            "exchange": ex,
+            "exchange": ex or ("*" if use_summary else None),
             "start": start,
             "end": end,
-            "filters": {"type": type, "min_constituents": min_constituents, "top_k": top_k},
+            "filters": {"type": normalized_type, "min_constituents": min_constituents, "top_k": top_k},
             "applied_bounds": applied_bounds,
             "count": len(flat),
             "data": flat,
@@ -486,10 +587,10 @@ def leadership_rotation_history(
 
     return {
         "request_id": request.state.request_id,
-        "exchange": ex,
+        "exchange": ex or ("*" if use_summary else None),
         "start": start,
         "end": end,
-        "filters": {"type": type, "min_constituents": min_constituents, "top_k": top_k},
+        "filters": {"type": normalized_type, "min_constituents": min_constituents, "top_k": top_k},
         "applied_bounds": applied_bounds,
         "week_count": len(weeks),
         "count": len(flat),

@@ -72,6 +72,49 @@ Represents the structural relationship between price and key moving averages.
 
 ---
 
+## Canonical Market-State Aggregates
+
+Canonical market-state and market-breadth style aggregates use the canonical
+reporting-equity population: `exchange IN ('A', 'N', 'Q', 'T')` and `type IN
+('CS', 'UN')`. A/N/Q/T are the canonical Stock Trends reporting exchanges for
+market aggregates. Other valid computed exchange data may exist in `st_data`,
+but its existence does not imply inclusion in canonical market context. This
+definition applies to market aggregates only; it does not change explicit
+security-level endpoint exchange eligibility or every explicitly CS-only
+security screen in the API.
+
+The classified directional population contains exactly six trend states:
+
+- Bullish: `^+`, `^-`, `v^`
+- Bearish: `^v`, `v+`, `v-`
+
+Exact neutral states are `--` and `=`. Null, empty, and any other trend state
+are unknown or unclassified. Neutral and unclassified observations remain
+transparent in aggregate outputs, but are excluded from the directional
+denominator.
+
+For canonical market-state aggregates:
+
+- `classified_count = bullish_count + bearish_count`
+- `bullish_pct = bullish_count / classified_count`
+- `bearish_pct = bearish_count / classified_count`
+- `regime_score = (bullish_count - bearish_count) / classified_count`
+
+For a nonzero classified population, `bullish_pct + bearish_pct = 1`.
+
+`regime_score` and `avg_mt_cnt` use the classified CS+UN population only.
+`avg_rsi` uses that same classified CS+UN population, with only non-null,
+finite RSI values less than or equal to `10000` included in the average. This
+is an owner-defined conservative data-quality ceiling, not a mathematical upper
+bound of the indicator: values greater than `10000` are treated as erroneous
+RSI observations. There is no lower-bound RSI validity rule. Neutral and
+unknown rows are excluded from both aggregate maturity and aggregate RSI. An
+invalid RSI excludes only that RSI observation from RSI-derived aggregates; it
+does not remove the security from classified counts, breadth, maturity, trend
+persistence, taxonomy population, or taxonomy coverage.
+
+---
+
 ### trend_cnt
 
 **Definition:**

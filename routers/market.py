@@ -4,12 +4,13 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
-from sqlalchemy import text
 
 from db import get_engine
-from services import regime_service
+from services import regime_queries, regime_service
+from services.market_semantics import BEARISH_TRENDS, BULLISH_TRENDS, NEUTRAL_TRENDS
 from utils.history_bounds import (
     LIMIT_SOURCE_CALLER,
     LIMIT_SOURCE_DEFAULT,
@@ -22,6 +23,7 @@ from utils.history_bounds import (
     split_probe_rows,
 )
 
+
 router = APIRouter(prefix="/market", tags=["market"])
 
 # Row bounds read from the shared table so runtime, OpenAPI and discovery cannot
@@ -32,119 +34,116 @@ REGIME_HISTORY_DEFAULT_LIMIT = history_default_limit(REGIME_HISTORY_PATH)
 REGIME_HISTORY_MAX_LIMIT = history_max_limit(REGIME_HISTORY_PATH)
 
 
+def _no_signal_data(request: Request, message: str) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "request_id": getattr(request.state, "request_id", None),
+            "error": "no_signal_data",
+            "message": message,
+        },
+    )
+
+
+def _number(row: Any, field: str) -> float:
+    return float(row[field] or 0)
+
+
+def _regime_snapshot(weekdate: date, rows: list[Any]) -> dict[str, Any] | None:
+    """Build one market-regime response object from canonical aggregate rows."""
+    bullish_count = 0
+    bearish_count = 0
+    neutral_count = 0
+    observed_count = 0
+    valid_rsi_sum = 0.0
+    valid_rsi_count = 0
+    mt_cnt_sum = 0.0
+    mt_cnt_count = 0
+
+    for row in rows:
+        count = int(row["cnt"] or 0)
+        trend = row["trend"] or ""
+        observed_count += count
+
+        if trend in BULLISH_TRENDS:
+            bullish_count += count
+        elif trend in BEARISH_TRENDS:
+            bearish_count += count
+        else:
+            if trend in NEUTRAL_TRENDS:
+                neutral_count += count
+            continue
+
+        # Maturity and valid RSI use the same classified population as regime.
+        valid_rsi_sum += _number(row, "valid_rsi_sum")
+        valid_rsi_count += int(row["valid_rsi_count"] or 0)
+        mt_cnt_sum += _number(row, "mt_cnt_sum")
+        mt_cnt_count += int(row["mt_cnt_count"] or 0)
+
+    classified_count = bullish_count + bearish_count
+    if classified_count == 0:
+        return None
+
+    score = regime_service.compute_regime_score(rows)
+    if score is None:
+        return None
+    unclassified_count = observed_count - classified_count - neutral_count
+
+    return {
+        "regime": regime_service.classify_regime(score),
+        "confidence": regime_service.classify_confidence(score),
+        "regime_score": round(score, 4),
+        "bullish_pct": round(bullish_count / classified_count, 4),
+        "bearish_pct": round(bearish_count / classified_count, 4),
+        "avg_rsi": (
+            round(valid_rsi_sum / valid_rsi_count, 2)
+            if valid_rsi_count
+            else None
+        ),
+        "avg_mt_cnt": (
+            round(mt_cnt_sum / mt_cnt_count, 2) if mt_cnt_count else None
+        ),
+        "weekdate": str(weekdate),
+        "signal_count": classified_count,
+        "classified_count": classified_count,
+        "observed_count": observed_count,
+        "neutral_count": neutral_count,
+        "unclassified_count": unclassified_count,
+        "population": "equities",
+    }
+
+
 @router.get(
     "/regime/latest",
     summary="Current market regime classification",
     description=(
-        "Returns a synthesized market regime based on the distribution of Stock Trends "
-        "trend codes across all active signals in the latest available week. "
-        "Bullish = {^+, ^-, v^}. Bearish = {v-, v+, ^v}. "
-        "regime_score = bullish_pct - bearish_pct, range -1 to +1. "
-        "Fetch /v1/pricing/catalog for current STC cost."
+        "Returns a canonical-equity market regime from classified Stock Trends trend "
+        "codes. Population is CS and UN equities; bullish = {^+, ^-, v^}; bearish "
+        "= {v-, v+, ^v}. Neutral and unknown states are reported separately and do "
+        "not dilute regime_score. Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
 def market_regime_latest(request: Request):
     engine = get_engine()
-
     with engine.connect() as conn:
-        # Step 1: resolve latest weekdate
-        row = conn.execute(
-            text("SELECT MAX(weekdate) AS weekdate FROM st_data")
-        ).mappings().first()
-        weekdate = str(row["weekdate"]) if row and row["weekdate"] else None
+        weekdates = regime_queries.fetch_eligible_regime_weekdates(conn, limit=1)
+        if not weekdates:
+            raise _no_signal_data(request, "No classified canonical market weekdate available.")
+        rows = regime_queries.fetch_regime_trend_aggregates(conn, weekdates=weekdates)
 
-        if not weekdate:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "request_id": getattr(request.state, "request_id", None),
-                    "error": "no_signal_data",
-                    "message": "No weekdate available in st_signals_latest.",
-                },
-            )
-
-        # Step 2: aggregate trend distribution for that weekdate
-        rows = conn.execute(
-            text(
-                """
-                SELECT
-                    trend,
-                    COUNT(*)    AS cnt,
-                    AVG(rsi)    AS avg_rsi,
-                    AVG(mt_cnt) AS avg_mt_cnt
-                FROM st_data
-                WHERE weekdate = :weekdate
-                  AND type = 'CS'
-                GROUP BY trend
-                """
-            ),
-            {"weekdate": weekdate},
-        ).mappings().all()
-
-    if not rows:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "request_id": getattr(request.state, "request_id", None),
-                "error": "no_signal_data",
-                "message": "No signals found for the latest weekdate.",
-            },
-        )
-
-    bullish_cnt = 0
-    bearish_cnt = 0
-    total_cnt = 0
-    weighted_rsi = 0.0
-    weighted_mt_cnt = 0.0
-
-    for row in rows:
-        cnt = int(row["cnt"] or 0)
-        trend = row["trend"] or ""
-        total_cnt += cnt
-        if trend in regime_service.BULLISH_TRENDS:
-            bullish_cnt += cnt
-        elif trend in regime_service.BEARISH_TRENDS:
-            bearish_cnt += cnt
-        weighted_rsi += float(row["avg_rsi"] or 0) * cnt
-        weighted_mt_cnt += float(row["avg_mt_cnt"] or 0) * cnt
-
-    if total_cnt == 0:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "request_id": getattr(request.state, "request_id", None),
-                "error": "no_signal_data",
-                "message": "Signal count is zero for the latest weekdate.",
-            },
-        )
-
-    bullish_pct = round(bullish_cnt / total_cnt, 4)
-    bearish_pct = round(bearish_cnt / total_cnt, 4)
-    regime_score = round(bullish_pct - bearish_pct, 4)
-    avg_rsi = round(weighted_rsi / total_cnt, 2)
-    avg_mt_cnt = round(weighted_mt_cnt / total_cnt, 2)
-
-    return {
-        "regime": regime_service.classify_regime(regime_score),
-        "confidence": regime_service.classify_confidence(regime_score),
-        "regime_score": regime_score,
-        "bullish_pct": bullish_pct,
-        "bearish_pct": bearish_pct,
-        "avg_rsi": avg_rsi,
-        "avg_mt_cnt": avg_mt_cnt,
-        "weekdate": weekdate,
-        "signal_count": total_cnt,
-    }
+    snapshot = _regime_snapshot(weekdates[0], rows)
+    if snapshot is None:
+        raise _no_signal_data(request, "No classified signals found for the latest weekdate.")
+    return snapshot
 
 
 @router.get(
     "/regime/history",
     summary="Historical weekly market regime classification",
     description=(
-        "Returns a list of weekly market regime snapshots computed from the distribution "
-        "of Stock Trends trend codes for each week. "
-        "Same classification logic as /regime/latest. "
-        "Bullish = {^+, ^-, v^}. Bearish = {v-, v+, ^v}. "
+        "Returns weekly canonical-equity market regime snapshots. Bullish and bearish "
+        "percentages use classified directional trend states only; neutral and unknown "
+        "states are transparent but excluded from the directional denominator. "
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
@@ -170,122 +169,28 @@ def market_regime_history(
     ),
 ):
     engine = get_engine()
-
     with engine.connect() as conn:
-        # Step 1: resolve weekdates within scope
-        # Two explicit fixed queries — no dynamic SQL assembly
-        if start_date is not None:
-            weekdate_rows = conn.execute(
-                text(
-                    """
-                    SELECT DISTINCT weekdate
-                    FROM st_data
-                    WHERE type = 'CS'
-                      AND weekdate >= :start_date
-                    ORDER BY weekdate DESC
-                    LIMIT :limit
-                    """
-                ),
-                {"start_date": start_date, "limit": probe_limit(limit)},
-            ).mappings().all()
-        else:
-            weekdate_rows = conn.execute(
-                text(
-                    """
-                    SELECT DISTINCT weekdate
-                    FROM st_data
-                    WHERE type = 'CS'
-                    ORDER BY weekdate DESC
-                    LIMIT :limit
-                    """
-                ),
-                {"limit": probe_limit(limit)},
-            ).mappings().all()
-
         # Trim the probe week before aggregation, so observing truncation costs
         # one extra weekdate lookup and no extra aggregation work.
-        weekdates = [r["weekdate"] for r in weekdate_rows if r["weekdate"]]
-        weekdates, truncated_by_limit = split_probe_rows(weekdates, limit)
-
+        probed_weekdates = regime_queries.fetch_eligible_regime_weekdates(
+            conn, limit=probe_limit(limit), start_date=start_date
+        )
+        weekdates, truncated_by_limit = split_probe_rows(probed_weekdates, limit)
         if not weekdates:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "request_id": getattr(request.state, "request_id", None),
-                    "error": "no_signal_data",
-                    "message": "No Stock Trends weekdates available.",
-                },
-            )
+            raise _no_signal_data(request, "No classified canonical market weekdates available.")
+        aggregate_rows = regime_queries.fetch_regime_trend_aggregates(
+            conn, weekdates=weekdates
+        )
 
-        # Step 2: aggregate trend distribution for all resolved weekdates
-        # Placeholders built from DB-returned date objects — no user input in SQL
-        week_binds = {f"w{i}": wd for i, wd in enumerate(weekdates)}
-        placeholders = ", ".join(f":w{i}" for i in range(len(weekdates)))
-        agg_rows = conn.execute(
-            text(
-                f"""
-                SELECT
-                    weekdate,
-                    trend,
-                    COUNT(*)    AS cnt,
-                    AVG(rsi)    AS avg_rsi,
-                    AVG(mt_cnt) AS avg_mt_cnt
-                FROM st_data
-                WHERE weekdate IN ({placeholders})
-                  AND type = 'CS'
-                GROUP BY weekdate, trend
-                ORDER BY weekdate DESC, trend
-                """
-            ),
-            week_binds,
-        ).mappings().all()
-
-    # Group by weekdate (date objects as keys) and compute regime per week
-    week_groups: dict[date, list] = defaultdict(list)
-    for row in agg_rows:
-        week_groups[row["weekdate"]].append(row)
-
-    history = []
-    for wd in weekdates:
-        group = week_groups.get(wd, [])
-        if not group:
-            continue
-
-        bullish_cnt = 0
-        bearish_cnt = 0
-        total_cnt = 0
-        weighted_rsi = 0.0
-        weighted_mt_cnt = 0.0
-
-        for row in group:
-            cnt = int(row["cnt"] or 0)
-            trend = row["trend"] or ""
-            total_cnt += cnt
-            if trend in regime_service.BULLISH_TRENDS:
-                bullish_cnt += cnt
-            elif trend in regime_service.BEARISH_TRENDS:
-                bearish_cnt += cnt
-            weighted_rsi += float(row["avg_rsi"] or 0) * cnt
-            weighted_mt_cnt += float(row["avg_mt_cnt"] or 0) * cnt
-
-        if total_cnt == 0:
-            continue
-
-        bullish_pct = round(bullish_cnt / total_cnt, 4)
-        bearish_pct = round(bearish_cnt / total_cnt, 4)
-        regime_score = round(bullish_pct - bearish_pct, 4)
-
-        history.append({
-            "weekdate": str(wd),
-            "regime": regime_service.classify_regime(regime_score),
-            "confidence": regime_service.classify_confidence(regime_score),
-            "regime_score": regime_score,
-            "bullish_pct": bullish_pct,
-            "bearish_pct": bearish_pct,
-            "avg_rsi": round(weighted_rsi / total_cnt, 2),
-            "avg_mt_cnt": round(weighted_mt_cnt / total_cnt, 2),
-            "signal_count": total_cnt,
-        })
+    rows_by_week: dict[date, list[Any]] = defaultdict(list)
+    for row in aggregate_rows:
+        rows_by_week[row["weekdate"]].append(row)
+    history = [
+        snapshot
+        for weekdate in weekdates
+        if (snapshot := _regime_snapshot(weekdate, rows_by_week.get(weekdate, [])))
+        is not None
+    ]
 
     return {
         "history": history,
@@ -325,9 +230,9 @@ def market_regime_history(
     "/regime/forecast",
     summary="Forward-looking market regime forecast",
     description=(
-        "Returns a synthesized forward-looking regime outlook derived from the direction "
-        "and consistency of recent weekly regime scores. "
-        "Fully deterministic — no ML. Reuses the same trend classification as /regime/latest. "
+        "Returns a deterministic forward-looking canonical-equity regime outlook based "
+        "on the direction and consistency of classified weekly regime scores. "
+        "Fully deterministic — no ML. "
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )
@@ -341,78 +246,26 @@ def market_regime_forecast(
     ),
 ):
     engine = get_engine()
-
     with engine.connect() as conn:
-        # Step 1: resolve the N most recent weekdates
-        weekdate_rows = conn.execute(
-            text(
-                """
-                SELECT DISTINCT weekdate
-                FROM st_data
-                WHERE type = 'CS'
-                ORDER BY weekdate DESC
-                LIMIT :limit
-                """
-            ),
-            {"limit": lookback},
-        ).mappings().all()
-
-        weekdates = [r["weekdate"] for r in weekdate_rows if r["weekdate"]]
-
+        weekdates = regime_queries.fetch_eligible_regime_weekdates(conn, limit=lookback)
         if not weekdates:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "request_id": getattr(request.state, "request_id", None),
-                    "error": "no_signal_data",
-                    "message": "No Stock Trends weekdates available.",
-                },
-            )
-
-        # Step 2: aggregate trend distribution for all resolved weekdates
-        # Placeholders built from DB-returned date objects — no user input in SQL
-        week_binds = {f"w{i}": wd for i, wd in enumerate(weekdates)}
-        placeholders = ", ".join(f":w{i}" for i in range(len(weekdates)))
-        agg_rows = conn.execute(
-            text(
-                f"""
-                SELECT
-                    weekdate,
-                    trend,
-                    COUNT(*) AS cnt
-                FROM st_data
-                WHERE weekdate IN ({placeholders})
-                  AND type = 'CS'
-                GROUP BY weekdate, trend
-                ORDER BY weekdate DESC, trend
-                """
-            ),
-            week_binds,
-        ).mappings().all()
-
-    # Group by weekdate and compute regime_score per week (via service)
-    scores_by_week = regime_service.compute_scores_by_week(weekdates, agg_rows)
-
-    if not scores_by_week:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "request_id": getattr(request.state, "request_id", None),
-                "error": "no_signal_data",
-                "message": "Signal count is zero for the resolved weekdates.",
-            },
+            raise _no_signal_data(request, "No classified canonical market weekdates available.")
+        aggregate_rows = regime_queries.fetch_regime_trend_aggregates(
+            conn, weekdates=weekdates
         )
 
-    # Derive forecast signals — scores_by_week is most recent first
+    scores_by_week = regime_service.compute_scores_by_week(weekdates, aggregate_rows)
+    if not scores_by_week:
+        raise _no_signal_data(request, "Signal count is zero for the resolved weekdates.")
+
+    # Derive forecast signals — scores_by_week is most recent first.
     forecast = regime_service.compute_forecast_signals(scores_by_week)
-
-    scores = [s for _, s in scores_by_week]
-    current_wd, current_score = scores_by_week[0]
+    scores = [score for _, score in scores_by_week]
+    current_weekdate, current_score = scores_by_week[0]
     current_label = regime_service.classify_regime(current_score)
-
-    # Consistency: fraction of lookback weeks carrying the same regime label
+    # Consistency: fraction of lookback weeks carrying the same regime label.
     consistency_count = sum(
-        1 for s in scores if regime_service.classify_regime(s) == current_label
+        1 for score in scores if regime_service.classify_regime(score) == current_label
     )
     consistency_pct = consistency_count / len(scores)
 
@@ -427,8 +280,8 @@ def market_regime_forecast(
         "regime_consistency": round(consistency_pct, 4),
         "projected_regime_score": round(forecast["projected_score"], 4),
         "avg_weekly_score_delta": round(forecast["avg_delta"], 4),
-        "recent_scores": [round(s, 4) for s in scores],
+        "recent_scores": [round(score, 4) for score in scores],
         "weeks_analyzed": len(scores_by_week),
         "lookback": lookback,
-        "weekdate": str(current_wd),
+        "weekdate": str(current_weekdate),
     }

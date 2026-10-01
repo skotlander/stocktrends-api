@@ -1206,7 +1206,7 @@
       "name": "breadth_sector_latest",
       "analytical_role": "market_breadth_context",
       "title": "Sector Breadth Latest",
-      "description": "Returns the latest sector breadth snapshot derived from Stock Trends signal distribution across sectors. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns the latest sector breadth snapshot. The default population is canonical CS+UN equities across A/N/Q/T; total is the classified directional count and observed/coverage counts are returned separately. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/breadth/sector/latest",
       "auth_required": true,
@@ -1214,6 +1214,10 @@
       "access_type": "paid",
       "requires_payment": true,
       "pricing_rule_id": "breadth_sector_latest_paid",
+      "parameters": [
+        {"name": "population", "in": "query", "input_location": "query", "parameter_source": "query", "type": "string", "required": false, "default": "equities", "allowed_values": ["equities", "cs", "all"], "description": "equities=canonical CS+UN, cs=CS only, all=legacy unrestricted population. Conflicting cs_only is rejected."},
+        {"name": "cs_only", "in": "query", "input_location": "query", "parameter_source": "query", "type": "boolean", "required": false, "description": "Legacy alias: true=cs and false=all. Omit it for canonical equities; response cs_only is null when omitted."}
+      ],
       "stc_cost": null,
       "estimated_usd_cost": null,
       "supported_rails": ["subscription", "x402", "mpp"],
@@ -1223,8 +1227,10 @@
       "name": "breadth_sector_history",
       "analytical_role": "market_breadth_context",
       "title": "Sector Breadth History",
-      "description": "Returns historical sector, industry-group, or industry breadth derived from Stock Trends signal distribution. Use for breadth transition analysis and workflow context. Omitting start and end applies a bounded trailing 104-week window; the applied_bounds block on the response reports the window, the row limit, and whether the result was truncated. Omitting exchange returns breadth aggregated across all exchanges, one row per weekdate and sector, using the same aggregation as /breadth/sector/latest. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns historical sector, industry-group, or industry breadth. The default population is canonical CS+UN equities and omitted exchange uses the stored direct A/N/Q/T aggregate; population=all retains legacy raw broad semantics. total equals classified_count; bullish_pct and bearish_pct use classified_count, neutral_pct uses observed_count, and request coverage includes mapped/unmapped classified counts and mapped_coverage_ratio. Use for breadth transition analysis and workflow context. Omitting start and end applies a bounded trailing 104-week window; the applied_bounds block on the response reports the window, the row limit, and whether the result was truncated. Fetch /v1/pricing/catalog for current STC cost.",
       "parameters": [
+        {"name": "population", "in": "query", "input_location": "query", "parameter_source": "query", "type": "string", "required": false, "default": "equities", "allowed_values": ["equities", "cs", "all"], "description": "equities=canonical CS+UN, cs=CS only, all=legacy unrestricted population. cs_only is a legacy alias."},
+        {"name": "cs_only", "in": "query", "input_location": "query", "parameter_source": "query", "type": "boolean", "required": false, "description": "Legacy alias: true=cs and false=all. Conflicting population is rejected; response cs_only is null when omitted."},
         {"name": "limit", "in": "query", "input_location": "query", "parameter_source": "query", "type": "integer", "required": false, "default": 5000, "minimum": 1, "maximum": 500000, "description": "Safety limit across all rows returned. When start and end are both omitted, a trailing 104-week window ending at the latest available weekdate is applied as well."}
       ],
       "method": "GET",
@@ -1266,8 +1272,9 @@
       "name": "leadership_rotation_history",
       "analytical_role": "leadership_intelligence",
       "title": "Leadership Rotation History",
-      "description": "Returns historical sector leadership rotation over time with bullish share, average RSI, trend maturity, leadership_score, and weekly rank. Omitting start and end applies a bounded trailing 104-week window; the applied_bounds block on the response reports the window, the row limit, and whether the result was truncated. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns historical canonical-equity (CS+UN) sector leadership rotation by default, with nullable bullish share and leadership_score where the classified denominator is zero. Omitting start and end applies a bounded trailing 104-week window; the applied_bounds block on the response reports the window, the row limit, and whether the result was truncated. Fetch /v1/pricing/catalog for current STC cost.",
       "parameters": [
+        {"name": "type", "in": "query", "input_location": "query", "parameter_source": "query", "type": "string", "required": false, "default": "EQ", "description": "Canonical rotation population. EQ means CS+UN; CS remains a compatibility option."},
         {"name": "limit", "in": "query", "input_location": "query", "parameter_source": "query", "type": "integer", "required": false, "default": 2000, "minimum": 1, "maximum": 50000, "description": "Safety limit across all rows returned. When start and end are both omitted, a trailing 104-week window ending at the latest available weekdate is applied as well."}
       ],
       "method": "GET",
