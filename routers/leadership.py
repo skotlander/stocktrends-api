@@ -6,6 +6,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
@@ -74,6 +75,12 @@ def _validate_summary_exchange_values(request: Request, values: dict) -> None:
             status_code=400,
             detail=f"Invalid exchange '{exchange}'. Must be one of {sorted(VALID_EXCHANGES)}",
         )
+    type_ = values.get("type")
+    if type_ is not None and type_.strip().upper() == "EQ":
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid type 'EQ'. leadership summary supports its CS-compatible types only.",
+        )
 
 
 
@@ -121,6 +128,27 @@ def _latest_rotation_weekdate(engine, exchange: str | None, type_: str) -> Any |
     with engine.connect() as conn:
         row = conn.execute(text(sql), params).mappings().first()
     return row["wd"] if row else None
+
+
+def _current_rotation_summary_anchor(
+    engine, exchange: str | None, type_: str
+) -> Any | None:
+    """Return a current shadow anchor, otherwise select the existing raw path."""
+    if not _use_rotation_summary(type_, exchange):
+        return None
+    try:
+        shadow_weekdate = _latest_rotation_weekdate(engine, exchange, type_)
+    except DBAPIError:
+        # Only the optional published-shadow lookup is recoverable here. Raw
+        # anchor and aggregation failures remain visible to the caller.
+        return None
+    if not shadow_weekdate:
+        return None
+
+    raw_weekdate = _latest_weekdate(engine, exchange, type_)
+    if raw_weekdate and str(shadow_weekdate) < str(raw_weekdate):
+        return None
+    return shadow_weekdate
 
 
 def _where_date_clause(params: dict[str, Any], start: str | None, end: str | None) -> str:
@@ -313,7 +341,10 @@ def leadership_summary_latest(
     request: Request,
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
     weekdate: str | None = Query(default=None, description="Override weekdate YYYY-MM-DD; default latest for exchange/type"),
-    type: str = Query(default="CS", description="Instrument type filter (default CS)"),
+    type: str = Query(
+        default="CS",
+        description="CS-compatible instrument type filter (default CS); EQ is not supported on this endpoint.",
+    ),
     min_rsi: int = Query(default=110, ge=0, le=500, description="Minimum RSI threshold"),
     min_mt_cnt: int = Query(default=4, ge=0, le=500, description="Minimum mt_cnt threshold"),
     limit_overall: int = Query(default=50, ge=1, le=1000, description="Overall leaders limit"),
@@ -481,7 +512,7 @@ def leadership_summary_latest(
 @pre_payment_semantic_validator(_validate_exchange_values)
 def leadership_rotation_history(
     request: Request,
-    exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
+    exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I, or * for canonical A/N/Q/T aggregate"),
     start: str | None = Query(default=None, description="Start date YYYY-MM-DD (inclusive)"),
     end: str | None = Query(default=None, description="End date YYYY-MM-DD (inclusive)"),
     type: str = Query(default="EQ", description="Canonical rotation population: EQ (CS+UN) by default; CS remains available for compatibility."),
@@ -511,7 +542,16 @@ def leadership_rotation_history(
     engine = get_engine()
     ex = _norm_exchange(exchange) if exchange else None
     normalized_type = _norm_rotation_type(type)
-    use_summary = _use_rotation_summary(normalized_type, ex)
+    # The shadow's omitted-exchange row is the stored canonical A/N/Q/T
+    # aggregate. Keep that same effective scope if the shadow is unavailable
+    # or stale, so a fallback cannot widen into legacy B/I exchanges.
+    effective_exchange = (
+        "*" if ex is None and _use_rotation_summary(normalized_type, ex) else ex
+    )
+    summary_anchor = _current_rotation_summary_anchor(
+        engine, effective_exchange, normalized_type
+    )
+    use_summary = summary_anchor is not None
 
     # Service shaping, applied behind the payment boundary alongside the query
     # it bounds — not in the pre-payment validator, which only rejects requests
@@ -519,7 +559,11 @@ def leadership_rotation_history(
     effective_start, effective_end, window_source = resolve_history_window(
         start=start,
         end=end,
-        anchor_weekdate=lambda: _latest_rotation_weekdate(engine, ex, normalized_type),
+        anchor_weekdate=lambda: (
+            summary_anchor
+            if use_summary
+            else _latest_weekdate(engine, effective_exchange, normalized_type)
+        ),
     )
     limit_source = (
         LIMIT_SOURCE_CALLER if "limit" in request.query_params else LIMIT_SOURCE_DEFAULT
@@ -527,7 +571,7 @@ def leadership_rotation_history(
 
     sql_builder = _rotation_summary_sql if use_summary else _rotation_raw_sql
     sql, params = sql_builder(
-        type_=normalized_type, exchange=ex, start=effective_start, end=effective_end,
+        type_=normalized_type, exchange=effective_exchange, start=effective_start, end=effective_end,
         min_constituents=min_constituents, top_k=top_k, limit=probe_limit(limit),
     )
 
@@ -561,7 +605,7 @@ def leadership_rotation_history(
     if not group_by_week:
         return {
             "request_id": request.state.request_id,
-            "exchange": ex or ("*" if use_summary else None),
+            "exchange": effective_exchange,
             "start": start,
             "end": end,
             "filters": {"type": normalized_type, "min_constituents": min_constituents, "top_k": top_k},
@@ -587,7 +631,7 @@ def leadership_rotation_history(
 
     return {
         "request_id": request.state.request_id,
-        "exchange": ex or ("*" if use_summary else None),
+        "exchange": effective_exchange,
         "start": start,
         "end": end,
         "filters": {"type": normalized_type, "min_constituents": min_constituents, "top_k": top_k},

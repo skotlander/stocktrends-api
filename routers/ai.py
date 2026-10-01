@@ -495,31 +495,33 @@ _TOOL_TEMPLATES = [
         "title": "Current Market Regime",
         "description": (
             "Returns the current market regime classification derived from the distribution "
-            "of Stock Trends trend codes across all active signals. "
+            "of directional Stock Trends trend codes for canonical CS+UN equities across A/N/Q/T. "
             "regime_score = bullish_pct - bearish_pct, range -1.0 to +1.0. "
             "Bullish codes: {^+, ^-, v^}. Bearish codes: {v-, v+, ^v}. "
-            "Also returns avg_rsi (universe relative performance) and avg_mt_cnt (universe trend maturity)."
+            "Neutral and unclassified observations are excluded from the directional denominator. "
+            "Also returns avg_rsi and avg_mt_cnt, which can be null when no valid observations contribute."
         ),
         "endpoint": "/v1/market/regime/latest",
         "method": "GET",
         "category": "market",
         "input_schema": {"type": "object", "properties": {}, "required": []},
-        "output_summary": "regime, confidence, regime_score, bullish_pct, bearish_pct, avg_rsi, avg_mt_cnt, signal_count, weekdate.",
+        "output_summary": "regime, confidence, regime_score, bullish_pct, bearish_pct, avg_rsi, avg_mt_cnt, signal_count (classified_count compatibility field), classified_count, observed_count, neutral_count, unclassified_count, population, weekdate.",
     },
     {
         "name": "market_regime_history",
         "title": "Market Regime History",
         "description": (
             "Returns a historical sequence of weekly market regime snapshots, most recent first. "
-            "Each entry uses the same classification logic as /market/regime/latest. "
+            "Each entry uses the same canonical CS+UN A/N/Q/T directional classification logic as /market/regime/latest; "
             "regime_score = bullish_pct - bearish_pct per week. "
+            "Neutral and unclassified observations are excluded from the directional denominator. "
             "Useful for trend context and regime transition analysis."
         ),
         "endpoint": "/v1/market/regime/history",
         "method": "GET",
         "category": "market",
         "input_schema": {"type": "object", "properties": {}, "required": []},
-        "output_summary": "history[](weekdate, regime, confidence, regime_score, bullish_pct, bearish_pct, avg_rsi, avg_mt_cnt, signal_count), count, limit.",
+        "output_summary": "history[](weekdate, regime, confidence, regime_score, bullish_pct, bearish_pct, avg_rsi, avg_mt_cnt, signal_count, classified_count, observed_count, neutral_count, unclassified_count, population), count, limit.",
     },
     {
         "name": "market_regime_forecast",

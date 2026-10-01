@@ -19,6 +19,7 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
@@ -148,6 +149,41 @@ def _explicit_shadow_range_available(
     return (start is None or floor <= start <= high_water) and (
         end is None or floor <= end <= high_water
     )
+
+
+def _current_summary_shadow_anchor(
+    engine,
+    exchange: str | None,
+    population: Population,
+    *,
+    start: str | None = None,
+    end: str | None = None,
+) -> Any | None:
+    """Return a usable shadow anchor, or select the existing raw path.
+
+    The shadow is a serving-db publication optimization, not an authoritative
+    source. Its availability checks are isolated here: a failed shadow lookup
+    is recoverable, while the raw anchor lookup below remains outside that
+    handler so a raw-data failure is never hidden.
+    """
+    try:
+        shadow_weekdate = _latest_summary_weekdate(engine, exchange, population)
+        if not shadow_weekdate:
+            return None
+        if (start is not None or end is not None) and not _explicit_shadow_range_available(
+            engine, exchange, population, start, end
+        ):
+            return None
+    except DBAPIError:
+        # Only the optional published-shadow availability probe is recoverable.
+        return None
+
+    raw_weekdate = _latest_weekdate(
+        engine, exchange, canonical=population != "all"
+    )
+    if raw_weekdate and str(shadow_weekdate) < str(raw_weekdate):
+        return None
+    return shadow_weekdate
 
 
 def _group_cols(level: GroupLevel) -> tuple[str, str]:
@@ -504,15 +540,19 @@ def breadth_sector_latest(
         level=group_level, population=resolved_population, include_unknown=include_unknown,
         min_price=min_price, min_volume=min_volume, exchange=ex,
     )
-    if use_summary and weekdate is not None:
-        use_summary = _explicit_shadow_range_available(
-            engine, ex, resolved_population, weekdate, weekdate
+    summary_anchor = (
+        _current_summary_shadow_anchor(
+            engine, ex, resolved_population, start=weekdate, end=weekdate
         )
+        if use_summary
+        else None
+    )
+    use_summary = summary_anchor is not None
 
     wd = weekdate
     if wd is None:
         latest = (
-            _latest_summary_weekdate(engine, ex, resolved_population)
+            summary_anchor
             if use_summary
             else _latest_weekdate(engine, ex, canonical=resolved_population != "all")
         )
@@ -604,10 +644,14 @@ def breadth_sector_history(
         level=group_level, population=resolved_population, include_unknown=include_unknown,
         min_price=min_price, min_volume=min_volume, exchange=ex,
     )
-    if use_summary and (start is not None or end is not None):
-        use_summary = _explicit_shadow_range_available(
-            engine, ex, resolved_population, start, end
+    summary_anchor = (
+        _current_summary_shadow_anchor(
+            engine, ex, resolved_population, start=start, end=end
         )
+        if use_summary
+        else None
+    )
+    use_summary = summary_anchor is not None
 
     # Bounding runs here, inside paid execution, rather than in the registered
     # pre-payment validator: it shapes the work performed, it does not decide
@@ -616,7 +660,7 @@ def breadth_sector_history(
         start=start,
         end=end,
         anchor_weekdate=lambda: (
-            _latest_summary_weekdate(engine, ex, resolved_population)
+            summary_anchor
             if use_summary
             else _latest_weekdate(engine, ex, canonical=resolved_population != "all")
         ),

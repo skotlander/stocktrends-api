@@ -25,6 +25,7 @@ from routers.breadth import (  # noqa: E402
 from routers.leadership import _latest_weekdate, _rotation_raw_sql, _rotation_summary_sql, leadership_rotation_history, leadership_summary_latest  # noqa: E402
 import routers.leadership as leadership_router  # noqa: E402
 from discovery.endpoint_metadata import get_endpoint_metadata  # noqa: E402
+from routers.ai import ai_tools  # noqa: E402
 
 
 @pytest.mark.parametrize(
@@ -237,3 +238,37 @@ def test_discovery_and_static_breadth_contracts_declare_population_and_coverage(
     rotation = get_endpoint_metadata("/v1/leadership/rotation/history", "GET")
     assert rotation["optional_inputs"]["type"]["safe_default"] == "EQ"
     assert rotation["safe_example_request"]["query"]["type"] == "EQ"
+
+
+def test_regime_and_leadership_discovery_match_current_canonical_contract():
+    latest = get_endpoint_metadata("/v1/market/regime/latest", "GET")
+    history = get_endpoint_metadata("/v1/market/regime/history", "GET")
+    required = {
+        "classified_count", "observed_count", "neutral_count",
+        "unclassified_count", "population",
+    }
+
+    assert required <= set(latest["response_shape"])
+    assert {f"history[].{field}" for field in required} <= set(history["response_shape"])
+    regime_text = " ".join([
+        latest["resource_description"], latest["output_summary"],
+        *latest["interpretation_guidance"]["interpretation_rules"],
+    ]).lower()
+    assert "all active" not in regime_text
+    assert "cs+un" in regime_text and "a/n/q/t" in regime_text
+
+    live = {tool["name"]: tool for tool in ai_tools()["tools"]}
+    assert "all active" not in live["market_regime_latest"]["description"].lower()
+    assert "classified_count" in live["market_regime_latest"]["output_summary"]
+
+    summary = get_endpoint_metadata("/v1/leadership/summary/latest", "GET")
+    assert "EQ is not supported" in summary["optional_inputs"]["type"]["description"]
+    rotation = get_endpoint_metadata("/v1/leadership/rotation/history", "GET")
+    assert "*" in rotation["optional_inputs"]["exchange"]["enum"]
+
+    manifest = json.loads((Path(__file__).parents[1] / "static" / "tools.json").read_text())
+    tools = {tool["name"]: tool for tool in manifest["tools"]}
+    assert "all active" not in tools["market_regime_latest"]["description"].lower()
+    assert "type=EQ is not supported" in tools["leadership_summary_latest"]["description"]
+    rotation_params = {item["name"]: item for item in tools["leadership_rotation_history"]["parameters"]}
+    assert "*" in rotation_params["exchange"]["allowed_values"]

@@ -266,9 +266,8 @@ def test_breadth_population_conflict_unpaid_never_settles_or_executes(
         headers=unpaid_headers(),
     )
 
-    # Current generic middleware may challenge an unpaid request before its
-    # endpoint wrapper runs. Either way it cannot settle or execute data.
-    assert response.status_code in {400, 402}
+    # Unpaid requests are challenged before the endpoint wrapper runs.
+    assert response.status_code == 402
     assert executed is False
     _assert_no_settlement(payment_harness)
 
@@ -285,6 +284,42 @@ def test_leadership_summary_star_exchange_rejects_before_settlement_or_data(
     )
     assert response.status_code == 400
     _assert_no_settlement(payment_harness)
+
+
+def test_leadership_summary_eq_rejects_before_settlement_or_data(
+    payment_harness, monkeypatch
+):
+    def forbidden_engine():
+        raise AssertionError("summary/latest type=EQ reached data execution")
+
+    monkeypatch.setattr(leadership_router, "get_engine", forbidden_engine)
+    response = payment_harness.client.get(
+        "/v1/leadership/summary/latest?type=EQ",
+        headers=x402_headers(reference="summary-eq"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == (
+        "Invalid type 'EQ'. leadership summary supports its CS-compatible types only."
+    )
+    _assert_no_settlement(payment_harness)
+
+
+def test_leadership_summary_eq_rejects_before_mpp_authorization(
+    payment_harness, monkeypatch
+):
+    monkeypatch.setattr(
+        leadership_router,
+        "get_engine",
+        lambda: (_ for _ in ()).throw(AssertionError("summary/latest type=EQ reached data execution")),
+    )
+    response = payment_harness.client.get(
+        "/v1/leadership/summary/latest?type=EQ", headers=mpp_headers(reference="summary-eq-mpp")
+    )
+
+    assert response.status_code == 400
+    assert payment_harness.mpp.authorize_count == 0
+    assert payment_harness.mpp.capture_count == 0
 
 
 # ===========================================================================
