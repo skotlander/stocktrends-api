@@ -36,6 +36,8 @@ from decimal import Decimal
 import pytest
 
 import routers.decision as decision_router
+import routers.breadth as breadth_router
+import routers.leadership as leadership_router
 import routers.portfolio as portfolio_router
 import routers.prices as prices_router
 import routers.screener as screener_router
@@ -201,6 +203,64 @@ def test_07b_semantic_invalid_enum_body_does_not_settle(payment_harness):
 
     assert response.status_code == 400
     assert response.json()["detail"]["error"] == "invalid_bias"
+    _assert_no_settlement(payment_harness)
+
+
+def test_breadth_population_conflict_with_presented_x402_never_settles_or_executes(
+    payment_harness, monkeypatch
+):
+    executed = False
+
+    def forbidden_engine():
+        nonlocal executed
+        executed = True
+        raise AssertionError("conflicting breadth request reached data execution")
+
+    monkeypatch.setattr(breadth_router, "get_engine", forbidden_engine)
+    response = payment_harness.client.get(
+        "/v1/breadth/sector/latest?population=equities&cs_only=true",
+        headers=x402_headers(reference="breadth-conflict"),
+    )
+
+    assert response.status_code == 400
+    assert executed is False
+    _assert_no_settlement(payment_harness)
+
+
+def test_breadth_population_conflict_unpaid_never_settles_or_executes(
+    payment_harness, monkeypatch
+):
+    executed = False
+
+    def forbidden_engine():
+        nonlocal executed
+        executed = True
+        raise AssertionError("conflicting breadth request reached data execution")
+
+    monkeypatch.setattr(breadth_router, "get_engine", forbidden_engine)
+    response = payment_harness.client.get(
+        "/v1/breadth/sector/latest?population=equities&cs_only=true",
+        headers=unpaid_headers(),
+    )
+
+    # Current generic middleware may challenge an unpaid request before its
+    # endpoint wrapper runs. Either way it cannot settle or execute data.
+    assert response.status_code in {400, 402}
+    assert executed is False
+    _assert_no_settlement(payment_harness)
+
+
+def test_leadership_summary_star_exchange_rejects_before_settlement_or_data(
+    payment_harness, monkeypatch
+):
+    def forbidden_engine():
+        raise AssertionError("summary/latest exchange=* reached data execution")
+
+    monkeypatch.setattr(leadership_router, "get_engine", forbidden_engine)
+    response = payment_harness.client.get(
+        "/v1/leadership/summary/latest?exchange=*", headers=x402_headers(reference="summary-star")
+    )
+    assert response.status_code == 400
     _assert_no_settlement(payment_harness)
 
 

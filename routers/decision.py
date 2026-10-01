@@ -9,7 +9,8 @@ from sqlalchemy import text
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
 from routers.signals import VALID_EXCHANGES, parse_symbol_exchange
-from services import decision_service, regime_service
+from services import decision_service, regime_queries, regime_service
+from services.market_semantics import CANONICAL_EQUITY_TYPES
 
 router = APIRouter(prefix="/decision", tags=["decision"])
 
@@ -156,21 +157,10 @@ def evaluate_symbol(body: EvaluateSymbolRequest, request: Request):
 
     with engine.connect() as conn:
 
-        # --- Step 1: Resolve most recent N weekdates for regime + latest_wd for symbol ---
-        weekdate_rows = conn.execute(
-            text(
-                """
-                SELECT DISTINCT weekdate
-                FROM st_data
-                WHERE type = 'CS'
-                ORDER BY weekdate DESC
-                LIMIT :limit
-                """
-            ),
-            {"limit": _FORECAST_LOOKBACK},
-        ).mappings().all()
-
-        weekdates = [r["weekdate"] for r in weekdate_rows if r["weekdate"]]
+        # --- Step 1: Resolve canonical market-regime weeks ---
+        weekdates = regime_queries.fetch_eligible_regime_weekdates(
+            conn, limit=_FORECAST_LOOKBACK
+        )
         if not weekdates:
             raise HTTPException(
                 status_code=503,
@@ -183,7 +173,11 @@ def evaluate_symbol(body: EvaluateSymbolRequest, request: Request):
 
         latest_wd = weekdates[0]
 
-        # --- Step 2: Symbol lookup for the latest weekdate ---
+        # --- Step 2: Requested listed-equity lookup for the latest weekdate ---
+        symbol_type_binds = {
+            f"symbol_type_{index}": instrument_type
+            for index, instrument_type in enumerate(CANONICAL_EQUITY_TYPES)
+        }
         sym_row = conn.execute(
             text(
                 """
@@ -201,11 +195,16 @@ def evaluate_symbol(body: EvaluateSymbolRequest, request: Request):
                 WHERE symbol   = :symbol
                   AND exchange = :exchange
                   AND weekdate = :weekdate
-                  AND type     = 'CS'
+                  AND type IN (:symbol_type_0, :symbol_type_1)
                 LIMIT 1
                 """
             ),
-            {"symbol": s, "exchange": ex, "weekdate": latest_wd},
+            {
+                "symbol": s,
+                "exchange": ex,
+                "weekdate": latest_wd,
+                **symbol_type_binds,
+            },
         ).mappings().first()
 
         if sym_row is None:
@@ -221,25 +220,10 @@ def evaluate_symbol(body: EvaluateSymbolRequest, request: Request):
                 },
             )
 
-        # --- Step 3: Regime aggregation for all lookback weekdates ---
-        week_binds = {f"w{i}": wd for i, wd in enumerate(weekdates)}
-        placeholders = ", ".join(f":w{i}" for i in range(len(weekdates)))
-        agg_rows = conn.execute(
-            text(
-                f"""
-                SELECT
-                    weekdate,
-                    trend,
-                    COUNT(*) AS cnt
-                FROM st_data
-                WHERE weekdate IN ({placeholders})
-                  AND type = 'CS'
-                GROUP BY weekdate, trend
-                ORDER BY weekdate DESC, trend
-                """
-            ),
-            week_binds,
-        ).mappings().all()
+        # --- Step 3: Canonical regime aggregation for all lookback weekdates ---
+        agg_rows = regime_queries.fetch_regime_trend_aggregates(
+            conn, weekdates=weekdates
+        )
 
     # --- Compute regime context ---
     scores_by_week = regime_service.compute_scores_by_week(weekdates, agg_rows)

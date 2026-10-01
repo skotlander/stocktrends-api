@@ -28,13 +28,8 @@ from routers.leadership import _rotation_summary_sql  # noqa: E402
 
 class TestUseSectorSummary:
     """
-    The summary fast-path is only usable for a single-exchange request.
-
-    st_sector_summary is aggregated per (weekdate, sector, exchange, type). A
-    single-exchange request reads exactly one stored row per (weekdate, sector);
-    an all-exchange request would read one row per exchange for the same
-    (weekdate, sector_code), which the projection does not label. All-exchange
-    breadth therefore falls through to the raw st_data aggregation.
+    The shadow summary supports the stored `*` direct A/N/Q/T aggregate as well
+    as individual canonical reporting exchanges.
     """
 
     def _call(self, **kw):
@@ -46,8 +41,8 @@ class TestUseSectorSummary:
     def test_single_exchange_defaults_true(self):
         assert self._call() is True
 
-    def test_all_exchange_request_falls_back_to_raw_aggregation(self):
-        assert self._call(exchange=None) is False
+    def test_all_exchange_request_uses_direct_shadow_aggregate(self):
+        assert self._call(exchange=None) is True
 
     def test_industry_group_false(self):
         assert self._call(level="industry_group") is False
@@ -55,7 +50,7 @@ class TestUseSectorSummary:
     def test_industry_false(self):
         assert self._call(level="industry") is False
 
-    def test_cs_only_false_fallback(self):
+    def test_legacy_cs_only_false_fallback(self):
         assert self._call(cs_only=False) is False
 
     def test_include_unknown_true_fallback(self):
@@ -75,15 +70,17 @@ class TestUseSectorSummary:
 class TestBreadthSummarySql:
     def test_references_summary_table(self):
         sql, _ = _breadth_summary_sql(start=None, end=None, exchange=None)
-        assert "st_sector_summary" in sql
+        assert "st_sector_summary_shadow" in sql
+        assert "FROM st_sector_summary ss" not in sql
 
     def test_does_not_reference_st_data(self):
         sql, _ = _breadth_summary_sql(start=None, end=None, exchange=None)
         assert "st_data" not in sql
 
-    def test_cs_filter_hardcoded(self):
-        sql, _ = _breadth_summary_sql(start=None, end=None, exchange=None)
-        assert "ss.type = 'CS'" in sql
+    def test_equity_filter_is_parameterized(self):
+        sql, params = _breadth_summary_sql(start=None, end=None, exchange=None)
+        assert "ss.type = :type" in sql
+        assert params["type"] == "EQ"
 
     def test_exchange_param_emitted(self):
         sql, params = _breadth_summary_sql(start=None, end=None, exchange="N")
@@ -118,9 +115,9 @@ class TestBreadthSummarySql:
         sql, _ = _breadth_summary_sql(start=None, end=None, exchange=None)
         assert "st_listsectorsandindustries" not in sql
 
-    def test_no_exchange_param_when_omitted(self):
+    def test_omitted_exchange_uses_stored_direct_aggregate(self):
         _, params = _breadth_summary_sql(start=None, end=None, exchange=None)
-        assert "exchange" not in params
+        assert params["exchange"] == "*"
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +169,8 @@ class TestRotationSummarySql:
 
     def test_references_summary_table(self):
         sql, _ = self._call()
-        assert "st_sector_summary" in sql
+        assert "st_sector_summary_shadow" in sql
+        assert "FROM st_sector_summary ss" not in sql
 
     def test_does_not_reference_st_data(self):
         sql, _ = self._call()

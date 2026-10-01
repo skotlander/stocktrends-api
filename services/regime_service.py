@@ -10,8 +10,8 @@ from collections import defaultdict
 from datetime import date
 from typing import Any
 
-BULLISH_TRENDS: frozenset[str] = frozenset({"^+", "^-", "v^"})
-BEARISH_TRENDS: frozenset[str] = frozenset({"v-", "v+", "^v"})
+from services.market_semantics import BEARISH_TRENDS, BULLISH_TRENDS
+
 DIRECTION_THRESHOLD: float = 0.02
 
 
@@ -67,23 +67,25 @@ def forecast_confidence(
 def compute_regime_score(rows: list[Any]) -> float | None:
     """
     Given a list of rows with 'cnt' and 'trend' keys,
-    compute regime_score = (bullish_cnt - bearish_cnt) / total_cnt.
-    Returns None if total_cnt == 0.
+    compute regime_score = (bullish_cnt - bearish_cnt) / classified_cnt.
+    Neutral and unknown trend states are excluded. Returns None if no rows are
+    classified as bullish or bearish.
     """
     bullish_cnt = 0
     bearish_cnt = 0
-    total_cnt = 0
+    classified_cnt = 0
     for row in rows:
         cnt = int(row["cnt"] or 0)
         trend = row["trend"] or ""
-        total_cnt += cnt
         if trend in BULLISH_TRENDS:
             bullish_cnt += cnt
+            classified_cnt += cnt
         elif trend in BEARISH_TRENDS:
             bearish_cnt += cnt
-    if total_cnt == 0:
+            classified_cnt += cnt
+    if classified_cnt == 0:
         return None
-    return (bullish_cnt - bearish_cnt) / total_cnt
+    return (bullish_cnt - bearish_cnt) / classified_cnt
 
 
 def compute_scores_by_week(

@@ -33,6 +33,7 @@ from discovery.x402_discovery import build_x402_discovery
 from payments import policy_provider
 from routers.ai import ai_context, ai_proof_market_edge, ai_tools
 from routers.workflows import WORKFLOW_REGISTRY
+from services import regime_queries
 from utils.history_bounds import HISTORY_ENDPOINT_BOUNDS, probe_limit
 
 # ===========================================================================
@@ -187,7 +188,7 @@ def engine_on(monkeypatch):
     def _install(module, responder):
         engine = RecordingEngine(responder)
         monkeypatch.setattr(module, "get_engine", lambda: engine)
-        monkeypatch.setattr(module, "text", lambda sql: sql)
+        monkeypatch.setattr(regime_queries, "text", lambda sql: sql)
         return engine
 
     return _install
@@ -212,7 +213,15 @@ def _regime_responder(available_weeks: list[date]):
             return [{"weekdate": w} for w in eligible[: params["limit"]]]
         # Aggregation: one bullish row per bound weekdate.
         return [
-            {"weekdate": wd, "trend": "^+", "cnt": 100, "avg_rsi": 105.0, "avg_mt_cnt": 9.0}
+            {
+                "weekdate": wd,
+                "trend": "^+",
+                "cnt": 100,
+                "valid_rsi_sum": 10500.0,
+                "valid_rsi_count": 100,
+                "mt_cnt_sum": 900.0,
+                "mt_cnt_count": 100,
+            }
             for wd in params.values()
             if isinstance(wd, date)
         ]
@@ -327,7 +336,15 @@ def _install(monkeypatch, module_name: str, row_count: int):
             return [{"weekdate": w} for w in weeks]
         if module_name == "routers.market":
             return [
-                {"weekdate": wd, "trend": "^+", "cnt": 100, "avg_rsi": 105.0, "avg_mt_cnt": 9.0}
+                {
+                    "weekdate": wd,
+                    "trend": "^+",
+                    "cnt": 100,
+                    "valid_rsi_sum": 10500.0,
+                    "valid_rsi_count": 100,
+                    "mt_cnt_sum": 900.0,
+                    "mt_cnt_count": 100,
+                }
                 for wd in params.values()
                 if isinstance(wd, date)
             ]
@@ -335,7 +352,10 @@ def _install(monkeypatch, module_name: str, row_count: int):
 
     engine = RecordingEngine(responder)
     monkeypatch.setattr(module, "get_engine", lambda: engine)
-    monkeypatch.setattr(module, "text", lambda sql: sql)
+    if module_name == "routers.market":
+        monkeypatch.setattr(regime_queries, "text", lambda sql: sql)
+    else:
+        monkeypatch.setattr(module, "text", lambda sql: sql)
     return engine
 
 
