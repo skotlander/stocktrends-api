@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
+from decimal import Decimal
 import json
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -39,7 +40,7 @@ _LATEST_ROW = {
     "previous_epoch_id": "BULLISH_MATURITY",
     "weeks_in_epoch": 16,
     "changed_this_week": 0,
-    "classified_at": datetime(2026, 9, 26, 1, 2, 3, 456789),
+    "classified_at_unix": Decimal("1790886903.176735"),
 }
 
 
@@ -90,8 +91,13 @@ def test_epoch_queries_read_only_frozen_persisted_table_with_bound_parameters(mo
     for sql in (latest_sql, history_sql):
         assert "FROM st_market_epoch" in sql
         assert "model_version = :model_version" in sql
+        assert "UNIX_TIMESTAMP(classified_at) AS classified_at_unix" in sql
+        assert "CONVERT_TZ(" not in sql
         assert "st_data" not in sql
-        assert "stdata" not in sql
+        assert "stdata." not in sql
+        assert "INSERT" not in sql
+        assert "UPDATE" not in sql
+        assert "DELETE" not in sql
     assert "ORDER BY weekdate DESC" in latest_sql
     assert "LIMIT 1" in latest_sql
     assert latest_params == {"model_version": epoch_queries.EPOCH_V1_MODEL_VERSION}
@@ -119,7 +125,20 @@ def test_latest_returns_persisted_snapshot_without_recomputation(monkeypatch):
     assert body["model_payload_sha256"] == _LATEST_ROW["model_payload_sha256"]
     assert body["classifier_code_sha"] == _LATEST_ROW["classifier_code_sha"]
     assert body["weekdate"] == "2026-09-25"
-    assert body["classified_at"] == "2026-09-26T01:02:03.456789"
+    assert body["classified_at"] == "2026-10-01T20:35:03.176735+00:00"
+    assert "classified_at_unix" not in body
+
+
+def test_epoch_snapshot_converts_unix_timestamp_to_exact_utc_datetime():
+    snapshot = market._epoch_snapshot({"classified_at_unix": Decimal("1790886903.176735")})
+    assert snapshot["classified_at"] == datetime(
+        2026, 10, 1, 20, 35, 3, 176735, tzinfo=timezone.utc
+    )
+    assert "classified_at_unix" not in snapshot
+
+
+def test_epoch_snapshot_preserves_null_classified_at():
+    assert market._epoch_snapshot({"classified_at_unix": None}) == {"classified_at": None}
 
 
 def test_latest_and_history_first_snapshot_are_identical(monkeypatch):
@@ -193,6 +212,7 @@ def test_epoch_semantic_contract_and_static_history_shape_are_aligned():
     for term in (
         "## Market Epoch v1", "epoch_id", "epoch_name", "raw_cluster_id", "weeks_in_epoch",
         "changed_this_week", "assigned_distance", "second_nearest_distance", "separation_margin",
+        "classified_at", "UTC provenance timestamp",
         "BROAD_BULLISH", "BEARISH_MATURITY", "BULLISH_MATURITY", "persisted `0` or `1` flag",
         "not a trade signal", "not a forward-return forecast", "not causal AI",
     ):

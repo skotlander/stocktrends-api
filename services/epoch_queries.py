@@ -33,7 +33,7 @@ _EPOCH_COLUMNS = """
     previous_epoch_id,
     weeks_in_epoch,
     changed_this_week,
-    classified_at
+    UNIX_TIMESTAMP(classified_at) AS classified_at_unix
 """
 
 

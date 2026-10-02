@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, ROUND_FLOOR
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -117,9 +118,30 @@ def _regime_snapshot(weekdate: date, rows: list[Any]) -> dict[str, Any] | None:
     }
 
 
+_UTC_UNIX_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _utc_datetime_from_unix_seconds(value: Any) -> datetime:
+    """Convert an exact MySQL TIMESTAMP Unix value to an aware UTC datetime."""
+    unix_seconds = value if isinstance(value, Decimal) else Decimal(str(value))
+    whole_seconds = int(unix_seconds.to_integral_value(rounding=ROUND_FLOOR))
+    microseconds = int((unix_seconds - whole_seconds) * 1_000_000)
+    return _UTC_UNIX_EPOCH + timedelta(
+        seconds=whole_seconds,
+        microseconds=microseconds,
+    )
+
+
 def _epoch_snapshot(row: Any) -> dict[str, Any]:
     """Expose one persisted Epoch snapshot without recomputation or remapping."""
-    return dict(row)
+    snapshot = dict(row)
+    classified_at_unix = snapshot.pop("classified_at_unix", None)
+    snapshot["classified_at"] = (
+        _utc_datetime_from_unix_seconds(classified_at_unix)
+        if classified_at_unix is not None
+        else None
+    )
+    return snapshot
 
 
 def _validate_epoch_history_date_range(request: Request, values: dict[str, Any]) -> None:
