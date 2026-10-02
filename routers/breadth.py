@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -38,6 +39,7 @@ from utils.history_bounds import (
 )
 
 router = APIRouter(prefix="/breadth", tags=["breadth"])
+logger = logging.getLogger("stocktrends_api.breadth")
 
 GroupLevel = Literal["sector", "industry_group", "industry"]
 Population = Literal["equities", "cs", "all"]
@@ -83,6 +85,11 @@ def _resolve_population(population: str | None, cs_only: bool | None) -> Populat
             detail="population conflicts with cs_only; use population=cs with cs_only=true or population=all with cs_only=false",
         )
     return population or legacy_population or "equities"
+
+
+def _optional_date(value: str | None) -> str | None:
+    """Normalize blank optional date query values to their omitted form."""
+    return value.strip() or None if value is not None else None
 
 
 def _validate_exchange_values(request: Request, values: dict) -> None:
@@ -132,10 +139,14 @@ def _latest_summary_weekdate(engine, exchange: str | None, population: Populatio
     return row["weekdate"] if row else None
 
 
+class _ShadowServingUnavailable(Exception):
+    """The published canonical breadth serving representation is unavailable."""
+
+
 def _explicit_shadow_range_available(
     engine, exchange: str | None, population: Population, start: str | None, end: str | None,
-) -> bool:
-    """Use shadow only when every explicitly requested boundary is materialized."""
+) -> bool | None:
+    """Return range availability; None means the serving artifact is unavailable."""
     sql = text(
         "SELECT MIN(weekdate) AS min_weekdate, MAX(weekdate) AS max_weekdate "
         "FROM st_sector_summary_shadow WHERE type = :type AND exchange = :exchange"
@@ -144,10 +155,15 @@ def _explicit_shadow_range_available(
     with engine.connect() as conn:
         row = conn.execute(sql, params).mappings().first()
     if not row or not row.get("min_weekdate") or not row.get("max_weekdate"):
-        return False
+        return None
     floor, high_water = str(row["min_weekdate"]), str(row["max_weekdate"])
-    return (start is None or floor <= start <= high_water) and (
-        end is None or floor <= end <= high_water
+    # A future upper bound still describes a slice the published artifact can
+    # answer: ``weekdate <= end`` naturally stops at its high-water mark.
+    # A requested start after high-water, or any bound before the materialized
+    # floor, remains an intentional raw historical request.
+    return (
+        (start is None or floor <= start <= high_water)
+        and (end is None or end >= floor)
     )
 
 
@@ -159,31 +175,40 @@ def _current_summary_shadow_anchor(
     start: str | None = None,
     end: str | None = None,
 ) -> Any | None:
-    """Return a usable shadow anchor, or select the existing raw path.
+    """Return the published shadow anchor or raw-fallback eligibility.
 
-    The shadow is a serving-db publication optimization, not an authoritative
-    source. Its availability checks are isolated here: a failed shadow lookup
-    is recoverable, while the raw anchor lookup below remains outside that
-    handler so a raw-data failure is never hidden.
+    The published shadow is the canonical serving representation for requests
+    it can express.  Explicit dates outside its materialized range may use the
+    existing raw historical path; a missing or unavailable representation may
+    not silently trigger raw aggregation for normal canonical requests.
     """
     try:
+        if start is not None or end is not None:
+            range_available = _explicit_shadow_range_available(
+                engine, exchange, population, start, end
+            )
+            if range_available is None:
+                raise _ShadowServingUnavailable
+            if not range_available:
+                return None
         shadow_weekdate = _latest_summary_weekdate(engine, exchange, population)
         if not shadow_weekdate:
-            return None
-        if (start is not None or end is not None) and not _explicit_shadow_range_available(
-            engine, exchange, population, start, end
-        ):
-            return None
-    except DBAPIError:
-        # Only the optional published-shadow availability probe is recoverable.
-        return None
-
-    raw_weekdate = _latest_weekdate(
-        engine, exchange, canonical=population != "all"
-    )
-    if raw_weekdate and str(shadow_weekdate) < str(raw_weekdate):
-        return None
+            raise _ShadowServingUnavailable
+    except DBAPIError as exc:
+        logger.exception("Published sector breadth shadow probe failed")
+        raise _ShadowServingUnavailable from exc
     return shadow_weekdate
+
+
+def _shadow_unavailable_error(request: Request) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "request_id": request.state.request_id,
+            "error": "sector_summary_shadow_unavailable",
+            "message": "Canonical sector breadth data is temporarily unavailable.",
+        },
+    )
 
 
 def _group_cols(level: GroupLevel) -> tuple[str, str]:
@@ -534,19 +559,23 @@ def breadth_sector_latest(
 ):
     engine = get_engine()
 
+    weekdate = _optional_date(weekdate)
     ex = _norm_exchange(exchange) if exchange else None
     resolved_population = _resolve_population(population, cs_only)
     use_summary = _use_sector_summary(
         level=group_level, population=resolved_population, include_unknown=include_unknown,
         min_price=min_price, min_volume=min_volume, exchange=ex,
     )
-    summary_anchor = (
-        _current_summary_shadow_anchor(
-            engine, ex, resolved_population, start=weekdate, end=weekdate
+    try:
+        summary_anchor = (
+            _current_summary_shadow_anchor(
+                engine, ex, resolved_population, start=weekdate, end=weekdate
+            )
+            if use_summary
+            else None
         )
-        if use_summary
-        else None
-    )
+    except _ShadowServingUnavailable as exc:
+        raise _shadow_unavailable_error(request) from exc
     use_summary = summary_anchor is not None
 
     wd = weekdate
@@ -638,19 +667,24 @@ def breadth_sector_history(
     ),
 ):
     engine = get_engine()
+    start = _optional_date(start)
+    end = _optional_date(end)
     ex = _norm_exchange(exchange) if exchange else None
     resolved_population = _resolve_population(population, cs_only)
     use_summary = _use_sector_summary(
         level=group_level, population=resolved_population, include_unknown=include_unknown,
         min_price=min_price, min_volume=min_volume, exchange=ex,
     )
-    summary_anchor = (
-        _current_summary_shadow_anchor(
-            engine, ex, resolved_population, start=start, end=end
+    try:
+        summary_anchor = (
+            _current_summary_shadow_anchor(
+                engine, ex, resolved_population, start=start, end=end
+            )
+            if use_summary
+            else None
         )
-        if use_summary
-        else None
-    )
+    except _ShadowServingUnavailable as exc:
+        raise _shadow_unavailable_error(request) from exc
     use_summary = summary_anchor is not None
 
     # Bounding runs here, inside paid execution, rather than in the registered
