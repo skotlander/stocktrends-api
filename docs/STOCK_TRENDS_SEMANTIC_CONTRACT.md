@@ -136,6 +136,8 @@ The frozen v1 labels are:
   assigned Epoch.
 - `changed_this_week` — persisted `0` or `1` flag indicating whether the assigned
   Epoch differs from the immediately previous official weekly Epoch.
+- `classified_at` — UTC provenance timestamp for when the persisted Epoch snapshot
+  was classified.
 - `assigned_distance` — distance to the assigned frozen centroid in standardized
   feature space.
 - `second_nearest_distance` — distance to the second-nearest frozen centroid in
