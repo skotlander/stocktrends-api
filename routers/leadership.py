@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
@@ -25,6 +26,7 @@ from utils.history_bounds import (
 )
 
 router = APIRouter(prefix="/leadership", tags=["leadership"])
+logger = logging.getLogger("stocktrends_api.leadership")
 
 BULLISH_TRENDS = ("^+", "^-", "v^")
 
@@ -119,7 +121,7 @@ def _use_rotation_summary(type_: str, exchange: str | None) -> bool:
 
 
 def _latest_rotation_weekdate(engine, exchange: str | None, type_: str) -> Any | None:
-    """Return the exact shadow week for canonical CS/EQ rotation requests."""
+    """Return the published shadow high-water week for canonical rotation."""
     type_ = _norm_rotation_type(type_)
     if not _use_rotation_summary(type_, exchange):
         return _latest_weekdate(engine, exchange, type_)
@@ -130,25 +132,35 @@ def _latest_rotation_weekdate(engine, exchange: str | None, type_: str) -> Any |
     return row["wd"] if row else None
 
 
+class _RotationShadowServingUnavailable(Exception):
+    """The published canonical rotation serving representation is unavailable."""
+
+
 def _current_rotation_summary_anchor(
     engine, exchange: str | None, type_: str
 ) -> Any | None:
-    """Return a current shadow anchor, otherwise select the existing raw path."""
+    """Return the published shadow anchor for canonical rotation requests."""
     if not _use_rotation_summary(type_, exchange):
         return None
     try:
         shadow_weekdate = _latest_rotation_weekdate(engine, exchange, type_)
-    except DBAPIError:
-        # Only the optional published-shadow lookup is recoverable here. Raw
-        # anchor and aggregation failures remain visible to the caller.
-        return None
+    except DBAPIError as exc:
+        logger.exception("Published sector rotation shadow probe failed")
+        raise _RotationShadowServingUnavailable from exc
     if not shadow_weekdate:
-        return None
-
-    raw_weekdate = _latest_weekdate(engine, exchange, type_)
-    if raw_weekdate and str(shadow_weekdate) < str(raw_weekdate):
-        return None
+        raise _RotationShadowServingUnavailable
     return shadow_weekdate
+
+
+def _rotation_shadow_unavailable_error(request: Request) -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail={
+            "request_id": request.state.request_id,
+            "error": "sector_summary_shadow_unavailable",
+            "message": "Canonical sector rotation data is temporarily unavailable.",
+        },
+    )
 
 
 def _where_date_clause(params: dict[str, Any], start: str | None, end: str | None) -> str:
@@ -543,14 +555,16 @@ def leadership_rotation_history(
     ex = _norm_exchange(exchange) if exchange else None
     normalized_type = _norm_rotation_type(type)
     # The shadow's omitted-exchange row is the stored canonical A/N/Q/T
-    # aggregate. Keep that same effective scope if the shadow is unavailable
-    # or stale, so a fallback cannot widen into legacy B/I exchanges.
+    # aggregate. Preserve that effective scope for canonical serving.
     effective_exchange = (
         "*" if ex is None and _use_rotation_summary(normalized_type, ex) else ex
     )
-    summary_anchor = _current_rotation_summary_anchor(
-        engine, effective_exchange, normalized_type
-    )
+    try:
+        summary_anchor = _current_rotation_summary_anchor(
+            engine, effective_exchange, normalized_type
+        )
+    except _RotationShadowServingUnavailable as exc:
+        raise _rotation_shadow_unavailable_error(request) from exc
     use_summary = summary_anchor is not None
 
     # Service shaping, applied behind the payment boundary alongside the query
