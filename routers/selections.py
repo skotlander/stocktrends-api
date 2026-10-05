@@ -766,7 +766,7 @@ def selections_latest(
     limit: int = Query(default=2000, ge=1, le=20000, description="Safety limit"),
     include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
     include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
-    cs_only: bool = Query(default=True, description="When include_data=true, filter to common stocks"),
+    cs_only: bool = Query(default=True, description="Restrict returned selections to common stocks only (type='CS')."),
 ):
     """
     Latest ST-IM selection list for the most recent weekdate.
@@ -806,6 +806,21 @@ def selections_latest(
     if min_prob13wk is not None:
         where += " AND s.prob13wk >= :min_prob13wk"
         params["min_prob13wk"] = float(min_prob13wk)
+
+    # This constrains the selection universe itself.  Keeping the predicate in
+    # the optional st_data LEFT JOIN would only null signal-context fields for
+    # non-CS selections while still returning their st_select rows.
+    params["cs_only"] = 1 if cs_only else 0
+    where += """
+        AND (:cs_only = 0 OR EXISTS (
+            SELECT 1
+            FROM st_data cs_filter
+            WHERE cs_filter.weekdate = s.weekdate
+              AND cs_filter.exchange = s.exchange
+              AND cs_filter.symbol = s.symbol
+              AND cs_filter.type = 'CS'
+        ))
+    """
 
     if not include_data:
         sql = text(f"""
@@ -855,7 +870,6 @@ def selections_latest(
             ORDER BY s.prob13wk DESC
             LIMIT :limit
         """)
-        params["cs_only"] = 1 if cs_only else 0
 
     try:
         with engine.connect() as conn:
@@ -881,7 +895,7 @@ def selections_latest(
         "min_prob13wk": min_prob13wk,
         "include_data": include_data,
         "include_mast": include_mast,
-        "cs_only": (cs_only if include_data else None),
+        "cs_only": cs_only,
         "count": len(data),
         "data": data,
     }
@@ -918,7 +932,7 @@ def selections_history(
     ),
     include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
     include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
-    cs_only: bool = Query(default=True, description="When include_data=true, filter to common stocks"),
+    cs_only: bool = Query(default=True, description="Restrict returned selections to common stocks only (type='CS')."),
 ):
     """
     Selection history.
@@ -954,6 +968,20 @@ def selections_history(
     if ex:
         where += " AND s.exchange = :exchange"
         params["exchange"] = ex
+
+    # See selections_latest: filter st_select rows, not only optional joined
+    # context, so cs_only=true cannot retain UN or TF selections.
+    params["cs_only"] = 1 if cs_only else 0
+    where += """
+        AND (:cs_only = 0 OR EXISTS (
+            SELECT 1
+            FROM st_data cs_filter
+            WHERE cs_filter.weekdate = s.weekdate
+              AND cs_filter.exchange = s.exchange
+              AND cs_filter.symbol = s.symbol
+              AND cs_filter.type = 'CS'
+        ))
+    """
 
     if start:
         where += " AND s.weekdate >= :start"
@@ -1015,7 +1043,6 @@ def selections_history(
             ORDER BY s.weekdate DESC, s.prob13wk DESC
             LIMIT :limit
         """)
-        params["cs_only"] = 1 if cs_only else 0
 
     try:
         with engine.connect() as conn:
@@ -1050,7 +1077,7 @@ def selections_history(
         "min_prob13wk": min_prob13wk,
         "include_data": include_data,
         "include_mast": include_mast,
-        "cs_only": (cs_only if include_data else None),
+        "cs_only": cs_only,
         "applied_bounds": build_applied_bounds(
             start=start,
             end=end,
