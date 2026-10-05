@@ -55,14 +55,16 @@ class PaymentPolicyRuntimeTests(unittest.TestCase):
         self.assertEqual(accepted, "subscription,x402")
 
     def test_control_plane_unavailable_falls_back_to_defaults(self):
-        with patch.object(
-            policy_provider,
-            "_fetch_runtime_payment_policy_config",
-            side_effect=urllib_error.URLError("control plane unavailable"),
-        ):
-            config = policy_provider.get_runtime_payment_policy_config(force_refresh=True)
+        with self.assertLogs("stocktrends_api.payment_policy", level="WARNING") as logs:
+            with patch.object(
+                policy_provider,
+                "_fetch_runtime_payment_policy_config",
+                side_effect=urllib_error.URLError("control plane unavailable"),
+            ):
+                config = policy_provider.get_runtime_payment_policy_config(force_refresh=True)
 
         self.assertEqual(config.source, "defaults")
+        self.assertIn("Payment policy config fetch failed", logs.output[0])
         self.assertTrue(policy_provider.is_free_metered_path("/v1/ai/context"))
         self.assertEqual(
             policy_provider.get_accepted_payment_methods_for_path(
@@ -72,6 +74,18 @@ class PaymentPolicyRuntimeTests(unittest.TestCase):
             ),
             "subscription,x402,mpp",
         )
+
+    def test_unconfigured_control_plane_uses_existing_info_fallback(self):
+        with self.assertLogs("stocktrends_api.payment_policy", level="INFO") as logs:
+            with patch.object(
+                policy_provider,
+                "_fetch_runtime_payment_policy_config",
+                side_effect=RuntimeError("No payment policy config URL is configured."),
+            ):
+                config = policy_provider.get_runtime_payment_policy_config(force_refresh=True)
+
+        self.assertEqual(config.source, "defaults")
+        self.assertIn("Payment policy config not configured", logs.output[0])
 
     def test_configured_endpoint_requires_agent_pay_without_subscription_auth(self):
         config = policy_provider._parse_config_payload(LIVE_STYLE_CONFIG_PAYLOAD)

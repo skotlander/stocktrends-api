@@ -6,6 +6,8 @@ fix/policy-provider-payload-parsing.
 """
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from payments.policy_provider import (
@@ -238,6 +240,32 @@ class TestParseConfigPayload:
     def test_source_is_control_plane(self):
         cfg = _parse_config_payload(_CONTROL_PLANE_PAYLOAD)
         assert cfg.source == "control_plane"
+
+    def test_empty_endpoint_policy_overrides_use_defaults_at_info_level(self, caplog):
+        payload = {
+            "environment": "production",
+            "pricing_rules": {},
+            "endpoint_payment_policies": {},
+        }
+        defaults = _default_policy_config()
+
+        with caplog.at_level(logging.INFO, logger="stocktrends_api.payment_policy"):
+            cfg = _parse_config_payload(payload)
+
+        assert cfg.source == "control_plane"
+        assert cfg.endpoint_payment_policies == defaults.endpoint_payment_policies
+        assert [policy.pricing_rule_id for policy in cfg.endpoint_payment_policies] == [
+            policy.pricing_rule_id for policy in defaults.endpoint_payment_policies
+        ]
+        assert [policy.allowed_rails for policy in cfg.endpoint_payment_policies] == [
+            policy.allowed_rails for policy in defaults.endpoint_payment_policies
+        ]
+        assert "provided no endpoint policy overrides; using" in caplog.text
+        assert not [
+            record
+            for record in caplog.records
+            if record.levelno >= logging.WARNING
+        ]
 
 
 class TestBreadthSectorLatestDefaultPolicy:
