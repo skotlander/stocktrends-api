@@ -792,11 +792,21 @@ def _parse_config_payload(payload: dict) -> RuntimePaymentPolicyConfig:
                 len(_gap_policies),
             )
     else:
-        logger.warning(
-            "Payment policy config provided no endpoint_payment_policies; "
-            "falling back to hardcoded defaults (%d entries).",
-            len(defaults.endpoint_payment_policies),
-        )
+        if _raw_endpoint_policies is None or (
+            isinstance(_raw_endpoint_policies, (dict, list, tuple))
+            and not _raw_endpoint_policies
+        ):
+            logger.info(
+                "Payment policy config provided no endpoint policy overrides; "
+                "using %d runtime defaults.",
+                len(defaults.endpoint_payment_policies),
+            )
+        else:
+            logger.warning(
+                "Payment policy config provided no usable endpoint_payment_policies; "
+                "using %d runtime defaults.",
+                len(defaults.endpoint_payment_policies),
+            )
         endpoint_payment_policies = defaults.endpoint_payment_policies
 
     agent_required = accepted_methods.get("agent_pay_required")
