@@ -220,7 +220,7 @@ def selections_published_latest(
     limit: int = Query(default=2000, ge=1, le=20000, description="Safety limit"),
     include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
     include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
-    cs_only: bool = Query(default=True, description="When include_data=true, filter to common stocks"),
+    cs_only: bool = Query(default=True, description="Restrict returned selections to common stocks only (type='CS')."),
 ):
     """
     Latest published Select list:
@@ -263,6 +263,19 @@ def selections_published_latest(
         symbol=None,
         params=params,
     )
+    # Constrain st_select itself.  The optional st_data LEFT JOIN below is not
+    # sufficient because it preserves a non-CS selection with null context.
+    params["cs_only"] = 1 if cs_only else 0
+    where += """
+        AND (:cs_only = 0 OR EXISTS (
+            SELECT 1
+            FROM st_data cs_filter
+            WHERE cs_filter.weekdate = s.weekdate
+              AND cs_filter.exchange = s.exchange
+              AND cs_filter.symbol = s.symbol
+              AND cs_filter.type = 'CS'
+        ))
+    """
 
     if not include_data:
         sql = text(f"""
@@ -344,7 +357,6 @@ def selections_published_latest(
             ORDER BY s.prob13wk DESC
             LIMIT :limit
         """)
-        params["cs_only"] = 1 if cs_only else 0
 
     try:
         with engine.connect() as conn:
@@ -373,7 +385,7 @@ def selections_published_latest(
         "min_x40wk1": min_x40wk1,
         "include_data": include_data,
         "include_mast": include_mast,
-        "cs_only": (cs_only if include_data else None),
+        "cs_only": cs_only,
         "count": len(data),
         "data": data,
     }
@@ -411,7 +423,7 @@ def selections_published_history(
     ),
     include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
     include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
-    cs_only: bool = Query(default=True, description="When include_data=true, filter to common stocks"),
+    cs_only: bool = Query(default=True, description="Restrict returned selections to common stocks only (type='CS')."),
 ):
     """
     Published Select history:
@@ -442,6 +454,18 @@ def selections_published_history(
         symbol=s,
         params=params,
     )
+    # Keep the history selection universe consistent with latest.
+    params["cs_only"] = 1 if cs_only else 0
+    where += """
+        AND (:cs_only = 0 OR EXISTS (
+            SELECT 1
+            FROM st_data cs_filter
+            WHERE cs_filter.weekdate = s.weekdate
+              AND cs_filter.exchange = s.exchange
+              AND cs_filter.symbol = s.symbol
+              AND cs_filter.type = 'CS'
+        ))
+    """
 
     if not include_data:
         sql = text(f"""
@@ -523,7 +547,6 @@ def selections_published_history(
             ORDER BY s.weekdate DESC, s.prob13wk DESC
             LIMIT :limit
         """)
-        params["cs_only"] = 1 if cs_only else 0
 
     try:
         with engine.connect() as conn:
@@ -561,7 +584,7 @@ def selections_published_history(
         "min_x40wk1": min_x40wk1,
         "include_data": include_data,
         "include_mast": include_mast,
-        "cs_only": (cs_only if include_data else None),
+        "cs_only": cs_only,
         "applied_bounds": build_applied_bounds(
             start=start,
             end=end,
