@@ -27,6 +27,15 @@ class ClaimAcquireResult:
     state: str | None = None
 
 
+def _is_mysql_duplicate_key(error: IntegrityError) -> bool:
+    """True only for MySQL's duplicate-entry condition (1062)."""
+    original = getattr(error, "orig", None)
+    if getattr(original, "errno", None) == 1062:
+        return True
+    arguments = getattr(original, "args", ())
+    return bool(arguments) and arguments[0] == 1062
+
+
 def acquire_settling_claim(*, identity_version: int, payment_fingerprint: bytes, owner_request_id: str) -> ClaimAcquireResult:
     """Atomically reserve an authorization and commit its settlement intent.
 
@@ -49,13 +58,18 @@ def acquire_settling_claim(*, identity_version: int, payment_fingerprint: bytes,
                  "owner_request_id": owner_request_id},
             )
         return ClaimAcquireResult(acquired=True, state="settling")
-    except IntegrityError:
+    except IntegrityError as exc:
+        if not _is_mysql_duplicate_key(exc):
+            raise ClaimRepositoryUnavailable() from exc
         # The unique database key, not a process-local observation, decides
         # which worker owns settlement.
         try:
-            return ClaimAcquireResult(acquired=False, state=get_claim_state(
+            state = get_claim_state(
                 identity_version=identity_version, payment_fingerprint=payment_fingerprint
-            ))
+            )
+            if state is None:
+                raise ClaimRepositoryUnavailable()
+            return ClaimAcquireResult(acquired=False, state=state)
         except Exception as exc:
             raise ClaimRepositoryUnavailable() from exc
     except Exception as exc:

@@ -2136,6 +2136,14 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                     "settlement_failed", "settlement_uncertain", "claim_exists",
                     "claim_unavailable", "settlement_suspended",
                 }:
+                    # An indeterminate facilitator result may have moved money.
+                    # Keep it non-billable and non-terminal in economics; the
+                    # claim table is the durable authority for reconciliation.
+                    settlement_payment_status = (
+                        "pending"
+                        if local_enforcement_result.outcome == "settlement_uncertain"
+                        else "failed"
+                    )
                     return reject(
                         enforcement=local_enforcement_result,
                         content={
@@ -2147,7 +2155,7 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                         event_error_code=local_enforcement_result.error_code,
                         event_notes=local_enforcement_result.error_detail,
                         econ_payment_fields={
-                            "payment_status": "failed",
+                            "payment_status": settlement_payment_status,
                             "payment_method": payment_method_header or decision.econ_payment_method,
                             "payment_network": local_enforcement_result.payment_network or payment_network_header,
                             "payment_token": local_enforcement_result.payment_token or payment_token_header,

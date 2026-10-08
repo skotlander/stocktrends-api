@@ -6,8 +6,11 @@ import json
 from decimal import Decimal
 
 import payments.enforcement as enforcement
+import middleware.metering as metering
 from payments.x402 import X402ValidationResult
 from payments.x402_claims import ClaimAcquireResult, ClaimRepositoryUnavailable
+from payments.enforcement import PaymentEnforcementResult
+from support.payment_harness import x402_headers
 
 
 ASSET = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
@@ -111,3 +114,20 @@ def test_safe_reference_is_checked_after_legacy_reference(monkeypatch):
     assert second.outcome == "replay_detected"
     assert first.payment_reference.startswith("x402:artifact-v1:")
     assert checked[0] == "historic-id" and checked[1].startswith("x402:artifact-v1:")
+
+
+def test_uncertain_settlement_is_pending_and_uncollected_in_economics(payment_harness, monkeypatch):
+    monkeypatch.setattr(
+        metering, "enforce_payment_rail",
+        lambda **_kwargs: PaymentEnforcementResult(
+            outcome="settlement_uncertain", error_code="payment_settlement_uncertain",
+            error_detail="settlement outcome is unknown", payment_reference="x402:v1:safe",
+        ),
+    )
+    response = payment_harness.client.get(
+        "/v1/prices/history?symbol_exchange=IBM-N", headers=x402_headers()
+    )
+    row = payment_harness.logs.only_economics_row()
+    assert response.status_code == 402
+    assert row["payment_status"] == "pending"
+    assert row["billed_amount_usd"] == 0

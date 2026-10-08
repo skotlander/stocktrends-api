@@ -1101,12 +1101,13 @@ def settle_with_facilitator(
     # ``success`` is the V2 terminal settlement signal.  A transaction hash
     # alone may accompany settlement_pending, and any contradictory or
     # malformed result remains deliberately uncertain to the claim layer.
+    settled_field = data.get("settled") if isinstance(data, dict) else None
+    pending_field = data.get("settlement_pending") if isinstance(data, dict) else None
     settled = (
         isinstance(data, dict)
         and data.get("success") is True
-        and data.get("settled", True) is not False
-        and data.get("settlement_pending") is not True
-        and data.get("errorReason") != "settlement_pending"
+        and ("settled" not in data or settled_field is True)
+        and ("settlement_pending" not in data or pending_field is False)
         and data.get("errorReason") in (None, "")
     )
     if not settled:

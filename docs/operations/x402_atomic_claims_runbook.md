@@ -23,7 +23,8 @@ Operators reconcile `uncertain` claims using the safe receipt and
 
 Before production activation, run the real InnoDB concurrency proof only
 against an isolated disposable database: set
-`X402_MYSQL_CONCURRENCY_TEST_URL` to a `stocktrends_test` MySQL URL and set
+`X402_MYSQL_CONCURRENCY_TEST_URL` to the exact disposable
+`stocktrends_x402_claims_test` MySQL database and set
 `X402_MYSQL_CONCURRENCY_TEST_ACK=I_UNDERSTAND_THIS_DROPS_TEST_TABLES`, then
 run `python -m pytest tests/integration/test_x402_claims_mysql_concurrency.py`.
 The test creates and drops only `x402_payment_claims` in that disposable DB.
