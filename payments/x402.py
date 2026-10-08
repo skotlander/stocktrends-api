@@ -262,17 +262,41 @@ def _post_json(url: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any] |
         return 0, None, str(e)
 
 
+_MAX_SETTLEMENT_RECEIPT_FIELD_LENGTH = 512
+_MAX_SETTLEMENT_AMOUNT_LENGTH = 128
+
+
+def _safe_settlement_receipt_string(value: Any, *, max_length: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip()
+    if not normalized or len(normalized) > max_length:
+        return None
+    return normalized
+
+
 def _safe_facilitator_receipt(data: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Return only the non-secret settlement receipt fields clients need."""
+    """Return bounded, standard x402 settlement receipt metadata only."""
     if not isinstance(data, dict):
         return None
 
-    safe_fields = ("success", "settled", "txHash", "transaction")
-    receipt = {
-        key: value
-        for key in safe_fields
-        if isinstance((value := data.get(key)), (str, bool, int, float))
-    }
+    receipt: dict[str, Any] = {}
+    if isinstance(data.get("success"), bool):
+        receipt["success"] = data["success"]
+
+    for field in ("transaction", "network", "payer", "errorReason"):
+        value = _safe_settlement_receipt_string(
+            data.get(field), max_length=_MAX_SETTLEMENT_RECEIPT_FIELD_LENGTH
+        )
+        if value is not None:
+            receipt[field] = value
+
+    amount = _safe_settlement_receipt_string(
+        data.get("amount"), max_length=_MAX_SETTLEMENT_AMOUNT_LENGTH
+    )
+    if amount is not None:
+        receipt["amount"] = amount
+
     return receipt or None
 
 

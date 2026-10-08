@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 
 import pytest
 
 import middleware.metering as metering
+import payments.enforcement as enforcement
 import payments.x402 as x402
 from payments.enforcement import ReplayCheckUnavailable
 from support.payment_harness import x402_headers
@@ -61,7 +63,15 @@ def test_settlement_logs_and_response_exclude_payment_and_facilitator_secrets(mo
         "_post_json",
         lambda *_args, **_kwargs: (
             200,
-            {"success": True, "transaction": "0xreceipt", "debug": _FACILITATOR_SECRET},
+            {
+                "success": True,
+                "transaction": "0xreceipt",
+                "network": "eip155:8453",
+                "payer": "0xpayer",
+                "amount": "150000",
+                "errorReason": "not-used-on-success",
+                "debug": _FACILITATOR_SECRET,
+            },
             _FACILITATOR_SECRET,
         ),
     )
@@ -72,11 +82,78 @@ def test_settlement_logs_and_response_exclude_payment_and_facilitator_secrets(mo
         )
 
     assert result.valid is True
-    assert result.settlement_response == {"success": True, "transaction": "0xreceipt"}
+    assert result.settlement_response == {
+        "success": True,
+        "transaction": "0xreceipt",
+        "network": "eip155:8453",
+        "payer": "0xpayer",
+        "amount": "150000",
+        "errorReason": "not-used-on-success",
+    }
     assert "operation=settle status=200 outcome=received" in caplog.text
     for secret in (_PROOF_SECRET, _FACILITATOR_SECRET, "facilitator-key-id-secret"):
         assert secret not in caplog.text
         assert secret not in json.dumps(result.settlement_response)
+
+
+def test_payment_response_header_contains_standard_sanitized_receipt(
+    payment_harness, monkeypatch
+):
+    facilitator_response = {
+        "success": True,
+        "transaction": "0xreceipt",
+        "network": "eip155:8453",
+        "payer": "0xpayer",
+        "debug": _FACILITATOR_SECRET,
+    }
+
+    monkeypatch.setattr(
+        enforcement,
+        "verify_with_facilitator",
+        lambda **kwargs: x402.X402ValidationResult(
+            valid=True, payment_signature=kwargs["payment_signature"]
+        ),
+    )
+    monkeypatch.setattr(
+        x402,
+        "_post_json",
+        lambda *_args, **_kwargs: (200, facilitator_response, _FACILITATOR_SECRET),
+    )
+    monkeypatch.setattr(
+        enforcement,
+        "settle_with_facilitator",
+        lambda **kwargs: x402.settle_with_facilitator(**kwargs),
+    )
+
+    response = payment_harness.client.get(
+        "/v1/prices/history?symbol_exchange=IBM-N", headers=x402_headers()
+    )
+
+    assert response.status_code == 200
+    receipt = json.loads(base64.b64decode(response.headers["payment-response"]).decode())
+    assert receipt == {
+        "success": True,
+        "transaction": "0xreceipt",
+        "network": "eip155:8453",
+        "payer": "0xpayer",
+    }
+    assert _FACILITATOR_SECRET not in response.headers["payment-response"]
+
+
+def test_settlement_receipt_excludes_invalid_and_unbounded_fields():
+    receipt = x402._safe_facilitator_receipt(
+        {
+            "success": "yes",
+            "transaction": {"nested": "not-a-receipt"},
+            "network": "n" * 513,
+            "payer": "0xpayer",
+            "amount": "1" * 129,
+            "errorReason": ["nested"],
+            "debug": _FACILITATOR_SECRET,
+        }
+    )
+
+    assert receipt == {"payer": "0xpayer"}
 
 
 def test_replay_database_failure_is_classified_without_leaking_exception(monkeypatch, caplog):
