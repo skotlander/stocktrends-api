@@ -262,6 +262,20 @@ def _post_json(url: str, payload: dict[str, Any]) -> tuple[int, dict[str, Any] |
         return 0, None, str(e)
 
 
+def _safe_facilitator_receipt(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Return only the non-secret settlement receipt fields clients need."""
+    if not isinstance(data, dict):
+        return None
+
+    safe_fields = ("success", "settled", "txHash", "transaction")
+    receipt = {
+        key: value
+        for key in safe_fields
+        if isinstance((value := data.get(key)), (str, bool, int, float))
+    }
+    return receipt or None
+
+
 # =========================================================
 # REQUIREMENTS / CHALLENGE
 # =========================================================
@@ -818,31 +832,25 @@ def verify_with_facilitator(
         "paymentRequirements": normalized_requirements,
     }
 
-    logger.info("x402 verify request_body=%s", _json_dumps_compact(request_body))
-    logger.info("x402 verify requirement=%s", _json_dumps_compact(normalized_requirements))
-    logger.info("x402 verify payload=%s", _json_dumps_compact(payment_payload))
-    logger.info("x402 facilitator key id=%s", X402_FACILITATOR_API_KEY)
-
     status, data, raw = _post_json(
         f"{X402_FACILITATOR_URL}/verify",
         request_body,
     )
-
-    logger.info("x402 verify response status=%s body=%s", status, raw)
+    logger.info(
+        "x402 facilitator operation=verify status=%s outcome=%s",
+        status,
+        "unreachable" if status == 0 else "http_error" if status >= 400 else "received",
+    )
 
     if status == 0:
         return X402ValidationResult(
             valid=False,
             error_code="facilitator_verify_unreachable",
-            error_detail=raw,
+            error_detail="Facilitator /verify is unavailable.",
         )
 
     if status >= 400:
-        detail = f"Facilitator /verify returned HTTP {status}"
-        if data:
-            detail = f"{detail}: {json.dumps(data)}"
-        elif raw:
-            detail = f"{detail}: {raw}"
+        detail = f"Facilitator /verify returned HTTP {status}."
 
         return X402ValidationResult(
             valid=False,
@@ -850,15 +858,12 @@ def verify_with_facilitator(
             error_detail=detail,
             payment_signature=payment_signature,
             payment_payload=payment_payload,
-            verification_response=data,
+            verification_response=_safe_facilitator_receipt(data),
         )
 
     verified = bool((data or {}).get("isValid") or (data or {}).get("valid"))
     if not verified:
-        invalid_reason = (data or {}).get("invalidReason")
         detail = "Facilitator reported invalid payment payload."
-        if invalid_reason:
-            detail = f"{detail} invalidReason={invalid_reason}"
 
         return X402ValidationResult(
             valid=False,
@@ -866,14 +871,14 @@ def verify_with_facilitator(
             error_detail=detail,
             payment_signature=payment_signature,
             payment_payload=payment_payload,
-            verification_response=data,
+            verification_response=_safe_facilitator_receipt(data),
         )
 
     return X402ValidationResult(
         valid=True,
         payment_signature=payment_signature,
         payment_payload=payment_payload,
-        verification_response=data,
+        verification_response=_safe_facilitator_receipt(data),
     )
 
 
@@ -908,31 +913,25 @@ def settle_with_facilitator(
         "paymentRequirements": normalized_requirements,
     }
 
-    logger.info("x402 settle request_body=%s", _json_dumps_compact(request_body))
-    logger.info("x402 settle requirement=%s", _json_dumps_compact(normalized_requirements))
-    logger.info("x402 settle payload=%s", _json_dumps_compact(payment_payload))
-    logger.info("x402 facilitator key id=%s", X402_FACILITATOR_API_KEY)
-
     status, data, raw = _post_json(
         f"{X402_FACILITATOR_URL}/settle",
         request_body,
     )
-
-    logger.info("x402 settle response status=%s body=%s", status, raw)
+    logger.info(
+        "x402 facilitator operation=settle status=%s outcome=%s",
+        status,
+        "unreachable" if status == 0 else "http_error" if status >= 400 else "received",
+    )
 
     if status == 0:
         return X402ValidationResult(
             valid=False,
             error_code="facilitator_settle_unreachable",
-            error_detail=raw,
+            error_detail="Facilitator /settle is unavailable.",
         )
 
     if status >= 400:
-        detail = f"Facilitator /settle returned HTTP {status}"
-        if data:
-            detail = f"{detail}: {json.dumps(data)}"
-        elif raw:
-            detail = f"{detail}: {raw}"
+        detail = f"Facilitator /settle returned HTTP {status}."
 
         return X402ValidationResult(
             valid=False,
@@ -940,7 +939,7 @@ def settle_with_facilitator(
             error_detail=detail,
             payment_signature=payment_signature,
             payment_payload=payment_payload,
-            settlement_response=data,
+            settlement_response=_safe_facilitator_receipt(data),
         )
 
     settled = bool(
@@ -956,12 +955,12 @@ def settle_with_facilitator(
             error_detail="Facilitator did not confirm settlement.",
             payment_signature=payment_signature,
             payment_payload=payment_payload,
-            settlement_response=data,
+            settlement_response=_safe_facilitator_receipt(data),
         )
 
     return X402ValidationResult(
         valid=True,
         payment_signature=payment_signature,
         payment_payload=payment_payload,
-        settlement_response=data,
+        settlement_response=_safe_facilitator_receipt(data),
     )

@@ -23,6 +23,10 @@ from payments.x402 import (
 from payments.mpp import enforce_mpp_payment
 
 
+class ReplayCheckUnavailable(Exception):
+    """Raised when x402 replay state cannot be safely determined."""
+
+
 def _extract_x402_requirement_context(payment_requirements: dict) -> tuple[str | None, str | None]:
     accepts = payment_requirements.get("accepts")
     if not isinstance(accepts, list) or not accepts or not isinstance(accepts[0], dict):
@@ -148,16 +152,30 @@ def enforce_x402_payment(
         )
 
     replay_reference = normalized_payment_reference
-    if replay_reference and replay_checker(replay_reference):
-        return PaymentEnforcementResult(
-            outcome="replay_detected",
-            error_code="replay_detected",
-            error_detail="Payment reference has already been used.",
-            payment_reference=replay_reference,
-            payment_network=normalized_payment_network or required_network,
-            payment_token=normalized_payment_token or required_token,
-            payment_amount_native=normalized_payment_amount_native,
-        )
+    if replay_reference:
+        try:
+            replay_detected = replay_checker(replay_reference)
+        except ReplayCheckUnavailable:
+            return PaymentEnforcementResult(
+                outcome="replay_check_unavailable",
+                error_code="replay_check_unavailable",
+                error_detail="Payment replay protection is temporarily unavailable. Please retry later.",
+                payment_reference=replay_reference,
+                payment_network=normalized_payment_network or required_network,
+                payment_token=normalized_payment_token or required_token,
+                payment_amount_native=normalized_payment_amount_native,
+            )
+
+        if replay_detected:
+            return PaymentEnforcementResult(
+                outcome="replay_detected",
+                error_code="replay_detected",
+                error_detail="Payment reference has already been used.",
+                payment_reference=replay_reference,
+                payment_network=normalized_payment_network or required_network,
+                payment_token=normalized_payment_token or required_token,
+                payment_amount_native=normalized_payment_amount_native,
+            )
 
     payment_signature = extract_payment_signature(headers)
 
