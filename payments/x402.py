@@ -1,4 +1,6 @@
 import base64
+import binascii
+import hashlib
 import json
 import os
 import time
@@ -57,6 +59,7 @@ X402_CHALLENGE_MODE_HEADER = "X-StockTrends-Challenge-Mode"
 X402_PAYMENT_REQUIRED_HEADER_MODE_ENV = "X402_PAYMENT_REQUIRED_HEADER_MODE"
 X402_CHALLENGE_MODE_FULL = "full"
 X402_CHALLENGE_MODE_COMPACT = "compact"
+X402_IDENTITY_VERSION = 1
 
 
 # =========================================================
@@ -76,6 +79,14 @@ class X402ValidationResult:
     payment_payload: Optional[dict[str, Any]] = None
     verification_response: Optional[dict[str, Any]] = None
     settlement_response: Optional[dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class X402PaymentIdentity:
+    """The safe, versioned identity for one EIP-3009 authorization."""
+    version: int
+    fingerprint: bytes
+    accounting_reference: str
 
 
 # =========================================================
@@ -597,6 +608,127 @@ def _parse_payment_payload_from_header(raw_value: str) -> dict[str, Any]:
     raise ValueError("PAYMENT-SIGNATURE is neither JSON nor base64-encoded JSON object.")
 
 
+def safe_x402_artifact_reference(raw_value: str | None) -> str | None:
+    """A non-reversible accounting reference for rejected x402 artifacts."""
+    if not raw_value:
+        return None
+    return "x402:artifact-v1:" + hashlib.sha256(raw_value.encode("utf-8")).hexdigest()
+
+
+def _normal_address(value: Any, field: str) -> str:
+    if not isinstance(value, str) or value[:2].lower() != "0x" or len(value) != 42:
+        raise ValueError(f"{field} must be a 20-byte hexadecimal address.")
+    try:
+        int(value[2:], 16)
+    except ValueError as exc:
+        raise ValueError(f"{field} must be a hexadecimal address.") from exc
+    return value.lower()
+
+
+def _normal_uint(value: Any, field: str) -> str:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ValueError(f"{field} must be an unsigned integer.")
+    text_value = str(value)
+    if not text_value.isdigit():
+        raise ValueError(f"{field} must be an unsigned integer.")
+    return str(int(text_value, 10))
+
+
+def _normal_nonce(value: Any) -> str:
+    if not isinstance(value, str) or not value.startswith("0x") or len(value) != 66:
+        raise ValueError("authorization nonce must be a 32-byte hexadecimal value.")
+    try:
+        int(value[2:], 16)
+    except ValueError as exc:
+        raise ValueError("authorization nonce must be hexadecimal.") from exc
+    return value.lower()
+
+
+def _require_signature(value: Any) -> None:
+    if not isinstance(value, str) or not value.startswith("0x") or len(value) != 132:
+        raise ValueError("EIP-3009 signature must be a 65-byte hexadecimal value.")
+    try:
+        binascii.unhexlify(value[2:])
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("EIP-3009 signature must be hexadecimal.") from exc
+
+
+def build_x402_payment_identity(
+    payment_signature: str,
+    payment_requirements: dict[str, Any] | str,
+) -> X402PaymentIdentity:
+    """Strictly parse the sole supported V2/exact/EIP-3009 proof format.
+
+    Cryptographic validity remains the facilitator's responsibility.  This only
+    establishes an unambiguous authorization identity before a settlement may
+    be claimed.
+    """
+    proof = _parse_payment_payload_from_header(payment_signature)
+    requirement = _normalize_payment_requirements_input(payment_requirements)
+    if proof.get("x402Version") != 2 or requirement.get("scheme") != "exact":
+        raise ValueError("Only x402 V2 exact payments are supported for atomic claims.")
+    # PaymentPayload V2 contains the selected requirement under ``accepted``;
+    # resource and extensions are standard optional fields and intentionally do
+    # not participate in the authorization identity.
+    if set(proof) - {"x402Version", "resource", "accepted", "payload", "extensions"}:
+        raise ValueError("Payment payload has unsupported top-level fields.")
+    accepted = proof.get("accepted")
+    if not isinstance(accepted, dict):
+        raise ValueError("PaymentPayload accepted requirements are required.")
+    if set(accepted) - {"scheme", "network", "amount", "asset", "payTo", "maxTimeoutSeconds", "extra"}:
+        raise ValueError("Accepted payment requirements are unsupported.")
+    required_requirement_fields = {"scheme", "network", "amount", "asset", "payTo", "maxTimeoutSeconds"}
+    if not required_requirement_fields.issubset(accepted):
+        raise ValueError("Accepted payment requirements are incomplete.")
+    if accepted.get("scheme") != "exact":
+        raise ValueError("Payment scheme must be exact.")
+    network = accepted.get("network")
+    if not isinstance(network, str) or network != requirement.get("network"):
+        raise ValueError("Payment network does not match server requirements.")
+    asset = _normal_address(accepted.get("asset"), "payment asset")
+    if asset != _normal_address(requirement.get("asset"), "required asset"):
+        raise ValueError("Payment asset does not match server requirements.")
+    extra = accepted.get("extra")
+    required_extra = requirement.get("extra")
+    if not isinstance(extra, dict) or extra.get("assetTransferMethod") != "eip3009":
+        raise ValueError("Server requirements do not specify EIP-3009.")
+    if not isinstance(required_extra, dict) or required_extra.get("assetTransferMethod") != "eip3009":
+        raise ValueError("Server requirements do not specify EIP-3009.")
+    if accepted.get("maxTimeoutSeconds") != requirement.get("maxTimeoutSeconds"):
+        raise ValueError("Accepted timeout does not match server requirements.")
+    payload = proof.get("payload")
+    if not isinstance(payload, dict) or set(payload) - {"authorization", "signature"}:
+        raise ValueError("Payment payload is ambiguous or unsupported.")
+    authorization = payload.get("authorization")
+    if not isinstance(authorization, dict):
+        raise ValueError("EIP-3009 authorization is required.")
+    required_fields = {"from", "to", "value", "validAfter", "validBefore", "nonce"}
+    if set(authorization) != required_fields:
+        raise ValueError("EIP-3009 authorization has unsupported or missing fields.")
+    sender = _normal_address(authorization["from"], "authorization from")
+    recipient = _normal_address(authorization["to"], "authorization to")
+    if recipient != _normal_address(accepted.get("payTo"), "accepted payTo") or recipient != _normal_address(requirement.get("payTo"), "required payTo"):
+        raise ValueError("Authorization recipient does not match server requirements.")
+    value = _normal_uint(authorization["value"], "authorization value")
+    if value != _normal_uint(accepted.get("amount"), "accepted amount") or value != _normal_uint(requirement.get("amount"), "required amount"):
+        raise ValueError("Authorization value does not match server requirements.")
+    valid_after = _normal_uint(authorization["validAfter"], "authorization validAfter")
+    valid_before = _normal_uint(authorization["validBefore"], "authorization validBefore")
+    if int(valid_before) <= int(valid_after):
+        raise ValueError("Authorization validity window is invalid.")
+    nonce = _normal_nonce(authorization["nonce"])
+    _require_signature(payload.get("signature"))
+    canonical = {
+        "identity_version": X402_IDENTITY_VERSION, "x402_version": 2,
+        "scheme": "exact", "network": network, "asset": asset,
+        "asset_transfer_method": "eip3009", "sender": sender,
+        "recipient": recipient, "amount": value, "valid_after": valid_after,
+        "valid_before": valid_before, "nonce": nonce,
+    }
+    digest = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")).digest()
+    return X402PaymentIdentity(X402_IDENTITY_VERSION, digest, "x402:v1:" + digest.hex())
+
+
 def encode_payment_response_header(payload: dict[str, Any]) -> str:
     return _b64_json(payload)
 
@@ -966,11 +1098,17 @@ def settle_with_facilitator(
             settlement_response=_safe_facilitator_receipt(data),
         )
 
-    settled = bool(
-        (data or {}).get("success")
-        or (data or {}).get("settled")
-        or (data or {}).get("txHash")
-        or (data or {}).get("transaction")
+    # ``success`` is the V2 terminal settlement signal.  A transaction hash
+    # alone may accompany settlement_pending, and any contradictory or
+    # malformed result remains deliberately uncertain to the claim layer.
+    settled_field = data.get("settled") if isinstance(data, dict) else None
+    pending_field = data.get("settlement_pending") if isinstance(data, dict) else None
+    settled = (
+        isinstance(data, dict)
+        and data.get("success") is True
+        and ("settled" not in data or settled_field is True)
+        and ("settlement_pending" not in data or pending_field is False)
+        and data.get("errorReason") in (None, "")
     )
     if not settled:
         return X402ValidationResult(

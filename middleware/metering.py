@@ -1073,23 +1073,31 @@ def ensure_external_agent_record(
 
 
 def is_payment_reference_used(payment_reference: str) -> bool:
-    if not payment_reference:
+    return are_payment_references_used((payment_reference,))
+
+
+def are_payment_references_used(payment_references: tuple[str, ...]) -> bool:
+    """One fail-closed lookup for legacy and safe x402 replay references."""
+    references = tuple(dict.fromkeys(reference for reference in payment_references if reference))
+    if not references:
         return False
 
     try:
         engine = get_metering_engine()
+        placeholders = ", ".join(f":reference_{index}" for index in range(len(references)))
+        parameters = {f"reference_{index}": reference for index, reference in enumerate(references)}
         with engine.begin() as conn:
             row = conn.execute(
                 text(
-                    """
+                    f"""
                     SELECT 1
                     FROM api_request_economics
-                    WHERE payment_reference = :payment_reference
+                    WHERE payment_reference IN ({placeholders})
                       AND payment_status IN ('authorized', 'settled')
                     LIMIT 1
                     """
                 ),
-                {"payment_reference": payment_reference},
+                parameters,
             ).first()
 
             return row is not None
@@ -1945,6 +1953,9 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                         if payment_rail == "x402"
                         else _mpp_replay_checker
                     ),
+                    replay_checker_many=(
+                        are_payment_references_used if payment_rail == "x402" else None
+                    ),
                     pricing_rule_id=economic_rule_name,
                     request_id=request_id,
                 )
@@ -2132,19 +2143,30 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                         },
                     )
 
-                if local_enforcement_result.outcome == "settlement_failed":
+                if local_enforcement_result.outcome in {
+                    "settlement_failed", "settlement_uncertain", "claim_exists",
+                    "claim_unavailable", "settlement_suspended",
+                }:
+                    # An indeterminate facilitator result may have moved money.
+                    # Keep it non-billable and non-terminal in economics; the
+                    # claim table is the durable authority for reconciliation.
+                    settlement_payment_status = (
+                        "pending"
+                        if local_enforcement_result.outcome == "settlement_uncertain"
+                        else "failed"
+                    )
                     return reject(
                         enforcement=local_enforcement_result,
                         content={
-                            "error": "payment_settlement_failed",
+                            "error": local_enforcement_result.error_code,
                             "detail": local_enforcement_result.error_detail,
                             "request_id": request_id,
                         },
                         accepted_methods=x402_rejection_methods,
-                        event_error_code="payment_settlement_failed",
+                        event_error_code=local_enforcement_result.error_code,
                         event_notes=local_enforcement_result.error_detail,
                         econ_payment_fields={
-                            "payment_status": "failed",
+                            "payment_status": settlement_payment_status,
                             "payment_method": payment_method_header or decision.econ_payment_method,
                             "payment_network": local_enforcement_result.payment_network or payment_network_header,
                             "payment_token": local_enforcement_result.payment_token or payment_token_header,

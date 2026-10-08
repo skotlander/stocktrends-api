@@ -69,7 +69,6 @@ def test_settlement_logs_and_response_exclude_payment_and_facilitator_secrets(mo
                 "network": "eip155:8453",
                 "payer": "0xpayer",
                 "amount": "150000",
-                "errorReason": "not-used-on-success",
                 "debug": _FACILITATOR_SECRET,
             },
             _FACILITATOR_SECRET,
@@ -88,7 +87,6 @@ def test_settlement_logs_and_response_exclude_payment_and_facilitator_secrets(mo
         "network": "eip155:8453",
         "payer": "0xpayer",
         "amount": "150000",
-        "errorReason": "not-used-on-success",
     }
     assert "operation=settle status=200 outcome=received" in caplog.text
     for secret in (_PROOF_SECRET, _FACILITATOR_SECRET, "facilitator-key-id-secret"):
@@ -156,6 +154,28 @@ def test_settlement_receipt_excludes_invalid_and_unbounded_fields():
     assert receipt == {"payer": "0xpayer"}
 
 
+@pytest.mark.parametrize(
+    ("response", "valid"),
+    [
+        ({"success": True, "transaction": "0xtx", "network": "eip155:8453"}, True),
+        ({"success": False, "settled": True, "transaction": "0xtx"}, False),
+        ({"success": True, "settled": False, "transaction": "0xtx"}, False),
+        ({"success": True, "settled": "false", "transaction": "0xtx"}, False),
+        ({"success": True, "errorReason": "settlement_pending", "transaction": "0xtx"}, False),
+        ({"success": True, "settlement_pending": True, "transaction": "0xtx"}, False),
+        ({"success": True, "settlement_pending": "false", "transaction": "0xtx"}, False),
+        ({"settled": True, "transaction": "0xtx"}, False),
+        ({"transaction": "0xtx"}, False),
+    ],
+)
+def test_settlement_confirmation_requires_explicit_consistent_success(monkeypatch, response, valid):
+    monkeypatch.setattr(x402, "_post_json", lambda *_args, **_kwargs: (200, response, ""))
+    result = x402.settle_with_facilitator(
+        payment_signature=_payment_proof(), payment_requirements=_REQUIREMENTS
+    )
+    assert result.valid is valid
+
+
 def test_replay_database_failure_is_classified_without_leaking_exception(monkeypatch, caplog):
     database_error = RuntimeError("postgres://user:password@db/payment-proof-secret")
     monkeypatch.setattr(metering, "get_metering_engine", lambda: (_ for _ in ()).throw(database_error))
@@ -174,6 +194,7 @@ def test_replay_database_failure_blocks_verify_and_settlement(payment_harness, m
         raise ReplayCheckUnavailable()
 
     monkeypatch.setattr(metering, "is_payment_reference_used", unavailable)
+    monkeypatch.setattr(metering, "are_payment_references_used", lambda _references: unavailable(None))
 
     response = payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM-N", headers=x402_headers()

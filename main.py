@@ -47,6 +47,7 @@ from payments.challenge import (
 )
 import payments.policy_provider as payment_policy
 import payments.x402_contract as x402_contract
+from payments.enforcement import log_x402_claim_control_state
 from payments.mpp import MPP_PAYMENT_CHANNEL_ID_HEADERS, MPP_REQUIRED_HEADERS
 
 from routers.instruments import router as instruments_router
@@ -76,6 +77,7 @@ from routers.observability import (
 )
 
 logging.basicConfig(level=logging.INFO)
+log_x402_claim_control_state()
 
 APP_TITLE = "Stock Trends API"
 APP_VERSION = "1.0.0"
