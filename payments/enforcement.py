@@ -174,15 +174,21 @@ def enforce_x402_payment(
     # Legacy lookup remains authoritative for historical references, but raw
     # artifacts must never enter new request economics.
     replay_reference = normalized_payment_reference
-    if replay_reference:
+    safe_reference = safe_x402_artifact_reference(payment_signature)
+    if replay_reference or safe_reference:
         try:
-            replay_detected = replay_checker(replay_reference)
+            # First retain identifier/raw lookup compatibility for historical
+            # rows.  Then check the safe prospective reference written by this
+            # package, so disabled claims cannot silently lose replay safety.
+            replay_detected = bool(replay_reference and replay_checker(replay_reference))
+            if not replay_detected and safe_reference:
+                replay_detected = replay_checker(safe_reference)
         except ReplayCheckUnavailable:
             return PaymentEnforcementResult(
                 outcome="replay_check_unavailable",
                 error_code="replay_check_unavailable",
                 error_detail="Payment replay protection is temporarily unavailable. Please retry later.",
-                payment_reference=safe_x402_artifact_reference(payment_signature),
+                payment_reference=safe_reference,
                 payment_network=normalized_payment_network or required_network,
                 payment_token=normalized_payment_token or required_token,
                 payment_amount_native=normalized_payment_amount_native,
@@ -193,7 +199,7 @@ def enforce_x402_payment(
                 outcome="replay_detected",
                 error_code="replay_detected",
                 error_detail="Payment reference has already been used.",
-                payment_reference=safe_x402_artifact_reference(payment_signature),
+                payment_reference=safe_reference,
                 payment_network=normalized_payment_network or required_network,
                 payment_token=normalized_payment_token or required_token,
                 payment_amount_native=normalized_payment_amount_native,

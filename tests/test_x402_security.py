@@ -69,7 +69,6 @@ def test_settlement_logs_and_response_exclude_payment_and_facilitator_secrets(mo
                 "network": "eip155:8453",
                 "payer": "0xpayer",
                 "amount": "150000",
-                "errorReason": "not-used-on-success",
                 "debug": _FACILITATOR_SECRET,
             },
             _FACILITATOR_SECRET,
@@ -88,7 +87,6 @@ def test_settlement_logs_and_response_exclude_payment_and_facilitator_secrets(mo
         "network": "eip155:8453",
         "payer": "0xpayer",
         "amount": "150000",
-        "errorReason": "not-used-on-success",
     }
     assert "operation=settle status=200 outcome=received" in caplog.text
     for secret in (_PROOF_SECRET, _FACILITATOR_SECRET, "facilitator-key-id-secret"):
@@ -154,6 +152,26 @@ def test_settlement_receipt_excludes_invalid_and_unbounded_fields():
     )
 
     assert receipt == {"payer": "0xpayer"}
+
+
+@pytest.mark.parametrize(
+    ("response", "valid"),
+    [
+        ({"success": True, "transaction": "0xtx", "network": "eip155:8453"}, True),
+        ({"success": False, "settled": True, "transaction": "0xtx"}, False),
+        ({"success": True, "settled": False, "transaction": "0xtx"}, False),
+        ({"success": True, "errorReason": "settlement_pending", "transaction": "0xtx"}, False),
+        ({"success": True, "settlement_pending": True, "transaction": "0xtx"}, False),
+        ({"settled": True, "transaction": "0xtx"}, False),
+        ({"transaction": "0xtx"}, False),
+    ],
+)
+def test_settlement_confirmation_requires_explicit_consistent_success(monkeypatch, response, valid):
+    monkeypatch.setattr(x402, "_post_json", lambda *_args, **_kwargs: (200, response, ""))
+    result = x402.settle_with_facilitator(
+        payment_signature=_payment_proof(), payment_requirements=_REQUIREMENTS
+    )
+    assert result.valid is valid
 
 
 def test_replay_database_failure_is_classified_without_leaking_exception(monkeypatch, caplog):

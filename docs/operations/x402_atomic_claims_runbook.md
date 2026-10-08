@@ -21,5 +21,12 @@ Challenges and discovery remain available while settlement is suspended.
 Operators reconcile `uncertain` claims using the safe receipt and
 `last_error_code`; no automatic retry or refund is authorized.
 
+Before production activation, run the real InnoDB concurrency proof only
+against an isolated disposable database: set
+`X402_MYSQL_CONCURRENCY_TEST_URL` to a `stocktrends_test` MySQL URL and set
+`X402_MYSQL_CONCURRENCY_TEST_ACK=I_UNDERSTAND_THIS_DROPS_TEST_TABLES`, then
+run `python -m pytest tests/integration/test_x402_claims_mysql_concurrency.py`.
+The test creates and drops only `x402_payment_claims` in that disposable DB.
+
 Only before activation, after confirming there are no active claims, may the
 table be dropped using the commented rollback statement in the SQL artifact.

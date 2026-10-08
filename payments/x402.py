@@ -667,17 +667,35 @@ def build_x402_payment_identity(
     requirement = _normalize_payment_requirements_input(payment_requirements)
     if proof.get("x402Version") != 2 or requirement.get("scheme") != "exact":
         raise ValueError("Only x402 V2 exact payments are supported for atomic claims.")
-    if proof.get("scheme") != "exact":
+    # PaymentPayload V2 contains the selected requirement under ``accepted``;
+    # resource and extensions are standard optional fields and intentionally do
+    # not participate in the authorization identity.
+    if set(proof) - {"x402Version", "resource", "accepted", "payload", "extensions"}:
+        raise ValueError("Payment payload has unsupported top-level fields.")
+    accepted = proof.get("accepted")
+    if not isinstance(accepted, dict):
+        raise ValueError("PaymentPayload accepted requirements are required.")
+    if set(accepted) - {"scheme", "network", "amount", "asset", "payTo", "maxTimeoutSeconds", "extra"}:
+        raise ValueError("Accepted payment requirements are unsupported.")
+    required_requirement_fields = {"scheme", "network", "amount", "asset", "payTo", "maxTimeoutSeconds"}
+    if not required_requirement_fields.issubset(accepted):
+        raise ValueError("Accepted payment requirements are incomplete.")
+    if accepted.get("scheme") != "exact":
         raise ValueError("Payment scheme must be exact.")
-    network = proof.get("network")
+    network = accepted.get("network")
     if not isinstance(network, str) or network != requirement.get("network"):
         raise ValueError("Payment network does not match server requirements.")
-    asset = _normal_address(proof.get("asset"), "payment asset")
+    asset = _normal_address(accepted.get("asset"), "payment asset")
     if asset != _normal_address(requirement.get("asset"), "required asset"):
         raise ValueError("Payment asset does not match server requirements.")
-    extra = requirement.get("extra")
+    extra = accepted.get("extra")
+    required_extra = requirement.get("extra")
     if not isinstance(extra, dict) or extra.get("assetTransferMethod") != "eip3009":
         raise ValueError("Server requirements do not specify EIP-3009.")
+    if not isinstance(required_extra, dict) or required_extra.get("assetTransferMethod") != "eip3009":
+        raise ValueError("Server requirements do not specify EIP-3009.")
+    if accepted.get("maxTimeoutSeconds") != requirement.get("maxTimeoutSeconds"):
+        raise ValueError("Accepted timeout does not match server requirements.")
     payload = proof.get("payload")
     if not isinstance(payload, dict) or set(payload) - {"authorization", "signature"}:
         raise ValueError("Payment payload is ambiguous or unsupported.")
@@ -689,10 +707,10 @@ def build_x402_payment_identity(
         raise ValueError("EIP-3009 authorization has unsupported or missing fields.")
     sender = _normal_address(authorization["from"], "authorization from")
     recipient = _normal_address(authorization["to"], "authorization to")
-    if recipient != _normal_address(requirement.get("payTo"), "required payTo"):
+    if recipient != _normal_address(accepted.get("payTo"), "accepted payTo") or recipient != _normal_address(requirement.get("payTo"), "required payTo"):
         raise ValueError("Authorization recipient does not match server requirements.")
     value = _normal_uint(authorization["value"], "authorization value")
-    if value != _normal_uint(requirement.get("amount"), "required amount"):
+    if value != _normal_uint(accepted.get("amount"), "accepted amount") or value != _normal_uint(requirement.get("amount"), "required amount"):
         raise ValueError("Authorization value does not match server requirements.")
     valid_after = _normal_uint(authorization["validAfter"], "authorization validAfter")
     valid_before = _normal_uint(authorization["validBefore"], "authorization validBefore")
@@ -1080,14 +1098,17 @@ def settle_with_facilitator(
             settlement_response=_safe_facilitator_receipt(data),
         )
 
-    # A hash alone is merely evidence of an attempt.  Package 2A requires an
-    # explicit terminal success signal; contradictory terminal fields are
-    # deliberately left to the caller as an uncertain outcome.
-    settled = isinstance(data, dict) and (
-        data.get("success") is True or data.get("settled") is True
-    ) and data.get("settlement_pending") is not True
-    if isinstance(data, dict) and data.get("success") is True and data.get("settled") is False:
-        settled = False
+    # ``success`` is the V2 terminal settlement signal.  A transaction hash
+    # alone may accompany settlement_pending, and any contradictory or
+    # malformed result remains deliberately uncertain to the claim layer.
+    settled = (
+        isinstance(data, dict)
+        and data.get("success") is True
+        and data.get("settled", True) is not False
+        and data.get("settlement_pending") is not True
+        and data.get("errorReason") != "settlement_pending"
+        and data.get("errorReason") in (None, "")
+    )
     if not settled:
         return X402ValidationResult(
             valid=False,
