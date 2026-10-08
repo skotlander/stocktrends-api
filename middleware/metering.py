@@ -34,7 +34,7 @@ from payments.challenge import (
     issue_x402_challenge,
     presents_x402_payment_proof,
 )
-from payments.enforcement import enforce_payment_rail
+from payments.enforcement import ReplayCheckUnavailable, enforce_payment_rail
 from payments.policy_provider import (
     get_accepted_payment_methods_for_path_from_config,
     get_effective_endpoint_payment_policy_from_config,
@@ -1095,7 +1095,15 @@ def is_payment_reference_used(payment_reference: str) -> bool:
             return row is not None
 
     except Exception as e:
-        logger.error("Payment replay check failed: %s", e, exc_info=True)
+        logger.error("Payment replay check unavailable")
+        raise ReplayCheckUnavailable from e
+
+
+def _mpp_replay_checker(payment_reference: str) -> bool:
+    """Preserve MPP's existing local replay-check behavior during DB outages."""
+    try:
+        return is_payment_reference_used(payment_reference)
+    except ReplayCheckUnavailable:
         return False
 
 
@@ -1932,7 +1940,11 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                     validated_payment_network=validated_payment_network,
                     validated_payment_token=validated_payment_token,
                     validated_payment_amount_native=validated_payment_amount_native,
-                    replay_checker=is_payment_reference_used,
+                    replay_checker=(
+                        is_payment_reference_used
+                        if payment_rail == "x402"
+                        else _mpp_replay_checker
+                    ),
                     pricing_rule_id=economic_rule_name,
                     request_id=request_id,
                 )
@@ -2060,6 +2072,28 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                         content={
                             "error": "replay_detected",
                             "detail": "Payment reference has already been used.",
+                            "request_id": request_id,
+                        },
+                        accepted_methods=x402_rejection_methods,
+                        event_error_code=local_enforcement_result.error_code,
+                        event_notes=local_enforcement_result.error_detail,
+                        econ_payment_fields={
+                            "payment_status": "failed_validation",
+                            "payment_method": payment_method_header or decision.econ_payment_method,
+                            "payment_network": local_enforcement_result.payment_network or payment_network_header,
+                            "payment_token": local_enforcement_result.payment_token or payment_token_header,
+                            "payment_amount_native": x402_amount_native,
+                            "payment_amount_usd": None,
+                            "payment_reference": replay_reference,
+                        },
+                    )
+
+                if local_enforcement_result.outcome == "replay_check_unavailable":
+                    return reject(
+                        enforcement=local_enforcement_result,
+                        content={
+                            "error": "replay_check_unavailable",
+                            "detail": local_enforcement_result.error_detail,
                             "request_id": request_id,
                         },
                         accepted_methods=x402_rejection_methods,
