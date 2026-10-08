@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+import os
 from typing import Callable, Optional
 
 from payments.challenge import (
@@ -12,6 +13,7 @@ from payments.challenge import (
 from payments.x402 import (
     INSUFFICIENT_PAYMENT_AMOUNT_ERROR,
     build_x402_challenge,
+    build_x402_payment_identity,
     build_x402_requirements,
     extract_payment_signature,
     extract_x402_payment_context,
@@ -19,6 +21,14 @@ from payments.x402 import (
     settle_with_facilitator,
     verify_with_facilitator,
     x402_insufficient_amount_detail,
+    safe_x402_artifact_reference,
+)
+from payments.x402_claims import (
+    ClaimRepositoryUnavailable,
+    acquire_settling_claim,
+    record_failed,
+    record_settled,
+    record_uncertain,
 )
 from payments.mpp import enforce_mpp_payment
 
@@ -54,6 +64,14 @@ class PaymentEnforcementResult:
     payment_response: Optional[dict] = None
 
 
+def _atomic_claims_enabled() -> bool:
+    return os.getenv("X402_ATOMIC_CLAIMS_ENABLED", "false").lower() == "true"
+
+
+def _settlement_suspended() -> bool:
+    return os.getenv("X402_SETTLEMENT_SUSPENDED", "false").lower() == "true"
+
+
 def enforce_x402_payment(
     *,
     headers,
@@ -68,6 +86,7 @@ def enforce_x402_payment(
     validated_payment_token: str | None,
     validated_payment_amount_native: Decimal | None,
     replay_checker: Callable[[str], bool],
+    request_id: str | None = None,
     **_kwargs,
 ) -> PaymentEnforcementResult:
     challenge_mode_header = challenge_mode_from_headers(headers)
@@ -95,6 +114,7 @@ def enforce_x402_payment(
             payment_token=required_token,
         )
 
+    payment_signature = extract_payment_signature(headers)
     extracted_context = extract_x402_payment_context(headers)
     normalized_payment_reference = validated_payment_reference
     if normalized_payment_reference is None and extracted_context.valid:
@@ -117,7 +137,7 @@ def enforce_x402_payment(
             outcome="validation_failed",
             error_code=validation_error,
             error_detail=validation_detail,
-            payment_reference=normalized_payment_reference,
+            payment_reference=safe_x402_artifact_reference(payment_signature),
             payment_network=normalized_payment_network or required_network,
             payment_token=normalized_payment_token or required_token,
             payment_amount_native=normalized_payment_amount_native,
@@ -145,12 +165,14 @@ def enforce_x402_payment(
             outcome="validation_failed",
             error_code=INSUFFICIENT_PAYMENT_AMOUNT_ERROR,
             error_detail=insufficient_detail,
-            payment_reference=normalized_payment_reference,
+            payment_reference=safe_x402_artifact_reference(payment_signature),
             payment_network=normalized_payment_network or required_network,
             payment_token=normalized_payment_token or required_token,
             payment_amount_native=normalized_payment_amount_native,
         )
 
+    # Legacy lookup remains authoritative for historical references, but raw
+    # artifacts must never enter new request economics.
     replay_reference = normalized_payment_reference
     if replay_reference:
         try:
@@ -160,7 +182,7 @@ def enforce_x402_payment(
                 outcome="replay_check_unavailable",
                 error_code="replay_check_unavailable",
                 error_detail="Payment replay protection is temporarily unavailable. Please retry later.",
-                payment_reference=replay_reference,
+                payment_reference=safe_x402_artifact_reference(payment_signature),
                 payment_network=normalized_payment_network or required_network,
                 payment_token=normalized_payment_token or required_token,
                 payment_amount_native=normalized_payment_amount_native,
@@ -171,13 +193,11 @@ def enforce_x402_payment(
                 outcome="replay_detected",
                 error_code="replay_detected",
                 error_detail="Payment reference has already been used.",
-                payment_reference=replay_reference,
+                payment_reference=safe_x402_artifact_reference(payment_signature),
                 payment_network=normalized_payment_network or required_network,
                 payment_token=normalized_payment_token or required_token,
                 payment_amount_native=normalized_payment_amount_native,
             )
-
-    payment_signature = extract_payment_signature(headers)
 
     verify_result = verify_with_facilitator(
         payment_signature=payment_signature,
@@ -188,30 +208,99 @@ def enforce_x402_payment(
             outcome="verification_failed",
             error_code="payment_verification_failed",
             error_detail=verify_result.error_detail,
-            payment_reference=replay_reference,
+            payment_reference=safe_x402_artifact_reference(payment_signature),
             payment_network=normalized_payment_network or required_network,
             payment_token=normalized_payment_token or required_token,
             payment_amount_native=normalized_payment_amount_native,
         )
+
+    if _settlement_suspended():
+        return PaymentEnforcementResult(
+            outcome="settlement_suspended", error_code="x402_settlement_suspended",
+            error_detail="x402 settlement is temporarily suspended.",
+            payment_reference=safe_x402_artifact_reference(payment_signature),
+            payment_network=normalized_payment_network or required_network,
+            payment_token=normalized_payment_token or required_token,
+            payment_amount_native=normalized_payment_amount_native,
+        )
+
+    identity = None
+    if _atomic_claims_enabled():
+        try:
+            identity = build_x402_payment_identity(payment_signature, current_payment_requirements)
+            claim = acquire_settling_claim(
+                identity_version=identity.version, payment_fingerprint=identity.fingerprint,
+                owner_request_id=request_id or "unknown-request",
+            )
+        except (ValueError, ClaimRepositoryUnavailable):
+            return PaymentEnforcementResult(
+                outcome="claim_unavailable", error_code="x402_claim_unavailable",
+                error_detail="Atomic payment claim protection is unavailable.",
+                payment_reference=safe_x402_artifact_reference(payment_signature),
+                payment_network=normalized_payment_network or required_network,
+                payment_token=normalized_payment_token or required_token,
+                payment_amount_native=normalized_payment_amount_native,
+            )
+        if not claim.acquired:
+            return PaymentEnforcementResult(
+                outcome="claim_exists", error_code="payment_claim_exists",
+                error_detail="This payment authorization has already been claimed.",
+                payment_reference=identity.accounting_reference,
+                payment_network=normalized_payment_network or required_network,
+                payment_token=normalized_payment_token or required_token,
+                payment_amount_native=normalized_payment_amount_native,
+            )
 
     settle_result = settle_with_facilitator(
         payment_signature=payment_signature,
         payment_requirements=current_payment_requirements,
     )
     if not settle_result.valid:
+        if identity is not None:
+            try:
+                # A transport, HTTP, malformed, pending, or inconsistent
+                # facilitator outcome is not evidence that funds did not move.
+                record_uncertain(
+                    identity_version=identity.version, payment_fingerprint=identity.fingerprint,
+                    owner_request_id=request_id or "unknown-request",
+                    receipt=settle_result.settlement_response,
+                    error_code=settle_result.error_code or "settlement_uncertain",
+                )
+            except ClaimRepositoryUnavailable:
+                pass
         return PaymentEnforcementResult(
-            outcome="settlement_failed",
-            error_code="payment_settlement_failed",
+            outcome="settlement_uncertain" if identity is not None else "settlement_failed",
+            error_code="payment_settlement_uncertain" if identity is not None else "payment_settlement_failed",
             error_detail=settle_result.error_detail,
-            payment_reference=replay_reference,
+            payment_reference=identity.accounting_reference if identity else safe_x402_artifact_reference(payment_signature),
             payment_network=normalized_payment_network or required_network,
             payment_token=normalized_payment_token or required_token,
             payment_amount_native=normalized_payment_amount_native,
         )
 
+    if identity is not None:
+        try:
+            persisted = record_settled(
+                identity_version=identity.version, payment_fingerprint=identity.fingerprint,
+                owner_request_id=request_id or "unknown-request", receipt=settle_result.settlement_response,
+            )
+        except ClaimRepositoryUnavailable:
+            persisted = False
+        if not persisted:
+            # Settlement may have happened, but we cannot safely execute the
+            # paid endpoint without its durable terminal record.
+            return PaymentEnforcementResult(
+                outcome="settlement_uncertain", error_code="payment_settlement_uncertain",
+                error_detail="Settlement outcome could not be recorded safely.",
+                payment_reference=identity.accounting_reference,
+                payment_network=normalized_payment_network or required_network,
+                payment_token=normalized_payment_token or required_token,
+                payment_amount_native=normalized_payment_amount_native,
+            )
+
     return PaymentEnforcementResult(
         outcome="proceed",
-        payment_reference=replay_reference,
+        payment_reference=identity.accounting_reference if identity else safe_x402_artifact_reference(payment_signature),
         payment_network=normalized_payment_network or required_network,
         payment_token=normalized_payment_token or required_token,
         payment_amount_native=normalized_payment_amount_native,

@@ -2132,16 +2132,19 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                         },
                     )
 
-                if local_enforcement_result.outcome == "settlement_failed":
+                if local_enforcement_result.outcome in {
+                    "settlement_failed", "settlement_uncertain", "claim_exists",
+                    "claim_unavailable", "settlement_suspended",
+                }:
                     return reject(
                         enforcement=local_enforcement_result,
                         content={
-                            "error": "payment_settlement_failed",
+                            "error": local_enforcement_result.error_code,
                             "detail": local_enforcement_result.error_detail,
                             "request_id": request_id,
                         },
                         accepted_methods=x402_rejection_methods,
-                        event_error_code="payment_settlement_failed",
+                        event_error_code=local_enforcement_result.error_code,
                         event_notes=local_enforcement_result.error_detail,
                         econ_payment_fields={
                             "payment_status": "failed",
