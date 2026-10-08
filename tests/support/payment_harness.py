@@ -592,6 +592,11 @@ def payment_harness(
         "is_payment_reference_used",
         lambda reference: bool(reference) and reference in used_references,
     )
+    monkeypatch.setattr(
+        metering_module,
+        "are_payment_references_used",
+        lambda references: any(reference in used_references for reference in references),
+    )
 
     with TestClient(main.app) as client:
         yield PaymentHarness(

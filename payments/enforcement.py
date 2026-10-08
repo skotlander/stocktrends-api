@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from decimal import Decimal
+import logging
 import os
 from typing import Callable, Optional
 
@@ -31,6 +32,9 @@ from payments.x402_claims import (
     record_uncertain,
 )
 from payments.mpp import enforce_mpp_payment
+
+
+logger = logging.getLogger("stocktrends_api.x402.enforcement")
 
 
 class ReplayCheckUnavailable(Exception):
@@ -64,12 +68,40 @@ class PaymentEnforcementResult:
     payment_response: Optional[dict] = None
 
 
+_TRUE_VALUES = {"true", "1", "yes", "on"}
+_FALSE_VALUES = {"false", "0", "no", "off", ""}
+
+
+def _fail_closed_flag(name: str, *, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in _TRUE_VALUES:
+        return True
+    if normalized in _FALSE_VALUES:
+        return False
+    # Explicitly configured ambiguity must never reopen settlement or select
+    # the legacy non-atomic path.
+    return True
+
+
 def _atomic_claims_enabled() -> bool:
-    return os.getenv("X402_ATOMIC_CLAIMS_ENABLED", "false").lower() == "true"
+    return _fail_closed_flag("X402_ATOMIC_CLAIMS_ENABLED", default=False)
 
 
 def _settlement_suspended() -> bool:
-    return os.getenv("X402_SETTLEMENT_SUSPENDED", "false").lower() == "true"
+    return _fail_closed_flag("X402_SETTLEMENT_SUSPENDED", default=False)
+
+
+def x402_claim_control_state() -> dict[str, bool]:
+    """Safe deployment/preflight view; it intentionally exposes no env values."""
+    return {"atomic_claims_enabled": _atomic_claims_enabled(), "settlement_suspended": _settlement_suspended()}
+
+
+def log_x402_claim_control_state() -> None:
+    state = x402_claim_control_state()
+    logger.info("x402 claim controls atomic_claims_enabled=%s settlement_suspended=%s", state["atomic_claims_enabled"], state["settlement_suspended"])
 
 
 def enforce_x402_payment(
@@ -86,6 +118,7 @@ def enforce_x402_payment(
     validated_payment_token: str | None,
     validated_payment_amount_native: Decimal | None,
     replay_checker: Callable[[str], bool],
+    replay_checker_many: Callable[[tuple[str, ...]], bool] | None = None,
     request_id: str | None = None,
     **_kwargs,
 ) -> PaymentEnforcementResult:
@@ -171,18 +204,36 @@ def enforce_x402_payment(
             payment_amount_native=normalized_payment_amount_native,
         )
 
+    # In claim mode, reject a definitely malformed/unsupported V2 EIP-3009
+    # structure before an unindexed historical economics scan.  This is only
+    # local structure validation; the facilitator still verifies signatures.
+    identity = None
+    if _atomic_claims_enabled():
+        try:
+            identity = build_x402_payment_identity(payment_signature, current_payment_requirements)
+        except ValueError:
+            return PaymentEnforcementResult(
+                outcome="claim_unavailable", error_code="x402_claim_unavailable",
+                error_detail="Atomic payment claim protection is unavailable.",
+                payment_reference=safe_x402_artifact_reference(payment_signature),
+                payment_network=normalized_payment_network or required_network,
+                payment_token=normalized_payment_token or required_token,
+                payment_amount_native=normalized_payment_amount_native,
+            )
+
     # Legacy lookup remains authoritative for historical references, but raw
     # artifacts must never enter new request economics.
     replay_reference = normalized_payment_reference
     safe_reference = safe_x402_artifact_reference(payment_signature)
     if replay_reference or safe_reference:
         try:
-            # First retain identifier/raw lookup compatibility for historical
-            # rows.  Then check the safe prospective reference written by this
-            # package, so disabled claims cannot silently lose replay safety.
-            replay_detected = bool(replay_reference and replay_checker(replay_reference))
-            if not replay_detected and safe_reference:
-                replay_detected = replay_checker(safe_reference)
+            references = tuple(dict.fromkeys(reference for reference in (replay_reference, safe_reference) if reference))
+            if replay_checker_many is not None:
+                replay_detected = replay_checker_many(references)
+            else:
+                replay_detected = bool(replay_reference and replay_checker(replay_reference))
+                if not replay_detected and safe_reference:
+                    replay_detected = replay_checker(safe_reference)
         except ReplayCheckUnavailable:
             return PaymentEnforcementResult(
                 outcome="replay_check_unavailable",
@@ -230,15 +281,13 @@ def enforce_x402_payment(
             payment_amount_native=normalized_payment_amount_native,
         )
 
-    identity = None
     if _atomic_claims_enabled():
         try:
-            identity = build_x402_payment_identity(payment_signature, current_payment_requirements)
             claim = acquire_settling_claim(
                 identity_version=identity.version, payment_fingerprint=identity.fingerprint,
                 owner_request_id=request_id or "unknown-request",
             )
-        except (ValueError, ClaimRepositoryUnavailable):
+        except ClaimRepositoryUnavailable:
             return PaymentEnforcementResult(
                 outcome="claim_unavailable", error_code="x402_claim_unavailable",
                 error_detail="Atomic payment claim protection is unavailable.",

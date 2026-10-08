@@ -28,8 +28,8 @@ def headers():
         "validBefore": "9999999999", "nonce": "0x" + "01" * 32}}})}
 
 
-def call(monkeypatch, *, replay_checker=lambda _value: False, suspended=False):
-    monkeypatch.setenv("X402_ATOMIC_CLAIMS_ENABLED", "true")
+def call(monkeypatch, *, replay_checker=lambda _value: False, suspended=False, atomic_value="true"):
+    monkeypatch.setenv("X402_ATOMIC_CLAIMS_ENABLED", atomic_value)
     if suspended:
         monkeypatch.setenv("X402_SETTLEMENT_SUSPENDED", "true")
     else:
@@ -93,6 +93,35 @@ def test_suspension_never_calls_settle(monkeypatch):
     monkeypatch.setattr(enforcement, "verify_with_facilitator", _verify_ok)
     monkeypatch.setattr(enforcement, "settle_with_facilitator", lambda **_kwargs: (_ for _ in ()).throw(AssertionError("settle")))
     assert call(monkeypatch, suspended=True).outcome == "settlement_suspended"
+
+
+def test_claim_flags_normalize_documented_values_and_fail_closed(monkeypatch):
+    for value in (" true ", "1", "YES", "On"):
+        monkeypatch.setenv("X402_ATOMIC_CLAIMS_ENABLED", value)
+        assert enforcement.x402_claim_control_state()["atomic_claims_enabled"] is True
+    monkeypatch.delenv("X402_ATOMIC_CLAIMS_ENABLED", raising=False)
+    assert enforcement.x402_claim_control_state()["atomic_claims_enabled"] is False
+    monkeypatch.setenv("X402_ATOMIC_CLAIMS_ENABLED", "unexpected")
+    monkeypatch.setenv("X402_SETTLEMENT_SUSPENDED", "unexpected")
+    state = enforcement.x402_claim_control_state()
+    assert state == {"atomic_claims_enabled": True, "settlement_suspended": True}
+
+
+def test_malformed_claim_mode_artifact_does_not_query_legacy_replay(monkeypatch):
+    replay_calls = []
+    malformed = headers()
+    malformed["X-Payment"] = "{not json"
+    monkeypatch.setenv("X402_ATOMIC_CLAIMS_ENABLED", "true")
+    monkeypatch.setattr(enforcement, "build_x402_requirements", lambda **_kwargs: {"accepts": [REQUIREMENT]})
+    result = enforcement.enforce_x402_payment(
+        headers=malformed, path="/v1/stim/latest", method="GET", amount_usd=Decimal("0.15"),
+        validation_valid=True, validation_error=None, validation_detail=None,
+        validated_payment_reference=None, validated_payment_network=None,
+        validated_payment_token=None, validated_payment_amount_native=None,
+        replay_checker=lambda value: replay_calls.append(value) or False,
+    )
+    assert result.outcome == "claim_unavailable"
+    assert not replay_calls
 
 
 def test_safe_reference_is_checked_after_legacy_reference(monkeypatch):

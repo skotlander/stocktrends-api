@@ -194,6 +194,7 @@ def test_replay_database_failure_blocks_verify_and_settlement(payment_harness, m
         raise ReplayCheckUnavailable()
 
     monkeypatch.setattr(metering, "is_payment_reference_used", unavailable)
+    monkeypatch.setattr(metering, "are_payment_references_used", lambda _references: unavailable(None))
 
     response = payment_harness.client.get(
         "/v1/prices/history?symbol_exchange=IBM-N", headers=x402_headers()

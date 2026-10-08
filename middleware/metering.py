@@ -1073,23 +1073,31 @@ def ensure_external_agent_record(
 
 
 def is_payment_reference_used(payment_reference: str) -> bool:
-    if not payment_reference:
+    return are_payment_references_used((payment_reference,))
+
+
+def are_payment_references_used(payment_references: tuple[str, ...]) -> bool:
+    """One fail-closed lookup for legacy and safe x402 replay references."""
+    references = tuple(dict.fromkeys(reference for reference in payment_references if reference))
+    if not references:
         return False
 
     try:
         engine = get_metering_engine()
+        placeholders = ", ".join(f":reference_{index}" for index in range(len(references)))
+        parameters = {f"reference_{index}": reference for index, reference in enumerate(references)}
         with engine.begin() as conn:
             row = conn.execute(
                 text(
-                    """
+                    f"""
                     SELECT 1
                     FROM api_request_economics
-                    WHERE payment_reference = :payment_reference
+                    WHERE payment_reference IN ({placeholders})
                       AND payment_status IN ('authorized', 'settled')
                     LIMIT 1
                     """
                 ),
-                {"payment_reference": payment_reference},
+                parameters,
             ).first()
 
             return row is not None
@@ -1944,6 +1952,9 @@ class MeteringMiddleware(BaseHTTPMiddleware):
                         is_payment_reference_used
                         if payment_rail == "x402"
                         else _mpp_replay_checker
+                    ),
+                    replay_checker_many=(
+                        are_payment_references_used if payment_rail == "x402" else None
                     ),
                     pricing_rule_id=economic_rule_name,
                     request_id=request_id,
