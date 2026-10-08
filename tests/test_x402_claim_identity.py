@@ -67,6 +67,36 @@ def test_identity_normalizes_addresses_and_numbers_and_ignores_payment_identifie
     assert identity(first).fingerprint == identity(second).fingerprint
 
 
+def test_identity_accepts_exact_evm_default_when_quote_omits_transfer_method():
+    """@x402/evm Exact EVM defaults this optional V2 hint to EIP-3009."""
+    payload = proof()
+    payload["accepted"]["extra"].pop("assetTransferMethod")
+    live_requirement = requirements()
+    live_requirement["extra"].pop("assetTransferMethod")
+
+    result = build_x402_payment_identity(json.dumps(payload), live_requirement)
+
+    assert result.accounting_reference.startswith("x402:v1:")
+
+
+@pytest.mark.parametrize("accepted_method, required_method", [
+    ("permit2", "permit2"),
+    ("eip3009", "permit2"),
+    (None, "eip3009"),
+])
+def test_identity_rejects_explicit_or_asymmetric_transfer_methods(accepted_method, required_method):
+    payload = proof()
+    if accepted_method is None:
+        payload["accepted"]["extra"].pop("assetTransferMethod")
+    else:
+        payload["accepted"]["extra"]["assetTransferMethod"] = accepted_method
+    live_requirement = requirements()
+    live_requirement["extra"]["assetTransferMethod"] = required_method
+
+    with pytest.raises(ValueError, match="EIP-3009"):
+        build_x402_payment_identity(json.dumps(payload), live_requirement)
+
+
 @pytest.mark.parametrize("change", [
     {"authorization": {"nonce": "0x" + "02" * 32}},
     {"authorization": {"from": "0x3333333333333333333333333333333333333333"}},

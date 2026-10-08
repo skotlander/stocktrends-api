@@ -690,9 +690,19 @@ def build_x402_payment_identity(
         raise ValueError("Payment asset does not match server requirements.")
     extra = accepted.get("extra")
     required_extra = requirement.get("extra")
-    if not isinstance(extra, dict) or extra.get("assetTransferMethod") != "eip3009":
+    if not isinstance(extra, dict) or not isinstance(required_extra, dict):
         raise ValueError("Server requirements do not specify EIP-3009.")
-    if not isinstance(required_extra, dict) or required_extra.get("assetTransferMethod") != "eip3009":
+    accepted_transfer_method = extra.get("assetTransferMethod")
+    required_transfer_method = required_extra.get("assetTransferMethod")
+    # The x402 Exact EVM client defaults an omitted transfer-method hint to
+    # EIP-3009, while preserving the selected requirements verbatim in
+    # PaymentPayload.accepted.  The authorization shape below is still parsed
+    # strictly as EIP-3009; this only accepts that protocol default when both
+    # sides of the same quote omit the optional hint.  Explicit values must
+    # continue to declare EIP-3009 exactly.
+    if accepted_transfer_method is None and required_transfer_method is None:
+        pass
+    elif accepted_transfer_method != "eip3009" or required_transfer_method != "eip3009":
         raise ValueError("Server requirements do not specify EIP-3009.")
     if accepted.get("maxTimeoutSeconds") != requirement.get("maxTimeoutSeconds"):
         raise ValueError("Accepted timeout does not match server requirements.")
