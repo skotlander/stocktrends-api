@@ -89,8 +89,8 @@ def selection_engine(monkeypatch):
     [
         (selections.selections_latest, {"exchange": None, "min_prob13wk": None, "limit": 10}),
         (selections.selections_history, {"symbol_exchange": None, "symbol": None, "exchange": None, "start": None, "end": None, "min_prob13wk": None, "limit": 10}),
-        (selections_published.selections_published_latest, {"exchange": None, "min_prob13wk": 0.55, "min_x4wk1": 0.0, "min_x13wk1": 2.19, "min_x40wk1": 6.45, "limit": 10}),
-        (selections_published.selections_published_history, {"symbol_exchange": None, "symbol": None, "exchange": None, "start": None, "end": None, "min_prob13wk": 0.55, "min_x4wk1": 0.0, "min_x13wk1": 2.19, "min_x40wk1": 6.45, "limit": 10}),
+        (selections_published.selections_published_latest, {"exchange": None, "limit": 10}),
+        (selections_published.selections_published_history, {"symbol_exchange": None, "symbol": None, "exchange": None, "start": None, "end": None, "limit": 10}),
     ],
     ids=["base-latest", "base-history", "published-latest", "published-history"],
 )

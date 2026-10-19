@@ -29,6 +29,7 @@ import routers.portfolio as portfolio_router
 import routers.prices as prices_router
 import routers.screener as screener_router
 import routers.selections as selections_router
+import routers.selections_published as selections_published_router
 import routers.stim as stim_router
 import routers.stwr as stwr_router
 from support.payment_harness import (
@@ -62,6 +63,7 @@ _ROUTER_MODULES = (
     prices_router,
     screener_router,
     selections_router,
+    selections_published_router,
     stim_router,
     stwr_router,
 )
@@ -627,6 +629,13 @@ def test_invalid_exchange_filter_never_reaches_a_rail(
     )
 
     assert response.status_code == 400
+    assert_rejected_before_payment(payment_harness, counted_engines)
+
+
+@pytest.mark.parametrize("path", ["/v1/selections/published/latest", "/v1/selections/published/history"])
+def test_published_threshold_override_rejected_before_payment(payment_harness, counted_engines, path):
+    response = payment_harness.client.get(f"{path}?min_prob13wk=50", headers=x402_headers())
+    assert response.status_code == 422
     assert_rejected_before_payment(payment_harness, counted_engines)
 
 

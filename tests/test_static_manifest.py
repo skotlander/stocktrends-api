@@ -189,6 +189,17 @@ def test_selections_latest_present_with_correct_path(manifest):
         f"selections_latest path must be /selections/latest, got {tool.get('path')!r}"
 
 
+def test_published_selection_cs_only_parameter(manifest):
+    for name in ("selections_published_latest", "selections_published_history"):
+        tool = _tool_by_name(manifest, name)
+        params = {param["name"]: param for param in tool["parameters"]}
+        field = params["cs_only"]
+        assert field["type"] == "boolean"
+        assert field["default"] is False and field["required"] is False
+        assert "ETFs" in field["description"] and "type='CS'" in field["description"]
+        assert not {"min_prob13wk", "min_x4wk1", "min_x13wk1", "min_x40wk1"} & params.keys()
+
+
 def test_selections_published_latest_correct_path(manifest):
     """Published selections must use /selections/published/latest (not /selections-published/)."""
     tool = _tool_by_name(manifest, "selections_published_latest")
@@ -297,7 +308,7 @@ def test_static_stim_tools_expose_interpretation_guidance(manifest):
             "x40wksd",
         ]
         assert tool["interpretation_guidance"]["calculation"]["probability_outperform"] == "1 - normal_cdf(z)"
-        assert tool["interpretation_guidance"]["stim_select_style_logic"]["prob13wk_minimum"] == 0.55
+        assert tool["interpretation_guidance"]["stim_select_style_logic"]["prob13wk_minimum"] == 55
         assert "prob13wk_minimum_description" in tool["interpretation_guidance"]["stim_select_style_logic"]
 
 
@@ -502,7 +513,7 @@ def test_static_published_selections_have_interpretation_guidance(manifest):
         assert criteria["x13wk1"]["operator"] == ">"
         assert criteria["x13wk1"]["threshold_pct"] == 2.19
         assert criteria["prob13wk"]["operator"] == ">="
-        assert criteria["prob13wk"]["threshold"] == 0.55
+        assert criteria["prob13wk"]["threshold"] == 55
         assert criteria["all_criteria_required"] is True
 
 

@@ -635,7 +635,7 @@ def test_stim_tools_expose_machine_readable_interpretation_guidance():
         assert "base_period_mean_returns_pct" in guidance
         assert guidance["calculation"]["delta_vs_base"] == "stim_mean - base_mean"
         assert guidance["calculation"]["probability_outperform"] == "1 - normal_cdf(z)"
-        assert guidance["stim_select_style_logic"]["prob13wk_minimum"] == 0.55
+        assert guidance["stim_select_style_logic"]["prob13wk_minimum"] == 55
         assert any("/v1/meta/inference" in step for step in steps)
         assert any("/v1/meta/stim" in step for step in steps)
         assert "is_stale" in " ".join(guidance["interpretation_rules"])
@@ -1009,6 +1009,18 @@ def test_service_positioning_present_in_ai_surfaces():
     assert expected in result["service_description"]
     assert expected in context["service_description"]
     assert "Weekly structured market intelligence dataset" in context["description"]
+
+
+def test_published_selection_tools_expose_optional_cs_only():
+    tools = {tool["endpoint"]: tool for tool in ai_tools()["tools"]}
+    for path in ("/v1/selections/published/latest", "/v1/selections/published/history"):
+        schema = tools[path]["input_schema"]
+        field = schema["properties"]["cs_only"]
+        assert field["type"] == "boolean"
+        assert field["default"] is False
+        assert "cs_only" not in schema["required"]
+        assert "ETFs" in field["description"] and "type='CS'" in field["description"]
+        assert not {"min_prob13wk", "min_x4wk1", "min_x13wk1", "min_x40wk1"} & schema["properties"].keys()
 
 
 def test_mpp_rail_metadata_still_present_for_paid_tools():

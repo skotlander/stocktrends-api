@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from typing import Any
+from decimal import Decimal, InvalidOperation
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sqlalchemy import text
@@ -25,6 +26,7 @@ from utils.history_bounds import (
 router = APIRouter(prefix="/selections/published", tags=["selections_published"])
 
 # Published Select definition thresholds
+PUBLISHED_PROB13WK = 55.0
 BASE_4WK = 0.00
 BASE_13WK = 2.19
 BASE_40WK = 6.45
@@ -97,8 +99,28 @@ def resolve_selection_filters(
     return s, ex
 
 
+def _validate_published_thresholds(request: Request) -> None:
+    # Temporary compatibility with the historical agent request encoding.
+    accepted = {
+        "min_prob13wk": {Decimal("0.55"), Decimal("55")},
+        "min_x4wk1": {Decimal("0")},
+        "min_x13wk1": {Decimal("2.19")},
+        "min_x40wk1": {Decimal("6.45")},
+    }
+    for name, allowed in accepted.items():
+        for raw in request.query_params.getlist(name):
+            try:
+                value = Decimal(raw)
+                valid = value.is_finite() and value in allowed
+            except InvalidOperation:
+                valid = False
+            if not valid:
+                raise HTTPException(status_code=422, detail=f"{name} cannot alter published selection criteria")
+
+
 def _validate_selection_filter_values(request: Request, values: dict) -> None:
     """Pre-payment adapter: the shared resolver over the solved query values."""
+    _validate_published_thresholds(request)
     resolve_selection_filters(
         request,
         symbol_exchange=values.get("symbol_exchange"),
@@ -114,6 +136,7 @@ def _validate_exchange_values(request: Request, values: dict) -> None:
     They accept only the optional exchange filter, so that is the whole of their
     request-only validity.  Calls the same `_norm_exchange` the endpoint calls.
     """
+    _validate_published_thresholds(request)
     exchange = values.get("exchange")
     if exchange:
         _norm_exchange(exchange)
@@ -154,10 +177,6 @@ def _published_where(
     ex: str | None,
     start: str | None,
     end: str | None,
-    min_prob13wk: float | None,
-    min_x4wk1: float,
-    min_x13wk1: float,
-    min_x40wk1: float,
     symbol: str | None,
     params: dict[str, Any],
 ) -> str:
@@ -166,9 +185,9 @@ def _published_where(
           AND r.x13wk1 > :min_x13wk1
           AND r.x40wk1 > :min_x40wk1
     """
-    params["min_x4wk1"] = float(min_x4wk1)
-    params["min_x13wk1"] = float(min_x13wk1)
-    params["min_x40wk1"] = float(min_x40wk1)
+    params["min_x4wk1"] = BASE_4WK
+    params["min_x13wk1"] = BASE_13WK
+    params["min_x40wk1"] = BASE_40WK
 
     if ex:
         where += " AND s.exchange = :exchange"
@@ -186,9 +205,8 @@ def _published_where(
         where += " AND s.weekdate <= :end"
         params["end"] = end
 
-    if min_prob13wk is not None:
-        where += " AND s.prob13wk >= :min_prob13wk"
-        params["min_prob13wk"] = float(min_prob13wk)
+    where += " AND s.prob13wk >= :min_prob13wk"
+    params["min_prob13wk"] = PUBLISHED_PROB13WK
 
     return where
 
@@ -200,9 +218,9 @@ def _published_where(
         "Returns the latest published STIM Select (Stock Trends Inference Model Select) stock list. "
         "Selection criteria: the lower bound of the mean return confidence interval must exceed "
         "the base-period mean random return for all three ST-IM horizons simultaneously — "
-        "4-week: x4wk1 > 0% (default), 13-week: x13wk1 > 2.19% (default), "
-        "40-week: x40wk1 > 6.45% (default). "
-        "Default probability threshold: prob13wk >= 55% (probability of exceeding the "
+        "4-week: x4wk1 > 0%, 13-week: x13wk1 > 2.19%, "
+        "40-week: x40wk1 > 6.45%. "
+        "Published probability threshold: prob13wk >= 55% (probability of exceeding the "
         "13-week base-period mean return, assuming normal distribution). "
         "Results are ranked by prob13wk descending. "
         "Each result includes full ST-IM distribution fields (x4wk, x13wk, x40wk series). "
@@ -213,19 +231,16 @@ def _published_where(
 def selections_published_latest(
     request: Request,
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
-    min_prob13wk: float = Query(default=0.55, description="Minimum probability threshold"),
-    min_x4wk1: float = Query(default=BASE_4WK, description="Minimum lower confidence bound for 4-week return"),
-    min_x13wk1: float = Query(default=BASE_13WK, description="Minimum lower confidence bound for 13-week return"),
-    min_x40wk1: float = Query(default=BASE_40WK, description="Minimum lower confidence bound for 40-week return"),
     limit: int = Query(default=2000, ge=1, le=20000, description="Safety limit"),
     include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
     include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
-    cs_only: bool = Query(default=True, description="Restrict returned selections to common stocks only (type='CS')."),
+    cs_only: bool = Query(default=False, description="Restrict returned selections to common stocks only (type='CS')."),
 ):
     """
     Latest published Select list:
     Base ST-IM selection universe filtered to the published definition.
     """
+    _validate_published_thresholds(request)
     ex = _norm_exchange(exchange) if exchange else None
     engine = get_engine()
 
@@ -256,10 +271,6 @@ def selections_published_latest(
         ex=ex,
         start=str(latest_week),
         end=str(latest_week),
-        min_prob13wk=min_prob13wk,
-        min_x4wk1=min_x4wk1,
-        min_x13wk1=min_x13wk1,
-        min_x40wk1=min_x40wk1,
         symbol=None,
         params=params,
     )
@@ -379,10 +390,10 @@ def selections_published_latest(
         "request_id": request.state.request_id,
         "weekdate": str(latest_week),
         "exchange": ex,
-        "min_prob13wk": min_prob13wk,
-        "min_x4wk1": min_x4wk1,
-        "min_x13wk1": min_x13wk1,
-        "min_x40wk1": min_x40wk1,
+        "min_prob13wk": PUBLISHED_PROB13WK,
+        "min_x4wk1": BASE_4WK,
+        "min_x13wk1": BASE_13WK,
+        "min_x40wk1": BASE_40WK,
         "include_data": include_data,
         "include_mast": include_mast,
         "cs_only": cs_only,
@@ -411,10 +422,6 @@ def selections_published_history(
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
     start: str | None = Query(default=None, description="Start date YYYY-MM-DD (inclusive)"),
     end: str | None = Query(default=None, description="End date YYYY-MM-DD (inclusive)"),
-    min_prob13wk: float = Query(default=0.55, description="Minimum probability threshold"),
-    min_x4wk1: float = Query(default=BASE_4WK, description="Minimum lower confidence bound for 4-week return"),
-    min_x13wk1: float = Query(default=BASE_13WK, description="Minimum lower confidence bound for 13-week return"),
-    min_x40wk1: float = Query(default=BASE_40WK, description="Minimum lower confidence bound for 40-week return"),
     limit: int = Query(
         default=PUBLISHED_HISTORY_DEFAULT_LIMIT,
         ge=1,
@@ -423,12 +430,13 @@ def selections_published_history(
     ),
     include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
     include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
-    cs_only: bool = Query(default=True, description="Restrict returned selections to common stocks only (type='CS')."),
+    cs_only: bool = Query(default=False, description="Restrict returned selections to common stocks only (type='CS')."),
 ):
     """
     Published Select history:
     Base ST-IM selection universe filtered to the published definition.
     """
+    _validate_published_thresholds(request)
     engine = get_engine()
 
     # Shared with the pre-payment validator registered on this endpoint; the
@@ -447,10 +455,6 @@ def selections_published_history(
         ex=ex,
         start=start,
         end=end,
-        min_prob13wk=min_prob13wk,
-        min_x4wk1=min_x4wk1,
-        min_x13wk1=min_x13wk1,
-        min_x40wk1=min_x40wk1,
         symbol=s,
         params=params,
     )
@@ -578,10 +582,10 @@ def selections_published_history(
         "symbol_exchange": f"{s}-{ex}" if (s and ex) else None,
         "start": start,
         "end": end,
-        "min_prob13wk": min_prob13wk,
-        "min_x4wk1": min_x4wk1,
-        "min_x13wk1": min_x13wk1,
-        "min_x40wk1": min_x40wk1,
+        "min_prob13wk": PUBLISHED_PROB13WK,
+        "min_x4wk1": BASE_4WK,
+        "min_x13wk1": BASE_13WK,
+        "min_x40wk1": BASE_40WK,
         "include_data": include_data,
         "include_mast": include_mast,
         "cs_only": cs_only,

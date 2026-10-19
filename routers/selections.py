@@ -762,7 +762,7 @@ def stim_select_outcomes_summary(
 def selections_latest(
     request: Request,
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
-    min_prob13wk: float | None = Query(default=None, description="Optional minimum prob13wk threshold"),
+    min_prob13wk: float | None = Query(default=None, ge=0, le=100, allow_inf_nan=False, description="Minimum 13-week probability (%)"),
     limit: int = Query(default=2000, ge=1, le=20000, description="Safety limit"),
     include_data: bool = Query(default=False, description="Include Stock Trends signal context fields"),
     include_mast: bool = Query(default=False, description="Include sector, industry, and instrument metadata fields"),
@@ -923,7 +923,7 @@ def selections_history(
     exchange: str | None = Query(default=None, description="Optional exchange filter: N,Q,A,B,T,I"),
     start: str | None = Query(default=None, description="Start date YYYY-MM-DD (inclusive)"),
     end: str | None = Query(default=None, description="End date YYYY-MM-DD (inclusive)"),
-    min_prob13wk: float | None = Query(default=None, description="Optional minimum prob13wk threshold"),
+    min_prob13wk: float | None = Query(default=None, ge=0, le=100, allow_inf_nan=False, description="Minimum 13-week probability (%)"),
     limit: int = Query(
         default=SELECTIONS_HISTORY_DEFAULT_LIMIT,
         ge=1,
