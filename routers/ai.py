@@ -681,7 +681,7 @@ _TOOL_TEMPLATES = [
                 },
                 "min_prob13wk": {
                     "type": "number",
-                    "description": "Optional minimum prob13wk threshold (0.0–1.0).",
+                    "description": "Minimum 13-week probability (%) (0–100).",
                 },
             },
             "required": [],
@@ -713,7 +713,7 @@ _TOOL_TEMPLATES = [
                 "exchange": {"type": "string", "description": "Exchange code, e.g. 'N'."},
                 "start": {"type": "string", "description": "Start date YYYY-MM-DD (inclusive)."},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD (inclusive)."},
-                "min_prob13wk": {"type": "number", "description": "Optional minimum prob13wk threshold."},
+                "min_prob13wk": {"type": "number", "description": "Minimum 13-week probability (%) (0–100)."},
             },
             "required": [],
         },
@@ -725,7 +725,7 @@ _TOOL_TEMPLATES = [
         "description": (
             "Returns the latest published STIM Select list filtered to the published definition: "
             "x4wk1 > 0% (4-week lower CI bound), x13wk1 > 2.19% (13-week), x40wk1 > 6.45% (40-week), "
-            "and prob13wk >= 55% by default. "
+            "and prob13wk >= 55%. "
             "Ranked by prob13wk descending. Includes full ST-IM distribution fields."
         ),
         "endpoint": "/v1/selections/published/latest",
@@ -735,7 +735,6 @@ _TOOL_TEMPLATES = [
             "type": "object",
             "properties": {
                 "exchange": {"type": "string", "description": "Optional exchange filter: N, Q, A, B, T, I."},
-                "min_prob13wk": {"type": "number", "description": "Minimum prob13wk threshold (default 0.55)."},
             },
             "required": [],
         },
@@ -760,7 +759,6 @@ _TOOL_TEMPLATES = [
                 "exchange": {"type": "string"},
                 "start": {"type": "string", "description": "Start date YYYY-MM-DD."},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD."},
-                "min_prob13wk": {"type": "number", "description": "Minimum prob13wk threshold (default 0.55)."},
             },
             "required": [],
         },
@@ -1339,7 +1337,7 @@ def ai_context():
                     "x4wk1":    {"operator": ">",  "threshold_pct": 0.0,  "description": "4-week lower CI bound > base-period mean of 0%"},
                     "x13wk1":   {"operator": ">",  "threshold_pct": 2.19, "description": "13-week lower CI bound > base-period mean of 2.19%"},
                     "x40wk1":   {"operator": ">",  "threshold_pct": 6.45, "description": "40-week lower CI bound > base-period mean of 6.45%"},
-                    "prob13wk": {"operator": ">=", "threshold": 0.55,     "description": "Probability of exceeding 13-week base-period mean >= 55%"},
+                    "prob13wk": {"operator": ">=", "threshold": 55,     "description": "Probability of exceeding 13-week base-period mean >= 55%"},
                 },
                 "ranking": "prob13wk descending",
                 "note": "Probabilistic candidates — not investment advice. Not guaranteed outcomes.",

@@ -635,7 +635,7 @@ def test_stim_tools_expose_machine_readable_interpretation_guidance():
         assert "base_period_mean_returns_pct" in guidance
         assert guidance["calculation"]["delta_vs_base"] == "stim_mean - base_mean"
         assert guidance["calculation"]["probability_outperform"] == "1 - normal_cdf(z)"
-        assert guidance["stim_select_style_logic"]["prob13wk_minimum"] == 0.55
+        assert guidance["stim_select_style_logic"]["prob13wk_minimum"] == 55
         assert any("/v1/meta/inference" in step for step in steps)
         assert any("/v1/meta/stim" in step for step in steps)
         assert "is_stale" in " ".join(guidance["interpretation_rules"])

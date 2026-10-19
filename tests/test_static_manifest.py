@@ -297,7 +297,7 @@ def test_static_stim_tools_expose_interpretation_guidance(manifest):
             "x40wksd",
         ]
         assert tool["interpretation_guidance"]["calculation"]["probability_outperform"] == "1 - normal_cdf(z)"
-        assert tool["interpretation_guidance"]["stim_select_style_logic"]["prob13wk_minimum"] == 0.55
+        assert tool["interpretation_guidance"]["stim_select_style_logic"]["prob13wk_minimum"] == 55
         assert "prob13wk_minimum_description" in tool["interpretation_guidance"]["stim_select_style_logic"]
 
 
@@ -502,7 +502,7 @@ def test_static_published_selections_have_interpretation_guidance(manifest):
         assert criteria["x13wk1"]["operator"] == ">"
         assert criteria["x13wk1"]["threshold_pct"] == 2.19
         assert criteria["prob13wk"]["operator"] == ">="
-        assert criteria["prob13wk"]["threshold"] == 0.55
+        assert criteria["prob13wk"]["threshold"] == 55
         assert criteria["all_criteria_required"] is True
 
 

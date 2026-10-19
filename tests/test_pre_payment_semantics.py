@@ -630,6 +630,13 @@ def test_invalid_exchange_filter_never_reaches_a_rail(
     assert_rejected_before_payment(payment_harness, counted_engines)
 
 
+@pytest.mark.parametrize("path", ["/v1/selections/published/latest", "/v1/selections/published/history"])
+def test_published_threshold_override_rejected_before_payment(payment_harness, counted_engines, path):
+    response = payment_harness.client.get(f"{path}?min_prob13wk=50", headers=x402_headers())
+    assert response.status_code == 422
+    assert_rejected_before_payment(payment_harness, counted_engines)
+
+
 @pytest.mark.parametrize(
     "path", ["/v1/selections/history", "/v1/selections/published/history"]
 )

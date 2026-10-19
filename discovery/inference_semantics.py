@@ -162,7 +162,7 @@ STIM_PROVIDER_PROFILE: dict[str, Any] = {
             "x4wk1": {"operator": ">", "threshold_pct": 0.0},
             "x13wk1": {"operator": ">", "threshold_pct": 2.19},
             "x40wk1": {"operator": ">", "threshold_pct": 6.45},
-            "prob13wk": {"operator": ">=", "threshold": 0.55},
+            "prob13wk": {"operator": ">=", "threshold": 55},
             "all_criteria_required": True,
         },
         "ranking": "prob13wk descending",
@@ -238,7 +238,7 @@ def stim_interpretation_guidance() -> dict[str, Any]:
         "limitations": profile["limitations"],
         "portfolio_applications": profile["portfolio_applications"],
         "stim_select_style_logic": {
-            "prob13wk_minimum": 0.55,
+            "prob13wk_minimum": 55,
             "prob13wk_minimum_description": "13-week probability of exceeding the base-period mean should be at least 55%.",
             "lower_confidence_bounds": "Emphasize lower confidence bounds relative to base-period means where applicable.",
         },

@@ -555,7 +555,7 @@
         "limitations": ["regime_shifts", "non_stationarity", "sample_size_weakness", "tail_events", "liquidity_shocks", "news_shocks", "uncertainty_in_individual_stock_outcomes"],
         "portfolio_applications": ["ranking", "screening", "allocation_review", "regime-aware interpretation", "market-structure analysis", "repeated decision-making under uncertainty"],
         "stim_select_style_logic": {
-          "prob13wk_minimum": 0.55,
+          "prob13wk_minimum": 55,
           "prob13wk_minimum_description": "13-week probability of exceeding the base-period mean should be at least 55%.",
           "lower_confidence_bounds": "Emphasize lower confidence bounds relative to base-period means where applicable."
         }
@@ -656,7 +656,7 @@
         "limitations": ["regime_shifts", "non_stationarity", "sample_size_weakness", "tail_events", "liquidity_shocks", "news_shocks", "uncertainty_in_individual_stock_outcomes"],
         "portfolio_applications": ["ranking", "screening", "allocation_review", "regime-aware interpretation", "market-structure analysis", "repeated decision-making under uncertainty"],
         "stim_select_style_logic": {
-          "prob13wk_minimum": 0.55,
+          "prob13wk_minimum": 55,
           "prob13wk_minimum_description": "13-week probability of exceeding the base-period mean should be at least 55%.",
           "lower_confidence_bounds": "Emphasize lower confidence bounds relative to base-period means where applicable."
         }
@@ -838,12 +838,12 @@
           "x4wk1":    {"operator": ">",  "threshold_pct": 0.0,  "description": "4-week ST-IM lower CI bound must exceed base-period mean of 0%."},
           "x13wk1":   {"operator": ">",  "threshold_pct": 2.19, "description": "13-week ST-IM lower CI bound must exceed base-period mean of 2.19%."},
           "x40wk1":   {"operator": ">",  "threshold_pct": 6.45, "description": "40-week ST-IM lower CI bound must exceed base-period mean of 6.45%."},
-          "prob13wk": {"operator": ">=", "threshold": 0.55,     "description": "Probability of exceeding 13-week base-period mean must be at least 55%."},
+          "prob13wk": {"operator": ">=", "threshold": 55,     "description": "Probability of exceeding 13-week base-period mean must be at least 55%."},
           "all_criteria_required": true
         },
         "interpretation_rules": [
           "All four publication criteria must be satisfied simultaneously.",
-          "prob13wk >= 0.55 is the documented publication threshold.",
+          "prob13wk >= 55 is the documented publication threshold.",
           "Rank by prob13wk descending; higher prob13wk means stronger 13-week outperformance probability.",
           "These are probabilistic candidates, not guaranteed outcomes — not investment advice.",
           "Use /v1/stim/latest on individual symbols to see full distribution context."
@@ -851,7 +851,7 @@
         "base_period_context_endpoint": "/v1/meta/stim"
       },
       "title": "Published STIM Select Latest",
-      "description": "Returns the latest published STIM Select list filtered to the three-horizon published definition: x4wk1 > 0% (4-week lower CI bound), x13wk1 > 2.19% (13-week), x40wk1 > 6.45% (40-week), prob13wk >= 55% by default. Ranked by prob13wk descending. Includes full ST-IM distribution fields. Fetch /v1/pricing/catalog for current STC cost.",
+      "description": "Returns the latest published STIM Select list filtered to the fixed three-horizon published definition: x4wk1 > 0% (4-week lower CI bound), x13wk1 > 2.19% (13-week), x40wk1 > 6.45% (40-week), prob13wk >= 55%. Ranked by prob13wk descending. Includes full ST-IM distribution fields. Fetch /v1/pricing/catalog for current STC cost.",
       "method": "GET",
       "path": "/selections/published/latest",
       "auth_required": true,
@@ -870,12 +870,12 @@
           "x4wk1":    {"operator": ">",  "threshold_pct": 0.0,  "description": "4-week ST-IM lower CI bound must exceed base-period mean of 0%."},
           "x13wk1":   {"operator": ">",  "threshold_pct": 2.19, "description": "13-week ST-IM lower CI bound must exceed base-period mean of 2.19%."},
           "x40wk1":   {"operator": ">",  "threshold_pct": 6.45, "description": "40-week ST-IM lower CI bound must exceed base-period mean of 6.45%."},
-          "prob13wk": {"operator": ">=", "threshold": 0.55,     "description": "Probability of exceeding 13-week base-period mean must be at least 55%."},
+          "prob13wk": {"operator": ">=", "threshold": 55,     "description": "Probability of exceeding 13-week base-period mean must be at least 55%."},
           "all_criteria_required": true
         },
         "interpretation_rules": [
           "All four publication criteria must be satisfied simultaneously.",
-          "prob13wk >= 0.55 is the documented publication threshold.",
+          "prob13wk >= 55 is the documented publication threshold.",
           "Rank by prob13wk descending; higher prob13wk means stronger 13-week outperformance probability.",
           "These are probabilistic candidates, not guaranteed outcomes — not investment advice.",
           "Use /v1/stim/latest on individual symbols to see full distribution context."
