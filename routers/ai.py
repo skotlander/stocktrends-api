@@ -735,6 +735,7 @@ _TOOL_TEMPLATES = [
             "type": "object",
             "properties": {
                 "exchange": {"type": "string", "description": "Optional exchange filter: N, Q, A, B, T, I."},
+                "cs_only": {"type": "boolean", "default": False, "description": "False includes the full published population, including ETFs; true restricts results to common stocks (type='CS')."},
             },
             "required": [],
         },
@@ -759,6 +760,7 @@ _TOOL_TEMPLATES = [
                 "exchange": {"type": "string"},
                 "start": {"type": "string", "description": "Start date YYYY-MM-DD."},
                 "end": {"type": "string", "description": "End date YYYY-MM-DD."},
+                "cs_only": {"type": "boolean", "default": False, "description": "False includes the full published population, including ETFs; true restricts results to common stocks (type='CS')."},
             },
             "required": [],
         },

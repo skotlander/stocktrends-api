@@ -189,6 +189,17 @@ def test_selections_latest_present_with_correct_path(manifest):
         f"selections_latest path must be /selections/latest, got {tool.get('path')!r}"
 
 
+def test_published_selection_cs_only_parameter(manifest):
+    for name in ("selections_published_latest", "selections_published_history"):
+        tool = _tool_by_name(manifest, name)
+        params = {param["name"]: param for param in tool["parameters"]}
+        field = params["cs_only"]
+        assert field["type"] == "boolean"
+        assert field["default"] is False and field["required"] is False
+        assert "ETFs" in field["description"] and "type='CS'" in field["description"]
+        assert not {"min_prob13wk", "min_x4wk1", "min_x13wk1", "min_x40wk1"} & params.keys()
+
+
 def test_selections_published_latest_correct_path(manifest):
     """Published selections must use /selections/published/latest (not /selections-published/)."""
     tool = _tool_by_name(manifest, "selections_published_latest")

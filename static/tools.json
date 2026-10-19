@@ -860,7 +860,10 @@
       "stc_cost": null,
       "estimated_usd_cost": null,
       "supported_rails": ["subscription", "x402", "mpp"],
-      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost.",
+      "parameters": [
+        {"name": "cs_only", "in": "query", "input_location": "query", "parameter_source": "query", "type": "boolean", "required": false, "default": false, "description": "False includes the full published population, including ETFs; true restricts results to common stocks (type='CS')."}
+      ]
     },
     {
       "name": "selections_published_history",
@@ -892,7 +895,10 @@
       "stc_cost": null,
       "estimated_usd_cost": null,
       "supported_rails": ["subscription", "x402", "mpp"],
-      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost."
+      "pricing_note": "STC is the source of truth; fetch /v1/pricing/catalog for current cost.",
+      "parameters": [
+        {"name": "cs_only", "in": "query", "input_location": "query", "parameter_source": "query", "type": "boolean", "required": false, "default": false, "description": "False includes the full published population, including ETFs; true restricts results to common stocks (type='CS')."}
+      ]
     },
     {
       "name": "stwr_reports_latest",

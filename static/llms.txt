@@ -275,7 +275,7 @@ STIM Select identifies securities whose ST-IM lower confidence bounds (xNwk1 fie
 * 13-week: x13wk1 > 2.19%
 * 40-week: x40wk1 > 6.45%
 
-Securities are ranked by prob13wk descending — the probability of exceeding the 13-week base-period mean return (2.19%), assuming a normal distribution. The published definition applies a default prob13wk threshold of 55%.
+Securities are ranked by prob13wk descending — the probability of exceeding the 13-week base-period mean return (2.19%), assuming a normal distribution. A fixed publication criterion requires prob13wk to be at least 55%.
 
 **Base selection endpoints** (return the base ST-IM selection universe ranked by `prob13wk DESC`; no published threshold filter applied):
 

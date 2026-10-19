@@ -29,6 +29,7 @@ import routers.portfolio as portfolio_router
 import routers.prices as prices_router
 import routers.screener as screener_router
 import routers.selections as selections_router
+import routers.selections_published as selections_published_router
 import routers.stim as stim_router
 import routers.stwr as stwr_router
 from support.payment_harness import (
@@ -62,6 +63,7 @@ _ROUTER_MODULES = (
     prices_router,
     screener_router,
     selections_router,
+    selections_published_router,
     stim_router,
     stwr_router,
 )
