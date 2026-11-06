@@ -24,6 +24,8 @@ from discovery.inference_semantics import (
 from discovery.provenance import (
     AI_CONTEXT_PROVENANCE_TEXT,
     INDICATORS_PROVENANCE_TEXT,
+    STIM_SELECT_HISTORICAL_COHORT,
+    STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION,
     STIM_PROVENANCE_TEXT,
     data_provenance,
     evidence_map,
@@ -1372,9 +1374,10 @@ def ai_context():
             },
             "stim_select_outcomes": {
                 "endpoints": ["/v1/selections/stim-select/outcomes/summary"],
-                "use_when": "public aggregate evidence for historical ST-IM Select signal-rule outcomes",
+                "use_when": "public aggregate evidence for the historical ST-IM outcome cohort",
+                "historical_cohort": dict(STIM_SELECT_HISTORICAL_COHORT),
                 "semantics": (
-                    "historical realized outcome evidence for observations meeting ST-IM Select criteria; "
+                    f"{STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION} "
                     "legacy outcomes use fpr_chg13, while default no-date responses read "
                     "stweekly.stim_select_outcome_summary and expose fpr_chg4, fpr_chg13, and fpr_chg40 metrics; "
                     "seeded no-date cache rows support limit_rank omitted/null and limit_rank=10"

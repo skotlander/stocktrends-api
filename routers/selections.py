@@ -14,6 +14,11 @@ from sqlalchemy import text
 
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
+from discovery.provenance import (
+    STIM_SELECT_HISTORICAL_COHORT,
+    STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION,
+    STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
+)
 from routers.signals import VALID_EXCHANGES
 from services import stim_select_outcome_summary as outcome_summary_service
 from utils.history_bounds import (
@@ -416,7 +421,7 @@ def _stim_select_signal_metadata() -> dict[str, Any]:
     return {
         "signal_id": "stim_select",
         "name": "ST-IM Select",
-        "description": "Historical observations meeting Stock Trends Inference Model Select criteria.",
+        "description": STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION,
         "criteria": {
             "x4wk1_gt": STIM_SELECT_BASE_4WK,
             "x13wk1_gt": STIM_SELECT_BASE_13WK,
@@ -440,6 +445,8 @@ def _stim_select_outcome_provenance(
 ) -> dict[str, Any]:
     provenance = {
         "source": "stim_select_signal_outcome_summary",
+        "historical_cohort": dict(STIM_SELECT_HISTORICAL_COHORT),
+        "interpretation_limit": STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
         "realized_return_field": "fpr_chg13",
         "realized_return_fields": ["fpr_chg4", "fpr_chg13", "fpr_chg40"],
         "realized_return_horizon": "13 weeks",
@@ -550,8 +557,10 @@ def _mast_join(include_mast: bool) -> str:
     response_model=StimSelectOutcomesSummaryResponse,
     summary="Public ST-IM Select signal outcome summary",
     description=(
-        "Public aggregate historical outcome summary for observations meeting "
-        "Stock Trends Inference Model Select criteria. Default no-date requests "
+        "Public aggregate historical outcome summary. "
+        f"The provenance.historical_cohort field identifies {STIM_SELECT_HISTORICAL_COHORT['cohort_id']}. "
+        f"{STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION} {STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT} "
+        "Default no-date requests "
         "read from the persistent stweekly.stim_select_outcome_summary table "
         "and expose generated_at plus source_latest_mature_weekdate provenance. "
         "The legacy outcomes block remains the 13-week fpr_chg13 summary, while "
@@ -561,9 +570,8 @@ def _mast_join(include_mast: bool) -> str:
         "preserve the existing live 13-week aggregate behavior. "
         "Does not expose current selections, current matching stocks, or "
         "individual symbols. "
-        "limit_rank applies a per-week rank cutoff ordered by the 13-week "
-        "outperformance probability implied by the ST-IM normal-distribution "
-        "model. When start_date and end_date are omitted, the default persistent "
+        "limit_rank applies a per-week cutoff on the 13-week outperformance z-score ranking. "
+        "When start_date and end_date are omitted, the default persistent "
         "summary refresh seeds all-exchange rows for limit_rank omitted/null and "
         "limit_rank=10; other no-date limit_rank values require explicit date "
         "filters or a custom summary refresh."
@@ -588,7 +596,7 @@ def stim_select_outcomes_summary(
         ge=1,
         le=5000,
         description=(
-            "Optional per-week rank cutoff. Ranking is by prob13wk descending; "
+            "Optional per-week cutoff on the 13-week outperformance z-score ranking; "
             "for example, 10 includes only the top 10 qualifying observations per week. "
             "When start_date and end_date are omitted, the persistent summary table "
             "currently supports the seeded default combinations limit_rank omitted/null "
@@ -598,7 +606,7 @@ def stim_select_outcomes_summary(
     ),
 ):
     """
-    Public aggregate evidence for the ST-IM Select signal-selection rule.
+    Public aggregate evidence for the historical ST-IM outcome cohort.
 
     This summarizes mature historical observations from stweekly.st_data joined
     to stweekly.st_returnmeans. It intentionally returns aggregate outcomes only.

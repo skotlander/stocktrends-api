@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -513,7 +515,9 @@ def test_stim_select_outcomes_summary_returns_metrics(client):
     body = response.json()
 
     assert body["signal"]["signal_id"] == "stim_select"
-    assert body["signal"]["criteria"]["x13wk1_gt"] == 2.19
+    criteria = body["signal"]["criteria"]
+    assert (criteria["x4wk1_gt"], criteria["x13wk1_gt"], criteria["x40wk1_gt"]) == (0, 2.19, 6.45)
+    assert (criteria["price_gte"], criteria["volume_gt"]) == (2, 100_000)
     assert "avgmean_formula" not in body["signal"]["criteria"]
     assert body["signal"]["base_period_mean_13wk"] == 2.19
     assert body["filters"] == {
@@ -730,6 +734,9 @@ def test_stim_select_outcome_summary_generation_uses_stweekly_sources(monkeypatc
     assert "JOIN stweekly.st_returnmeans b" in executed_sql
     assert "stdata.st_data" not in executed_sql
     assert "ROW_NUMBER() OVER" in executed_sql
+    assert "a.fpr_chg13 IS NOT NULL" in executed_sql
+    assert "min_prob13wk" not in executed_sql
+    assert "JOIN st_select" not in executed_sql
     assert record["summary_key"] == build_default_summary_key(exchange=None, limit_rank=10)
     assert record["count_4wk"] == 5
     assert record["count_13wk"] == 5
@@ -951,6 +958,9 @@ def test_stim_select_outcomes_summary_openapi_documents_filters_and_boundary(cli
     assert "stweekly.stim_select_outcome_summary" in description
     assert "Public aggregate historical outcome summary" in description
     assert "Does not expose current selections" in description
+    assert "provenance.historical_cohort field identifies stim_select_historical_outcomes_v1" in description
+    assert "historical rule has no minimum prob13wk" in description
+    assert "prob13wk >= 55% to base selection records" in description
 
     parameters = {
         parameter["name"]: parameter
@@ -965,3 +975,31 @@ def test_stim_select_outcomes_summary_openapi_documents_filters_and_boundary(cli
     assert "custom summary refresh" in parameters["limit_rank"]["description"]
     assert _schema_has_property(schema, "default_window_applied")
     assert _schema_has_property(schema, "outcomes_by_horizon")
+
+
+def test_historical_cohort_matches_outcome_methodology_and_discovery(client):
+    outcome = client.get("/v1/selections/stim-select/outcomes/summary").json()
+    methodology = client.get("/v1/meta/stim").json()
+    context = client.get("/v1/ai/context").json()
+    tools = client.get("/v1/ai/tools").json()["tools"]
+    static_tools_path = Path(__file__).resolve().parents[1] / "static" / "tools.json"
+    static_tools = json.loads(static_tools_path.read_text(encoding="utf-8"))["tools"]
+    cohort = outcome["provenance"]["historical_cohort"]
+    family = next(entry for entry in context["evidence"]["families"] if entry["family_id"] == "inference_outcome_evidence")
+
+    assert cohort["cohort_id"] == "stim_select_historical_outcomes_v1"
+    assert cohort["min_prob13wk_pct"] is None
+    assert cohort["requires_non_null_fpr_chg13"] is True
+    assert cohort["requires_base_selection_membership"] is False
+    assert family["historical_cohort"] == cohort
+    assert methodology["historical_outcome_evidence"]["historical_cohort"] == cohort
+    assert methodology["stim_select"]["criteria"]["prob13wk"] == {"operator": ">=", "threshold": 55}
+    limit = outcome["provenance"]["interpretation_limit"]
+    assert limit in family["limitations"]
+    assert all(term in limit for term in ("probability calibration", "out-of-sample", "independent baseline"))
+
+    for entries in (tools, static_tools):
+        tool = next(entry for entry in entries if entry["name"] == "stim_select_outcomes_summary")
+        guidance = tool["interpretation_guidance"]
+        assert guidance["historical_cohort"] == cohort
+        assert guidance["interpretation_limit"] == limit

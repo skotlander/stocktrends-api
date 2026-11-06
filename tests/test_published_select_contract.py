@@ -1,6 +1,8 @@
 """Synthetic regression tests for the published selection contract."""
-import pytest
+from datetime import date
 import sqlite3
+
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -27,6 +29,22 @@ def client(monkeypatch):
             conn.execute("INSERT INTO st_select VALUES ('2026-10-16', 'N', :symbol, :prob)", args)
             conn.execute("INSERT INTO st_data VALUES ('2026-10-16', 'N', :symbol, :typ)", args)
             conn.execute("INSERT INTO st_returnmeans (weekdate, exchange, symbol, x4wk1, x13wk1, x40wk1) VALUES ('2026-10-16', 'N', :symbol, :x4, :x13, :x40)", args)
+        conn.execute("ATTACH DATABASE ':memory:' AS stweekly")
+        conn.execute("""
+            CREATE TABLE stweekly.st_data AS
+            SELECT weekdate, exchange, symbol,
+                   CASE WHEN symbol = 'EDGE' THEN 1.99 ELSE 2.0 END AS price,
+                   CASE WHEN symbol = 'ETF' THEN 1000 ELSE 1001 END AS volume,
+                   CASE WHEN symbol = 'LOW' THEN 3.0 ELSE -10.0 END AS fpr_chg13
+            FROM main.st_data
+        """)
+        conn.execute("CREATE TABLE stweekly.st_returnmeans AS SELECT * FROM main.st_returnmeans")
+        for symbol, realized_return in [("UNLISTED", 5.0), ("IMMATURE", None)]:
+            conn.execute("INSERT INTO stweekly.st_data VALUES ('2026-10-16', 'N', ?, 2, 1001, ?)", (symbol, realized_return))
+            conn.execute("""
+                INSERT INTO stweekly.st_returnmeans (weekdate, exchange, symbol, x4wk1, x13wk1, x40wk1)
+                VALUES ('2026-10-16', 'N', ?, 1, 3, 7)
+            """, (symbol,))
     class Result:
         def __init__(self, cursor): self.cursor = cursor
         def mappings(self): return self
@@ -36,7 +54,12 @@ def client(monkeypatch):
         def connect(self): return self
         def __enter__(self): return self
         def __exit__(self, *_args): pass
-        def execute(self, sql, params=None): return Result(conn.execute(str(sql), params or {}))
+        def execute(self, sql, params=None):
+            sqlite_params = {
+                name: value.isoformat() if isinstance(value, date) else value
+                for name, value in (params or {}).items()
+            }
+            return Result(conn.execute(str(sql), sqlite_params))
     monkeypatch.setattr(selections_published, "get_engine", lambda: Engine())
     monkeypatch.setattr(selections_published, "text", lambda sql: sql)
     monkeypatch.setattr(selections, "get_engine", lambda: Engine())
@@ -61,6 +84,26 @@ def test_published_boundaries_and_common_stock_membership(client, path):
     assert response["cs_only"] is False
     assert (response["min_prob13wk"], response["min_x4wk1"], response["min_x13wk1"], response["min_x40wk1"]) == (55, 0, 2.19, 6.45)
     assert [row["symbol"] for row in client.get(url, params={"cs_only": "true"}).json()["data"]] == ["EDGE"]
+
+
+def test_historical_outcomes_measure_a_distinct_population(client):
+    published = client.get("/v1/selections/published/history").json()
+    historical = client.get(
+        "/v1/selections/stim-select/outcomes/summary", params={"start_date": "2026-10-16"}
+    ).json()
+
+    # EDGE and ETF pass the publication rule but miss the historical price or volume floor.
+    assert [row["symbol"] for row in published["data"]] == ["ETF", "EDGE"]
+    assert published["min_prob13wk"] == 55
+    # LOW (54.99) and UNLISTED qualify for historical measurement. IMMATURE has no return.
+    assert historical["outcomes"]["count"] == 2
+    assert historical["outcomes"]["average_fpr_chg13"] == 4.0
+    assert historical["outcomes"]["positive_return_count"] == 2
+    cohort = historical["provenance"]["historical_cohort"]
+    assert cohort["cohort_id"] == "stim_select_historical_outcomes_v1"
+    assert cohort["min_prob13wk_pct"] is None
+    assert cohort["requires_base_selection_membership"] is False
+    assert cohort["requires_non_null_fpr_chg13"] is True
 
 
 @pytest.mark.parametrize("path", ["latest", "history"])

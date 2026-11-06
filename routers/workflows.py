@@ -446,7 +446,7 @@ WORKFLOW_REGISTRY: list[dict] = [
             "Treat weekdate as the point-in-time key; each row describes the week it is keyed on.",
             "Read applied_bounds on every history response to confirm the date bounds and row limit that were actually applied, and whether the result was truncated.",
             "GET /v1/market/regime/history returns at most 52 recent weekly observations and start_date only raises the earliest eligible week; it does not page backwards. Do not assume it covers the chosen research period.",
-            "If ST-IM Select outcome evidence is used, interpret it as an aggregate measurement of one stated signal rule over a stated population, not as a portfolio result, a forecast, or evidence about the broader classification layers.",
+            "If using ST-IM Select outcome evidence, attribute the aggregates to the historical cohort identified in provenance.historical_cohort. Evaluate the current published rule and the broader classification layers separately.",
         ],
         "stock_trends_supplies": [
             "Point-in-time weekly historical observations for the instrument, cross-sectional, market-regime and inference layers, each bounded and each reporting its applied_bounds.",
@@ -506,12 +506,9 @@ WORKFLOW_REGISTRY: list[dict] = [
                 "endpoint": "GET /v1/selections/stim-select/outcomes/summary",
                 "pricing_rule_id": None,
                 "description": (
-                    "Optionally inspect published aggregate outcome evidence for the "
-                    "ST-IM Select filter. This is one evidence family, specific to one "
-                    "application of the framework; it is relevant when the evaluation "
-                    "concerns that filter, and not a precondition for evaluating the "
-                    "broader classification and context layers. See the evidence map at "
-                    "/v1/ai/context for the other families and their limitations."
+                    "Optionally inspect descriptive realized returns for the historical ST-IM outcome cohort. "
+                    "The historical cohort has no minimum prob13wk or base-selection membership requirement. "
+                    "See /v1/ai/context for the evidence families and their limitations."
                 ),
                 "optional": True,
             },

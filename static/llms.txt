@@ -36,7 +36,7 @@ Stock Trends publishes three kinds of evidence. They use different methodologies
 
 1. **Historical classification provenance** — weekly Stock Trends classification applied under a historically consistent doctrine, with records extending back to 1980 and 16M+ observations. This is the data foundation, not a performance result. Historical depth is research provenance, not a guarantee of future performance.
 
-2. **ST-IM Select realized outcome evidence** (`GET /selections/stim-select/outcomes/summary`) — realized forward returns for historical observations meeting ST-IM Select criteria, measured at 4, 13, and 40-week horizons against base-period means, restricted to completed measurement windows. Aggregate only: it does not expose current selections or individual symbols, and distribution-level tendencies do not describe any individual outcome.
+2. **ST-IM Select realized outcome evidence** (`GET /selections/stim-select/outcomes/summary`) — descriptive realized returns for `stim_select_historical_outcomes_v1`. This cohort uses the three lower-bound thresholds, price and volume floors, and an available 13-week realized return. Current published Select applies the three lower-bound thresholds and `prob13wk >= 55` to base selection records. Evaluating that published rule, calibration, out-of-sample performance, or incremental value over an independent baseline requires separate evidence.
 
 3. **Stock Trends model-portfolio and strategy records** (`GET /stocktrends/portfolios`, `GET /stocktrends/strategies`) — rule-based model portfolios with declared strategy rules, return histories, and closed-position records. These are rule-based model records with declared cost and stop-loss assumptions. They are not audited brokerage-account performance and not live capital.
 
@@ -168,7 +168,7 @@ https://developer.stocktrends.com/mpp
 * `GET /leadership/definitions`
   Leadership definitions and metadata
 * `GET /leadership/summary/latest`
-  Latest overall, sector, and industry-group leaders ranked by Stock Trends RSI, then major trend duration. Filters default to `min_rsi=110` and `min_mt_cnt=4`. Leaders can be bullish or bearish. Use each row's `trend` for bullish confirmation.
+  Latest overall, sector, and industry-group leaders ranked by Stock Trends RSI, then major trend maturity (`mt_cnt`). Filters default to `min_rsi=110` and `min_mt_cnt=4`. Leaders can be bullish or bearish. Use each row's `trend` for bullish confirmation.
 * `GET /leadership/rotation/history`
   Historical leadership rotation
 
@@ -298,7 +298,7 @@ Securities are ranked by prob13wk descending — the probability of exceeding th
 **Public STIM Select outcome evidence**:
 
 * `GET /selections/stim-select/outcomes/summary`
-  Public aggregate historical outcome summary for observations meeting STIM Select criteria. The legacy `outcomes` block uses mature realized 13-week forward returns from `fpr_chg13`; if both date filters are omitted, reads the persistent `stweekly.stim_select_outcome_summary` table, returns `filters.default_window_applied`, and exposes generated_at plus source_latest_mature_weekdate provenance; seeded no-date rows support `limit_rank` omitted/null and `limit_rank=10`; other no-date `limit_rank` values require explicit date filters or a custom summary refresh; default no-date responses also include `fpr_chg4`, `fpr_chg13`, and `fpr_chg40` metrics; explicit date windows may still compute live; this is historical evidence, not current live selections, and does not expose current matching symbols or individual symbols.
+  Public aggregate summary for `stim_select_historical_outcomes_v1`. The historical rule uses `x4wk1 > 0`, `x13wk1 > 2.19`, `x40wk1 > 6.45`, `price >= 2`, weekly volume above 100,000 actual shares, and non-null `fpr_chg13`. It has no minimum `prob13wk` or base-selection membership requirement. `provenance.historical_cohort` identifies the rule and `filters` reports the applied window, exchange, and optional rank cutoff. The legacy `outcomes` block uses `fpr_chg13`. Default no-date responses use the persistent summary table and include available `fpr_chg4`, `fpr_chg13`, and `fpr_chg40` metrics. Explicit date windows summarize 13-week returns. The output is aggregate only.
 
 ### Historical Endpoint Bounds
 
