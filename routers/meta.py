@@ -7,6 +7,9 @@ from fastapi import APIRouter, Request
 from discovery.inference_semantics import inference_contract, stim_provider_profile
 from discovery.provenance import (
     INDICATORS_PROVENANCE_TEXT,
+    STIM_SELECT_HISTORICAL_COHORT,
+    STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION,
+    STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
     STIM_PROVENANCE_TEXT,
     data_provenance,
     provenance_reference,
@@ -175,6 +178,11 @@ def meta_stim(request: Request):
         "distribution_framing": profile["distribution_framing"],
         "probability_interpretation": profile["probability_interpretation"],
         "stim_select": profile["stim_select"],
+        "historical_outcome_evidence": {
+            "historical_cohort": dict(STIM_SELECT_HISTORICAL_COHORT),
+            "description": STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION,
+            "interpretation_limit": STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
+        },
         "strengths": profile["strengths"],
         "portfolio_applications": profile["portfolio_applications"],
         "limitations": profile["limitations"],

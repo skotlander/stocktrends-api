@@ -20,6 +20,9 @@ from discovery.inference_semantics import (
 )
 from discovery.provenance import (
     INDICATORS_PROVENANCE_TEXT,
+    STIM_SELECT_HISTORICAL_COHORT,
+    STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION,
+    STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
     endpoint_needs_provenance,
     provenance_reference,
 )
@@ -262,6 +265,8 @@ STIM_SELECT_INTERPRETATION_GUIDANCE = {
 }
 
 STIM_SELECT_SIGNAL_OUTCOME_GUIDANCE = {
+    "historical_cohort": STIM_SELECT_HISTORICAL_COHORT,
+    "interpretation_limit": STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
     "signal_criteria": {
         "x4wk1": {"operator": ">", "threshold_pct": 0.0, "description": "4-week ST-IM lower CI bound must exceed base-period mean of 0%."},
         "x13wk1": {"operator": ">", "threshold_pct": 2.19, "description": "13-week ST-IM lower CI bound must exceed base-period mean of 2.19%."},
@@ -878,21 +883,18 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         access_type="free",
         requires_payment=False,
         resource_description=(
-            "Public aggregate historical outcome summary for observations meeting "
-            "Stock Trends Inference Model Select criteria. Default no-date "
+            f"Public aggregate outcome summary. {STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION} "
+            "Default no-date "
             "requests read the persistent stweekly.stim_select_outcome_summary table."
         ),
         bazaar_output_description=(
-            "Returns aggregate mature realized outcome metrics for ST-IM Select "
-            "signal-rule observations. The legacy outcomes block uses fpr_chg13; "
+            "Returns aggregate realized returns for the historical ST-IM outcome cohort. "
+            "The legacy outcomes block uses fpr_chg13; "
             "default no-date responses also include fpr_chg4, fpr_chg13, and fpr_chg40 "
             "metrics from the persistent summary table. No current selections or individual symbols are returned."
         ),
-        purpose="Summarize mature historical outcomes for the ST-IM Select signal-selection rule.",
-        investment_agent_value=(
-            "Gives agents public evidence about historical ST-IM Select signal outcomes before "
-            "paying for current selection lists or symbol-level inference."
-        ),
+        purpose=STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION,
+        investment_agent_value="Inspect descriptive realized returns for the historical cohort.",
         workflow_role="Public signal outcome evidence.",
         optional_inputs={
             "start_date": {
@@ -929,7 +931,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
                 "maximum": 5000,
                 "example": 10,
                 "description": (
-                    "Optional per-week rank cutoff by prob13wk descending. When start_date and "
+                    "Optional per-week cutoff on the 13-week outperformance z-score ranking. When start_date and "
                     "end_date are omitted, seeded default summary rows support limit_rank "
                     "omitted/null and limit_rank=10; other no-date limit_rank values require "
                     "explicit date filters or a custom summary refresh."
@@ -970,6 +972,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "outcomes_by_horizon.40w.realized_return_field",
             "outcomes_by_horizon.40w.count",
             "outcomes_by_horizon.40w.average_fpr_chg",
+            "provenance.historical_cohort",
+            "provenance.interpretation_limit",
             "provenance.uses_mature_outcomes_only",
             "provenance.summary_table.served_from_summary_table",
             "provenance.summary_table.generated_at",
@@ -1026,6 +1030,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
                 },
             },
             "provenance": {
+                "historical_cohort": STIM_SELECT_HISTORICAL_COHORT,
+                "interpretation_limit": STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
                 "uses_mature_outcomes_only": True,
                 "summary_table": {
                     "served_from_summary_table": True,
@@ -1040,18 +1046,18 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         },
         output_summary=(
             "Aggregate historical count, date range, realized return averages/medians, positive-return "
-            "rates, and base-period outperformance rates for ST-IM Select signal observations."
+            "rates, and base-period outperformance rates for the historical ST-IM outcome cohort."
         ),
         analytical_role=ROLE_PROBABILISTIC_SIGNAL_OUTCOME_EVIDENCE,
         notes=[
-            "Uses mature observations only: st_data.fpr_chg13 IS NOT NULL.",
+            "Cohort eligibility requires a non-null realized 13-week return (fpr_chg13).",
             "If start_date and end_date are both omitted, reads stweekly.stim_select_outcome_summary and never runs the expensive live historical aggregate.",
             "Default no-date responses expose generated_at and source_latest_mature_weekdate from the persistent summary table.",
             "Seeded no-date default rows support exchange=NULL with limit_rank=NULL and exchange=NULL with limit_rank=10.",
             "Other no-date exchange or limit_rank rows require explicit date filters or a custom summary refresh.",
             "Refresh stweekly.stim_select_outcome_summary manually, monthly, weekly, or after major data updates with python -m maintenance.refresh_stim_select_outcome_summary_cache.",
             "Explicit date-window requests may still compute the historical aggregate live.",
-            "This is signal-rule evidence, not a published-report-membership endpoint.",
+            STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
             "No current selections, current matching stocks, or individual symbols are returned.",
         ],
         related_endpoints=[

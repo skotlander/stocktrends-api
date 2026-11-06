@@ -445,6 +445,23 @@ random return (2.19%), assuming a normal distribution of returns.
 - `GET /v1/selections/published/latest` — published STIM Select list with x4wk1 > 0%, x13wk1 > 2.19%, x40wk1 > 6.45%, and `prob13wk >= 55%`
 - `GET /v1/selections/published/history` — historical published STIM Select records
 
+### Historical Outcome Evidence Cohort
+
+`GET /v1/selections/stim-select/outcomes/summary` identifies its population in
+`provenance.historical_cohort` as `stim_select_historical_outcomes_v1`. The unit
+is an instrument-week keyed by symbol, exchange, and weekdate. The historical
+rule applies the three lower-bound thresholds above, `price >= 2`, weekly volume
+above 100,000 actual shares, and a non-null realized 13-week return (`fpr_chg13`).
+It has no minimum `prob13wk` or requirement for membership in `st_select`.
+The published endpoints apply the three lower-bound thresholds and
+`prob13wk >= 55` to `st_select` records.
+
+The statistics describe the historical cohort. Establishing the performance of
+the complete published rule, probability calibration, out-of-sample predictive
+performance, or incremental value over an independent baseline requires separate
+evidence. See the [request lifecycle](architecture/request-lifecycle.md) for
+the source join, ranking, and cache behavior.
+
 ### Forbidden Terminology
 
 STIM Select must NOT be described as:

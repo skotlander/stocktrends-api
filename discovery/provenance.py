@@ -108,6 +108,26 @@ EVIDENCE_SEPARATION_RULE = (
     "as a prediction of future results."
 )
 
+STIM_SELECT_HISTORICAL_COHORT = {
+    "cohort_id": "stim_select_historical_outcomes_v1",
+    "observation_unit": "instrument_week",
+    "min_prob13wk_pct": None,
+    "requires_base_selection_membership": False,
+    "requires_non_null_fpr_chg13": True,
+    "summary_endpoint": "/v1/selections/stim-select/outcomes/summary",
+}
+STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION = (
+    "Historical instrument-week cohort with x4wk1 > 0%, x13wk1 > 2.19%, x40wk1 > 6.45%, "
+    "price >= 2, weekly volume > 100,000 actual shares, and a non-null fpr_chg13. "
+    "The historical rule has no minimum prob13wk or base-selection membership requirement. "
+    "Current published ST-IM Select applies the three lower-bound tests and prob13wk >= 55% to base selection records."
+)
+STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT = (
+    "These descriptive aggregates apply to the historical cohort. Validating the current published rule, "
+    "probability calibration, out-of-sample performance, or incremental value over an independent baseline "
+    "requires separate evidence."
+)
+
 EVIDENCE_FAMILIES: list[dict[str, Any]] = [
     {
         "family_id": "historical_classification_provenance",
@@ -143,15 +163,15 @@ EVIDENCE_FAMILIES: list[dict[str, Any]] = [
         "family_id": "inference_outcome_evidence",
         "name": "ST-IM Select realized outcome evidence",
         "evidence_type": "aggregate_signal_rule_outcomes",
+        "historical_cohort": STIM_SELECT_HISTORICAL_COHORT,
         "methodology": (
-            "Realized forward returns for historical observations meeting ST-IM Select "
-            "criteria, measured at the 4, 13, and 40-week horizons against the "
-            "corresponding base-period mean returns, restricted to observations whose "
-            "measurement window has completed."
+            f"{STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION} "
+            "The cached summary compares available 4-, 13-, and 40-week returns with their base-period means. "
+            "Explicit date queries summarize 13-week realized returns."
         ),
         "provenance": (
             "Aggregated from the Stock Trends classification record and the ST-IM "
-            "provider profile published at /v1/meta/stim. Responses carry generated_at "
+            "provider estimates. Cached responses carry generated_at "
             "and source_latest_mature_weekdate so a caller can audit recency."
         ),
         "what_it_is": (
@@ -164,6 +184,7 @@ EVIDENCE_FAMILIES: list[dict[str, Any]] = [
         ),
         "inspect_at": ["/v1/selections/stim-select/outcomes/summary", "/v1/meta/stim"],
         "limitations": [
+            STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
             "Aggregate only; current selections and individual symbols are out of scope.",
             "Distribution-level tendencies do not describe any individual outcome.",
             "Subject to regime shifts, non-stationarity, sample-size weakness, and tail events.",

@@ -247,14 +247,14 @@ remain protected unless intentionally reclassified later:
 * `/v1/stocktrends/portfolios/{port_id}/strategy/matches`
 
 Public ST-IM Select signal outcome summary is public/free aggregate evidence.
-It summarizes mature historical observations meeting the ST-IM Select
-signal-selection rule:
+The live date-window query and cache generator both summarize the historical
+instrument-week cohort `stim_select_historical_outcomes_v1`:
 
 * `stweekly.st_returnmeans.x4wk1 > 0`
 * `stweekly.st_returnmeans.x13wk1 > 2.19`
 * `stweekly.st_returnmeans.x40wk1 > 6.45`
 * `stweekly.st_data.price >= 2`
-* `stweekly.st_data.volume > 1000`
+* `stweekly.st_data.volume > 1000` in stored hundreds of shares, or above 100,000 actual shares
 * `stweekly.st_data.fpr_chg13 IS NOT NULL`
 
 The endpoint uses the canonical join:
@@ -265,11 +265,19 @@ AND stweekly.st_data.exchange = stweekly.st_returnmeans.exchange
 AND stweekly.st_data.symbol = stweekly.st_returnmeans.symbol
 ```
 
+The historical rule has no minimum `prob13wk` or membership requirement in
+`st_select`. The published endpoints apply the three lower-bound thresholds
+and `prob13wk >= 55` to `st_select` records. With `limit_rank`, the historical
+queries rank eligible observations within each week by descending
+`(x13wk - 2.19) / x13wksd`, substituting a low sentinel for null or zero
+`x13wksd`. Ties are resolved by `x13wk` descending, exchange ascending, then
+symbol ascending. The cutoff selects a number of rows per week.
+
 The legacy `outcomes` response uses `stweekly.st_data.fpr_chg13` as the realized
 13-week forward return. Default no-date responses also expose multi-horizon
 historical evidence for `stweekly.st_data.fpr_chg4`, `fpr_chg13`, and
-`fpr_chg40`. The endpoint does not reconstruct forward returns from future price
-joins. It is not limited to published reports and does not return current
+`fpr_chg40` using available values per horizon. The endpoint does not reconstruct
+forward returns from future price joins. It is not limited to published reports and does not return current
 selections, current matching symbols, current candidates, or individual
 historical symbols.
 
@@ -311,8 +319,8 @@ provenance. `generated_at` is when the summary row was produced.
 included by the mature-outcome source query.
 
 Explicit date-window requests may still execute the live historical aggregate.
-The endpoint is historical evidence for the ST-IM Select signal-selection rule,
-not current live selections.
+Both paths expose the cohort identifier in `provenance.historical_cohort`.
+The aggregates measure realized outcomes for that historical cohort.
 
 Only this exact path is public/free:
 
