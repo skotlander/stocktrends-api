@@ -124,6 +124,11 @@ def test_workflows_expose_machine_plannable_steps(monkeypatch):
     assert body["recommended_starting_workflow"]["workflow_id"] == "portfolio_build"
     assert "mpp" in body["agent_guidance"]["payment_rails"]
     assert workflows
+    regime = next(workflow for workflow in workflows if workflow["workflow_id"] == "regime_analysis")
+    forecast = next(step for step in regime["steps"] if step["step_id"] == "regime_forecast")
+    assert "deterministic projection" in regime["description"]
+    assert "mean change" in forecast["description"]
+    assert "heuristic confidence label" in forecast["output_summary"]
     for workflow in workflows:
         assert workflow["workflow_id"]
         assert workflow["decision_guidance"]

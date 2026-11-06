@@ -329,13 +329,16 @@ def _rotation_raw_sql(
 @router.get("/definitions")
 def leadership_definitions():
     return {
-        "concept": "Stock Trends leadership screens identify instruments with strong relative strength and trend alignment.",
+        "concept": (
+            "The Stock Trends leadership summary screens for relative strength and minimum major trend duration. "
+            "Leaders can be bullish or bearish. Use the trend state to assess bullish confirmation separately."
+        ),
         "indicators": {
             "rsi": "Relative strength vs benchmark. Values above 100 indicate outperformance.",
             "trend": "Stock Trends trend state (^+, ^-, v^, v+, v-, ^v).",
             "trend_cnt": "Weeks in the current specific trend state.",
             "mt_cnt": "Weeks in the current major trend classification (bullish or bearish).",
-            "rsi_updn": "Weekly change in relative strength: + improving, - weakening, 0 flat.",
+            "rsi_updn": "Performance versus the benchmark in the current week (+ outperformed, - underperformed).",
         },
         "taxonomy_source": "Stock Trends sector and industry taxonomy",
         "taxonomy_levels": ["sector", "industry_group", "industry"],
@@ -363,10 +366,10 @@ def leadership_summary_latest(
     limit_bucket: int = Query(default=20, ge=1, le=200, description="Per-sector / per-industry-group limit"),
 ):
     """
-    MySQL 5.7-safe leadership snapshots:
-      - overall leaders (top RSI)
-      - top leaders per sector (ranked by RSI, mt_cnt)
-      - top leaders per industry group (ranked by RSI, mt_cnt)
+    Ranks overall, sector, and industry-group leaders by Stock Trends RSI, then mt_cnt.
+
+    Filters apply to RSI and weeks in the current major trend. Leaders can be bullish
+    or bearish. Use each row's trend to assess bullish confirmation separately.
 
     Taxonomy uses Stock Trends sector and industry classifications.
     """

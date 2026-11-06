@@ -7,6 +7,8 @@ from sqlalchemy import text
 from db import get_engine, get_metering_engine
 from routers.workflows import WORKFLOW_REGISTRY, STC_TO_USD, WORKFLOW_ID_EXAMPLES
 from discovery.endpoint_metadata import (
+    REGIME_FORECAST_CONFIDENCE_DESCRIPTION,
+    REGIME_FORECAST_DESCRIPTION,
     build_tool_template,
     input_location_for_method,
     iter_endpoint_metadata,
@@ -527,17 +529,13 @@ _TOOL_TEMPLATES = [
         "name": "market_regime_forecast",
         "title": "Market Regime Forecast",
         "description": (
-            "Returns a deterministic forward regime outlook derived from the direction "
-            "and consistency of recent weekly regime scores. No ML. "
-            "forecast_regime: bullish | bearish | mixed. "
-            "forecast_confidence based on regime_consistency and avg_weekly_score_delta. "
-            "Reuses the same trend classification as /market/regime/latest."
+            f"{REGIME_FORECAST_DESCRIPTION} {REGIME_FORECAST_CONFIDENCE_DESCRIPTION}"
         ),
         "endpoint": "/v1/market/regime/forecast",
         "method": "GET",
         "category": "market",
         "input_schema": {"type": "object", "properties": {}, "required": []},
-        "output_summary": "forecast_regime, forecast_confidence, current_regime, current_regime_score, recent_direction, regime_consistency, projected_regime_score.",
+        "output_summary": "forecast_regime, forecast_confidence (heuristic label), current_regime, current_regime_score, recent_direction, regime_consistency, projected_regime_score.",
     },
     # ---- Screener ----------------------------------------------------------
     {
@@ -1412,7 +1410,7 @@ def ai_context():
             "leadership": {
                 "endpoints": ["/v1/leadership/summary/latest", "/v1/leadership/rotation/history"],
                 "use_when": "concentration and rotation analysis",
-                "semantics": "where benchmark-relative performance and trend alignment are concentrated or rotating",
+                "semantics": "relative-strength leaders can be bullish or bearish. Read trend for bullish confirmation and rotation history for changes in sector leadership.",
                 "interpret_with": ["/v1/leadership/definitions"],
             },
             "decision": {
@@ -2164,7 +2162,7 @@ _PROOF_STATIC_BODY: dict = {
                 "symbol": "SAMPLE_A1",
                 "trend": "^+",
                 "trend_cnt": 12,
-                "mt_cnt": 8,
+                "mt_cnt": 18,
                 "rsi": 118,
                 "rsi_updn": "+",
                 "vol_tag": "*",
@@ -2183,7 +2181,7 @@ _PROOF_STATIC_BODY: dict = {
             {
                 "symbol": "SAMPLE_C3",
                 "trend": "v^",
-                "trend_cnt": 2,
+                "trend_cnt": 1,
                 "mt_cnt": 1,
                 "rsi": 97,
                 "rsi_updn": "-",
@@ -2194,7 +2192,7 @@ _PROOF_STATIC_BODY: dict = {
                 "symbol": "SAMPLE_D4",
                 "trend": "v-",
                 "trend_cnt": 5,
-                "mt_cnt": 3,
+                "mt_cnt": 8,
                 "rsi": 88,
                 "rsi_updn": "-",
                 "vol_tag": "",
@@ -2204,7 +2202,7 @@ _PROOF_STATIC_BODY: dict = {
                 "symbol": "SAMPLE_E5",
                 "trend": "v+",
                 "trend_cnt": 11,
-                "mt_cnt": 7,
+                "mt_cnt": 17,
                 "rsi": 72,
                 "rsi_updn": "-",
                 "vol_tag": "!!",

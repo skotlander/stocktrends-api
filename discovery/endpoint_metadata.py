@@ -65,6 +65,15 @@ X402_DISCOVERY_PATH = "/.well-known/x402"
 X402_DISCOVERY_URL = f"{PUBLIC_API_BASE_URL}{X402_DISCOVERY_PATH}"
 COMPACT_SAFE_EXAMPLE_MAX_BYTES = 384
 
+REGIME_FORECAST_DESCRIPTION = (
+    "Projects the latest weekly regime score deterministically by adding the mean change between "
+    "recent scores and clamping the result to [-1, 1]. The projected score determines the regime label."
+)
+REGIME_FORECAST_CONFIDENCE_DESCRIPTION = (
+    "The forecast_confidence field is a heuristic label (low, moderate, or high) based on recent "
+    "regime consistency, current score magnitude, and the magnitude of the average score change."
+)
+
 # ---------------------------------------------------------------------------
 # Canonical analytical role constants.
 # Endpoint roles describe WHAT an endpoint does analytically.
@@ -1318,18 +1327,18 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         title="Market Regime Forecast",
         category="market",
         pricing_rule_id="market_regime_forecast",
-        resource_description="Deterministic forward regime outlook derived from recent weekly regime score direction and consistency.",
+        resource_description=REGIME_FORECAST_DESCRIPTION,
         bazaar_output_description="Returns forecast_regime, forecast_confidence, current_regime, current_regime_score, recent_direction, regime_consistency, projected_regime_score, and weeks_analyzed.",
-        purpose="Estimate near-term regime direction using deterministic recent-score logic.",
+        purpose="Extrapolate the latest weekly regime score using its average recent change.",
         investment_agent_value="Helps agents decide whether to run bullish, bearish, or mixed workflows.",
         workflow_role="Regime decision guidance.",
         optional_inputs={"lookback": {"type": "integer", "required": False, "safe_default": 5, "minimum": 2, "maximum": 13}},
         safe_example_request={"method": "GET", "path": "/v1/market/regime/forecast", "query": {"lookback": 5}},
         response_shape=["forecast_regime", "forecast_confidence", "current_regime", "current_regime_score", "recent_direction", "regime_consistency", "projected_regime_score", "avg_weekly_score_delta", "recent_scores", "weeks_analyzed", "lookback", "weekdate"],
-        example_object={"forecast_regime": "mixed", "forecast_confidence": 0.0, "recent_direction": "stable"},
-        output_summary="Deterministic regime outlook and confidence fields.",
+        example_object={"forecast_regime": "mixed", "forecast_confidence": "moderate", "recent_direction": "stable"},
+        output_summary="Projected regime score, regime label, and heuristic confidence label.",
         analytical_role=ROLE_MARKET_REGIME_CLASSIFIER,
-        notes=["No ML is used; output is deterministic from recent regime scores."],
+        notes=[REGIME_FORECAST_CONFIDENCE_DESCRIPTION],
         related_endpoints=["/v1/market/regime/latest", "/v1/market/regime/history"],
         next_recommended_calls=["/v1/decision/evaluate-symbol", "/v1/portfolio/construct"],
         tags=["market-regime", "regime-forecast", "market-outlook"],
@@ -1756,7 +1765,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         supported_rails=SUPPORTED_RAILS,
         resource_description=(
             "Latest Stock Trends leadership summary identifying overall, sector, and "
-            "industry-group leaders using relative performance and trend-alignment filters."
+            "industry-group leaders using RSI and major trend duration filters. "
+            "Leaders can be bullish or bearish."
         ),
         bazaar_output_description=(
             "Returns leadership summary fields including weekdate, filters, overall_leaders, "
@@ -1765,8 +1775,8 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         ),
         purpose="Retrieve the latest Stock Trends leadership summary across sectors and industry groups.",
         investment_agent_value=(
-            "Helps agents identify where relative performance and bullish Stock Trends alignment "
-            "are concentrated before combining leadership context with breadth, regime, or symbol workflows."
+            "Shows where the strongest benchmark-relative performers are concentrated. "
+            "Use each row's trend to assess bullish confirmation separately."
         ),
         workflow_role="Leadership context enrichment.",
         optional_inputs={
@@ -1782,10 +1792,10 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "min_rsi": {
                 "type": "integer",
                 "required": False,
-                "safe_default": 40,
+                "safe_default": 110,
                 "minimum": 0,
                 "maximum": 500,
-                "example": 40,
+                "example": 110,
                 "description": "Minimum Stock Trends RSI threshold. RSI baseline is 100.",
             },
             "min_mt_cnt": {
@@ -1817,7 +1827,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         safe_example_request={
             "method": "GET",
             "path": "/v1/leadership/summary/latest",
-            "query": {"exchange": "N", "type": "CS", "min_rsi": 40, "min_mt_cnt": 4},
+            "query": {"exchange": "N", "type": "CS", "min_rsi": 110, "min_mt_cnt": 4},
         },
         response_shape=[
             "request_id", "weekdate", "exchange", "filters.type", "filters.min_rsi",
@@ -1833,14 +1843,14 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "request_id": "req_demo",
             "weekdate": "YYYY-MM-DD",
             "exchange": "N",
-            "filters": {"type": "CS", "min_rsi": 40, "min_mt_cnt": 4},
+            "filters": {"type": "CS", "min_rsi": 110, "min_mt_cnt": 4},
             "overall_leaders": [
                 {
                     "symbol": "SAMPLE",
                     "exchange": "N",
                     "rsi": 118,
                     "mt_cnt": 10,
-                    "trend": "^+",
+                    "trend": "v+",
                     "trend_cnt": 6,
                     "sector_name": "Sample Sector",
                 }
@@ -1850,7 +1860,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         },
         output_summary=(
             "Latest leadership groups with overall, sector, and industry-group leaders ranked by "
-            "Stock Trends RSI and trend-category maturity filters."
+            "Stock Trends RSI, then mt_cnt. Each row includes its trend state."
         ),
         analytical_role=ROLE_LEADERSHIP_INTELLIGENCE,
         notes=[
