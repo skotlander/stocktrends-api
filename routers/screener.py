@@ -132,7 +132,7 @@ def screener_top(
         default=100,
         ge=0,
         le=500,
-        description="Minimum RSI threshold. 100 = outperforming the benchmark.",
+        description="Minimum RSI threshold. 100 is the benchmark baseline. Values above 100 indicate outperformance.",
     ),
     min_mt_cnt: int = Query(
         default=1,

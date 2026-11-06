@@ -253,7 +253,7 @@ Use these helper endpoints during autonomous planning before paid execution:
 ### Agent Screener
 
 * `GET /agent/screener/top`
-  Stock screener for finding and ranking stronger or persistent trend equity candidates. Filters by trend code (bullish default: ^+, ^-, v^), RSI (relative performance vs S&P 500 benchmark, baseline 100), trend_cnt, and mt_cnt.
+  Stock screener for finding and ranking stronger or persistent trend equity candidates. Filters by trend code (bullish default: ^+, ^-, v^), RSI (`min_rsi=100` by default, the benchmark baseline), trend_cnt, and mt_cnt.
 
 ### ST-IM (Stock Trends Inference Model)
 

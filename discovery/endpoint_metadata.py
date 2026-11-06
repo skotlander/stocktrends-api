@@ -23,6 +23,7 @@ from discovery.provenance import (
     STIM_SELECT_HISTORICAL_COHORT,
     STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION,
     STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
+    STIM_SELECT_HISTORICAL_RANKING,
     endpoint_needs_provenance,
     provenance_reference,
 )
@@ -267,6 +268,7 @@ STIM_SELECT_INTERPRETATION_GUIDANCE = {
 STIM_SELECT_SIGNAL_OUTCOME_GUIDANCE = {
     "historical_cohort": STIM_SELECT_HISTORICAL_COHORT,
     "interpretation_limit": STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
+    "ranking_basis": STIM_SELECT_HISTORICAL_RANKING,
     "signal_criteria": {
         "x4wk1": {"operator": ">", "threshold_pct": 0.0, "description": "4-week ST-IM lower CI bound must exceed base-period mean of 0%."},
         "x13wk1": {"operator": ">", "threshold_pct": 2.19, "description": "13-week ST-IM lower CI bound must exceed base-period mean of 2.19%."},
@@ -503,16 +505,25 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
         safe_example_request={
             "method": "GET",
             "path": "/v1/agent/screener/top",
-            "query": {"limit": 10, "min_rsi": 40},
+            "query": {"limit": 10, "min_rsi": 100},
         },
         optional_inputs={
-            "limit": {"type": "integer", "required": False, "safe_default": 25, "minimum": 1, "maximum": 100},
+            "limit": {
+                "type": "integer",
+                "required": False,
+                "safe_default": 25,
+                "minimum": 1,
+                "maximum": 100,
+                "description": "Maximum results. The safe example requests 10 to keep its response compact.",
+            },
             "min_rsi": {
                 "type": "integer",
                 "required": False,
-                "safe_default": 40,
-                "example": 40,
-                "description": "Minimum Stock Trends RSI threshold. RSI baseline is 100.",
+                "safe_default": 100,
+                "minimum": 0,
+                "maximum": 500,
+                "example": 100,
+                "description": "Minimum Stock Trends RSI threshold. 100 is the benchmark baseline.",
             },
             "exchange": {"type": "string", "required": False, "enum": EXCHANGE_ENUM},
         },
@@ -947,6 +958,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "request_id",
             "signal.signal_id",
             "signal.criteria",
+            "signal.ranking_basis",
             "filters.start_date",
             "filters.end_date",
             "filters.exchange",
@@ -987,6 +999,7 @@ _ENDPOINT_METADATA_BY_PATH: dict[str, dict[str, Any]] = {
             "signal": {
                 "signal_id": "stim_select",
                 "name": "ST-IM Select",
+                "ranking_basis": STIM_SELECT_HISTORICAL_RANKING,
                 "base_period_mean_13wk": 2.19,
             },
             "filters": {

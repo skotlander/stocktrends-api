@@ -116,6 +116,20 @@ STIM_SELECT_HISTORICAL_COHORT = {
     "requires_non_null_fpr_chg13": True,
     "summary_endpoint": "/v1/selections/stim-select/outcomes/summary",
 }
+STIM_SELECT_HISTORICAL_RANKING = {
+    "basis": "13_week_outperformance_z_score",
+    "applies_when": "limit_rank_is_set",
+    "partition_by": "weekdate",
+    "formula": "(x13wk - 2.19) / x13wksd",
+    "direction": "desc",
+    "null_or_zero_stddev_score": -999999999999,
+    "tie_breakers": [
+        {"field": "x13wk", "direction": "desc"},
+        {"field": "exchange", "direction": "asc"},
+        {"field": "symbol", "direction": "asc"},
+    ],
+    "modeled_probability_order_equivalent_when": "x13wksd > 0",
+}
 STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION = (
     "Historical instrument-week cohort with x4wk1 > 0%, x13wk1 > 2.19%, x40wk1 > 6.45%, "
     "price >= 2, weekly volume > 100,000 actual shares, and a non-null fpr_chg13. "

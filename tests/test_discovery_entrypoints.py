@@ -313,6 +313,40 @@ def test_leadership_discovery_matches_openapi_filters_and_trend_meaning(client):
     assert "benchmark in the current week (+ outperformed, - underperformed)" in definitions["indicators"]["rsi_updn"]
 
 
+def test_screener_discovery_matches_openapi_defaults_and_safe_example(client):
+    openapi = client.get("/v1/openapi.json").json()
+    manifest = client.get("/v1/ai/tools").json()
+    static_manifest = client.get("/tools.json").json()
+    operation = openapi["paths"]["/agent/screener/top"]["get"]
+    params = {param.get("name"): param for param in operation["parameters"]}
+    tool = next(entry for entry in manifest["tools"] if entry["endpoint"] == "/v1/agent/screener/top")
+    static_tool = next(entry for entry in static_manifest["tools"] if entry["path"] == "/agent/screener/top")
+
+    for name, default in {"min_rsi": 100, "limit": 25}.items():
+        assert params[name]["schema"]["default"] == default
+        assert tool["optional_inputs"][name]["safe_default"] == default
+        assert tool["input_schema"]["properties"][name]["default"] == default
+    assert "benchmark baseline" in params["min_rsi"]["description"]
+    assert "keep its response compact" in tool["optional_inputs"]["limit"]["description"]
+    assert "min_rsi=100" in static_tool["description"]
+
+    example = tool["safe_example_request"]
+    assert example["query"] == {"limit": 10, "min_rsi": 100}
+    assert operation["x-stocktrends-safe-example-request"] == static_tool["safe_example_request"] == example
+
+
+def test_relative_strength_direction_definitions_preserve_verified_signs(client):
+    definition = client.get("/v1/meta/indicators").json()["fields"]["rsi_updn"]
+    context = client.get("/v1/ai/context").json()
+
+    assert definition["allowed"] == ["+", "-", "0", ""]
+    assert definition["meaning"]["+"] == "Outperformed benchmark this week"
+    assert definition["meaning"]["-"] == "Underperformed benchmark this week"
+    assert all("unverified" in definition["meaning"][value] for value in ("0", ""))
+    assert "performance in the current week with its benchmark" in definition["description"]
+    assert "benchmark in the current week (+ outperformed, - underperformed)" in context["field_definitions"]["rsi_updn"]
+
+
 def test_openapi_and_ai_tools_agree_on_target_get_parameter_locations(client):
     response = client.get("/v1/openapi.json")
     assert response.status_code == 200
