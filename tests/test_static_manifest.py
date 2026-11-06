@@ -13,6 +13,7 @@ Verifies:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -158,6 +159,14 @@ def test_llms_txt_has_agentic_service_positioning():
     assert "Autonomous portfolio intelligence API for AI agents" in text
     assert "x402 and MPP payment rails" in text
     assert "not investment advice" in text.lower()
+
+
+def test_llms_txt_points_intelligence_artifact_prices_to_live_catalog():
+    text = LLMS_TXT.read_text(encoding="utf-8")
+    artifacts = text.split("### Published Intelligence Artifacts\n", 1)[1].split("\n### ", 1)[0]
+
+    assert "GET /v1/pricing/catalog" in artifacts
+    assert not re.search(r"\b\d+(?:\.\d+)?\s*STC\b", artifacts, flags=re.IGNORECASE)
 
 
 def test_instrument_lookup_auth_required_false(manifest):

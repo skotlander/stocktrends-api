@@ -100,6 +100,7 @@ _PUBLIC_STOCKTRENDS_STRATEGY_METADATA_DETAIL_PREFIX = (
 _PUBLIC_STIM_SELECT_OUTCOME_SUMMARY_PATH = "/v1/selections/stim-select/outcomes/summary"
 _PUBLIC_INTELLIGENCE_DISCOVERY_PATH = "/v1/intelligence/discovery"
 _PUBLIC_INTELLIGENCE_EDITORIAL_PREVIEW_PATH = "/v1/intelligence/editorial/latest/preview"
+PUBLIC_PRICING_CATALOG_PATH = "/v1/pricing/catalog"
 
 
 def is_public_stocktrends_portfolio_metadata_path(path: str) -> bool:
@@ -1193,6 +1194,9 @@ def get_accepted_payment_methods_for_path_from_config(
     method: str | None = None,
     enforced_payment_method: str | None = None,
 ) -> str:
+    if path.split("?", 1)[0] == PUBLIC_PRICING_CATALOG_PATH:
+        return "none"
+
     normalized_method = (enforced_payment_method or "").strip().lower()
 
     if is_public_stocktrends_path(path) or is_public_intelligence_path(path):

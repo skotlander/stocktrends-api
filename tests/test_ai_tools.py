@@ -44,14 +44,6 @@ from payments.policy_provider import (
     get_agent_pay_auth_bypass_methods,
 )
 
-_PUBLIC_METERED_PLANNING_EXCEPTIONS = frozenset({
-    # Current runtime behavior: public in ApiKeyMiddleware, but classified as
-    # metered planning metadata. This PR only corrects discovery metadata;
-    # enforcement/classifier reconciliation is a follow-up.
-    "/v1/pricing/catalog",
-})
-
-
 # ---------------------------------------------------------------------------
 # 1. Public path registration
 # ---------------------------------------------------------------------------
@@ -741,18 +733,14 @@ def test_regression_ai_context_tool():
 
 
 def test_regression_pricing_catalog_tool():
-    """
-    /v1/pricing/catalog is public under current ApiKeyMiddleware behavior, but
-    classifier metadata still reports it as metered with a subscription pricing rule.
-    This PR only corrects discovery metadata to match current public behavior.
-    """
     result = ai_tools()
     tool = next(t for t in result["tools"] if t["endpoint"] == "/v1/pricing/catalog")
-    assert tool["auth_required"] is False, "/v1/pricing/catalog is public under current behavior"
-    assert tool["metered"] is True, "/v1/pricing/catalog must be metered=True"
-    assert tool["pricing_rule_id"] is not None, (
-        "/v1/pricing/catalog must keep its classifier-derived pricing_rule_id"
-    )
+    assert tool["auth_required"] is False
+    assert tool["metered"] is False
+    assert tool["access_type"] == "free"
+    assert tool["requires_payment"] is False
+    assert tool["supported_rails"] == []
+    assert tool["pricing_rule_id"] is None
 
 
 def test_regression_stim_tools():
@@ -858,14 +846,12 @@ def test_manifest_public_paths_subset_of_middleware():
 def test_manifest_public_paths_subset_of_non_metered_paths():
     """
     Every path in _MANIFEST_PUBLIC_PATHS must also appear in NON_METERED_PATHS
-    (or is a free-metered path), except documented planning metadata paths whose
-    current public behavior is intentionally left unchanged in this PR.
+    or be a free-metered path.
     """
     for path in _MANIFEST_PUBLIC_PATHS:
         is_non_metered = path in NON_METERED_PATHS
         is_free_metered = is_free_metered_path(path)
-        is_current_public_metered_exception = path in _PUBLIC_METERED_PLANNING_EXCEPTIONS
-        assert is_non_metered or is_free_metered or is_current_public_metered_exception, (
+        assert is_non_metered or is_free_metered, (
             f"_MANIFEST_PUBLIC_PATHS path '{path}' is neither in NON_METERED_PATHS "
             f"nor a free_metered_path — public callers would be metered or denied"
         )

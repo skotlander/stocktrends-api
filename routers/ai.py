@@ -135,7 +135,7 @@ def _access_metadata(path: str, method: str = "GET", policy_config=None) -> dict
         access_type = "paid"
         requires_payment = bool(agent_pay_rails)
     elif decision.is_metered:
-        # Subscription-covered metered path (e.g. /v1/pricing/catalog).
+        # Subscription-covered metered path.
         pricing_rule_id = decision.log_pricing_rule_id
         supported_rails = ["subscription"]
         access_type = "paid" if path not in _MANIFEST_PUBLIC_PATHS else "free"
@@ -260,7 +260,7 @@ _TOOL_TEMPLATES = [
         "title": "Live Pricing Catalog",
         "description": (
             "Returns all active STC pricing rules from the pricing engine. "
-            "Public planning infrastructure under the current API behavior. "
+            "Public planning infrastructure with no authentication or payment required. "
             "Agents should call this at startup to build a local cost map before issuing data requests."
         ),
         "endpoint": "/v1/pricing/catalog",

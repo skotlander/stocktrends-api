@@ -4,6 +4,8 @@ import json
 from decimal import Decimal
 from types import SimpleNamespace
 
+import pytest
+
 import routers.pricing as pricing_router
 
 
@@ -55,11 +57,12 @@ def _row(rule_name: str, endpoint_pattern: str, cost: Decimal) -> dict:
 
 
 def test_pricing_catalog_includes_paid_intelligence_products(monkeypatch):
+    # Distinct fixture amounts verify that each rule is sourced from its row.
     rows = [
-        _row("intelligence_guidance_latest", "/v1/intelligence/guidance/latest", Decimal("0.25")),
-        _row("intelligence_guidance_by_id", "/v1/intelligence/guidance/{artifact_id}", Decimal("0.25")),
-        _row("intelligence_research_latest", "/v1/intelligence/research/latest", Decimal("0.50")),
-        _row("intelligence_research_by_id", "/v1/intelligence/research/{artifact_id}", Decimal("0.50")),
+        _row("intelligence_guidance_latest", "/v1/intelligence/guidance/latest", Decimal("1.17")),
+        _row("intelligence_guidance_by_id", "/v1/intelligence/guidance/{artifact_id}", Decimal("1.23")),
+        _row("intelligence_research_latest", "/v1/intelligence/research/latest", Decimal("2.67")),
+        _row("intelligence_research_by_id", "/v1/intelligence/research/{artifact_id}", Decimal("2.89")),
     ]
     monkeypatch.setattr(pricing_router, "get_metering_engine", lambda: _Engine(rows))
 
@@ -67,16 +70,9 @@ def test_pricing_catalog_includes_paid_intelligence_products(monkeypatch):
     body = json.loads(response.body)
     rules = {rule["pricing_rule_id"]: rule for rule in body["rules"]}
 
-    expected_costs = {
-        "intelligence_guidance_latest": 0.25,
-        "intelligence_guidance_by_id": 0.25,
-        "intelligence_research_latest": 0.5,
-        "intelligence_research_by_id": 0.5,
-    }
-    assert expected_costs.keys() <= rules.keys()
-
-    for rule_id, expected_cost in expected_costs.items():
-        rule = rules[rule_id]
+    for row in rows:
+        rule = rules[row["rule_name"]]
+        expected_cost = float(row["cost_per_request"])
         assert rule["endpoint_family"] == "intelligence"
         assert rule["access_type"] == "paid"
         assert rule["cost_per_request"] == expected_cost
@@ -86,3 +82,25 @@ def test_pricing_catalog_includes_paid_intelligence_products(monkeypatch):
         assert rule["requires_subscription"] is False
         assert rule["supported_rails"] == ["subscription", "x402", "mpp"]
         assert "STC is the pricing source of truth" in rule["pricing_note"]
+
+
+@pytest.mark.parametrize("headers", [{}, {"X-API-Key": "unused"}], ids=["anonymous", "with-key"])
+def test_pricing_catalog_is_public_and_non_billable(payment_harness, monkeypatch, headers):
+    monkeypatch.setattr(pricing_router, "get_metering_engine", lambda: _Engine([]))
+
+    response = payment_harness.client.get("/v1/pricing/catalog", headers=headers)
+
+    assert response.status_code == 200
+    assert response.headers["x-stocktrends-pricing-rule"] == "default_free"
+    assert response.headers["x-stocktrends-payment-required"] == "false"
+    assert response.headers["x-stocktrends-accepted-payment-methods"] == "none"
+    assert "x-stocktrends-quota-limit" not in response.headers
+    assert "payment-required" not in response.headers
+
+    event = payment_harness.logs.only_event_row()
+    assert event["pricing_rule_id"] == "default_free"
+    assert event["is_metered"] == 0
+    assert event["is_billable"] == 0
+    assert event["payment_rail"] == "none"
+    assert event["subscription_id"] is None
+    assert not payment_harness.logs.economics
