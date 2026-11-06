@@ -11,6 +11,10 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from api.routing import pre_payment_semantic_validator
 from db import get_engine
+from discovery.endpoint_metadata import (
+    REGIME_FORECAST_CONFIDENCE_DESCRIPTION,
+    REGIME_FORECAST_DESCRIPTION,
+)
 from services import epoch_queries, regime_queries, regime_service
 from services.market_semantics import BEARISH_TRENDS, BULLISH_TRENDS, NEUTRAL_TRENDS
 from utils.history_bounds import (
@@ -380,9 +384,8 @@ def market_regime_history(
     "/regime/forecast",
     summary="Forward-looking market regime forecast",
     description=(
-        "Returns a deterministic forward-looking canonical-equity regime outlook based "
-        "on the direction and consistency of classified weekly regime scores. "
-        "Fully deterministic — no ML. "
+        "Returns a canonical-equity regime outlook. "
+        f"{REGIME_FORECAST_DESCRIPTION} {REGIME_FORECAST_CONFIDENCE_DESCRIPTION} "
         "Fetch /v1/pricing/catalog for current STC cost."
     ),
 )

@@ -345,6 +345,8 @@ class TestDiscoveryPreview:
             assert field in shape_str, (
                 f"Field {field!r} missing from market/regime/forecast preview response_shape"
             )
+        assert preview["example_object"]["forecast_confidence"] in {"low", "moderate", "high"}
+        assert "heuristic confidence label" in preview["output_summary"]
 
     def test_selections_latest_preview_contains_real_fields(self):
         """Selections latest preview must reference actual fields from selections.py."""

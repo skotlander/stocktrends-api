@@ -280,6 +280,39 @@ def test_docs_load_and_reference_expected_canonical_schema(client, docs_path, op
     assert f"url: '{openapi_path}'" in response.text
 
 
+def test_regime_forecast_descriptions_distinguish_projection_and_confidence(client):
+    openapi = client.get("/v1/openapi.json").json()
+    manifest = client.get("/v1/ai/tools").json()
+    operation = openapi["paths"]["/market/regime/forecast"]["get"]
+    tool = next(tool for tool in manifest["tools"] if tool["name"] == "market_regime_forecast")
+    workflow = next(workflow for workflow in manifest["workflows"] if workflow["workflow_id"] == "regime_analysis")
+
+    assert "deterministic projection" in workflow["description"]
+    for description in (operation["description"], tool["description"]):
+        assert "mean change" in description
+        assert "heuristic label (low, moderate, or high)" in description
+
+
+def test_leadership_discovery_matches_openapi_filters_and_trend_meaning(client):
+    openapi = client.get("/v1/openapi.json").json()
+    manifest = client.get("/v1/ai/tools").json()
+    operation = openapi["paths"]["/leadership/summary/latest"]["get"]
+    tool = next(tool for tool in manifest["tools"] if tool["name"] == "leadership_summary_latest")
+    params = {param.get("name"): param for param in operation["parameters"]}
+
+    for name, default in {"min_rsi": 110, "min_mt_cnt": 4}.items():
+        assert params[name]["schema"]["default"] == default
+        assert tool["optional_inputs"][name]["safe_default"] == default
+        assert tool["safe_example_request"]["query"][name] == default
+        assert operation["x-stocktrends-safe-example-request"]["query"][name] == default
+
+    definitions = client.get("/v1/leadership/definitions").json()
+    assert "bullish or bearish" in " ".join(operation["description"].split())
+    assert "bullish confirmation separately" in tool["description"]
+    assert "bullish or bearish" in definitions["concept"]
+    assert "benchmark in the current week (+ outperformed, - underperformed)" in definitions["indicators"]["rsi_updn"]
+
+
 def test_openapi_and_ai_tools_agree_on_target_get_parameter_locations(client):
     response = client.get("/v1/openapi.json")
     assert response.status_code == 200

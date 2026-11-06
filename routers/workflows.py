@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 
 from db import get_metering_engine
-from discovery.endpoint_metadata import get_endpoint_metadata
+from discovery.endpoint_metadata import REGIME_FORECAST_DESCRIPTION, get_endpoint_metadata
 from discovery.provenance import data_provenance
 
 logger = logging.getLogger("stocktrends_api.workflows")
@@ -62,7 +62,7 @@ WORKFLOW_REGISTRY: list[dict] = [
         "name": "Market Regime Analysis",
         "description": (
             "Full market regime intelligence pipeline: current regime classification, "
-            "historical regime sequence for context, and probabilistic forward forecast."
+            "historical regime sequence for context, and deterministic projection of the latest regime score."
         ),
         "tags": ["agent", "research", "regime"],
         "supported_rails": ["subscription", "x402", "mpp"],
@@ -108,7 +108,7 @@ WORKFLOW_REGISTRY: list[dict] = [
                 "step_id": "regime_forecast",
                 "endpoint": "GET /v1/market/regime/forecast",
                 "pricing_rule_id": "market_regime_forecast",
-                "description": "Retrieve probabilistic forward regime forecast.",
+                "description": REGIME_FORECAST_DESCRIPTION,
                 "optional": False,
             },
         ],

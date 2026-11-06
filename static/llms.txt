@@ -154,7 +154,7 @@ https://developer.stocktrends.com/mpp
 * `GET /market/regime/history`
   Recent weekly market regime classification. Returns at most 52 weekly observations, most recent eligible weeks first. `start_date` raises the earliest eligible week; it does not select a window, there is no end bound, and there is no backward pagination. It covers recent regime history, not an arbitrary historical period.
 * `GET /market/regime/forecast`
-  Forward-looking market regime forecast
+  Deterministic projection of the latest weekly regime score using its average recent change. `forecast_confidence` is a heuristic label (low, moderate, or high).
 
 ### Breadth
 
@@ -168,7 +168,7 @@ https://developer.stocktrends.com/mpp
 * `GET /leadership/definitions`
   Leadership definitions and metadata
 * `GET /leadership/summary/latest`
-  Latest Stock Trends leadership summary with overall, sector, and industry-group leaders ranked by RSI and trend-category maturity filters
+  Latest overall, sector, and industry-group leaders ranked by Stock Trends RSI, then major trend duration. Filters default to `min_rsi=110` and `min_mt_cnt=4`. Leaders can be bullish or bearish. Use each row's `trend` for bullish confirmation.
 * `GET /leadership/rotation/history`
   Historical leadership rotation
 

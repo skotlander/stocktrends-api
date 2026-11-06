@@ -335,8 +335,8 @@ def test_proof_endpoint_instrument_rsi_in_baseline_range(client):
         )
 
 
-def test_proof_endpoint_instrument_trend_cnt_mt_cnt_positive(client):
-    """trend_cnt and mt_cnt must be positive integers."""
+def test_proof_endpoint_instrument_trend_durations_are_consistent(client):
+    """Specific trend duration fits within major trend duration; crossovers start both at one."""
     data = client.get("/v1/ai/proof/market-edge").json()
     instruments = data["market_snapshot"]["instruments"]
     for inst in instruments:
@@ -349,6 +349,9 @@ def test_proof_endpoint_instrument_trend_cnt_mt_cnt_positive(client):
         assert isinstance(mt_cnt, int) and mt_cnt > 0, (
             f"Instrument {symbol!r} has invalid mt_cnt={mt_cnt!r} (must be a positive integer)"
         )
+        assert trend_cnt <= mt_cnt, f"Instrument {symbol!r} exceeds its major trend duration"
+        if inst["trend"] in {"v^", "^v"}:
+            assert trend_cnt == mt_cnt == 1, f"Instrument {symbol!r} is in its crossover week"
 
 
 # ---------------------------------------------------------------------------
