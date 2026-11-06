@@ -336,8 +336,7 @@ def get_pricing_catalog(request: Request) -> JSONResponse:
                     "Use HTTP 402 stocktrends_preview as the final per-request confirmation before x402 payment.",
                 ],
                 "public_behavior_note": (
-                    "This endpoint is public under current API behavior. A follow-up should reconcile "
-                    "all static auth metadata and metering policy comments so every discovery surface says the same thing."
+                    "This endpoint is public and free to call. It does not consume subscription quota."
                 ),
             },
             "count": len(catalog),

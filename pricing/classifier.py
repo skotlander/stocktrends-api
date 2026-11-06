@@ -3,6 +3,7 @@ import os
 
 from payments import policy_provider
 from payments.policy_provider import (
+    PUBLIC_PRICING_CATALOG_PATH,
     RuntimePaymentPolicyConfig,
     get_agent_pay_auth_bypass_methods_from_config,
     get_effective_endpoint_payment_policy_from_config,
@@ -52,6 +53,7 @@ NON_METERED_PATHS = {
     "/health",
     "/favicon.ico",
     "/v1/pricing",
+    PUBLIC_PRICING_CATALOG_PATH,
     # Workflow catalog: public discovery surface, no metering.
     "/v1/workflows",
     # Planning helpers: public discovery surfaces, no metering.
