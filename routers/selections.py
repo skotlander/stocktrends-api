@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from statistics import median
@@ -18,6 +19,7 @@ from discovery.provenance import (
     STIM_SELECT_HISTORICAL_COHORT,
     STIM_SELECT_HISTORICAL_COHORT_DESCRIPTION,
     STIM_SELECT_HISTORICAL_EVIDENCE_LIMIT,
+    STIM_SELECT_HISTORICAL_RANKING,
 )
 from routers.signals import VALID_EXCHANGES
 from services import stim_select_outcome_summary as outcome_summary_service
@@ -433,6 +435,7 @@ def _stim_select_signal_metadata() -> dict[str, Any]:
             "prob40wk_formula": "1 - normal_cdf((6.45 - x40wk) / x40wksd)",
             "ranking": "prob13wk_desc",
         },
+        "ranking_basis": deepcopy(STIM_SELECT_HISTORICAL_RANKING),
         "base_period_mean_13wk": STIM_SELECT_BASE_13WK,
         "base_period_mean_4wk": STIM_SELECT_BASE_4WK,
         "base_period_mean_40wk": STIM_SELECT_BASE_40WK,
@@ -571,6 +574,7 @@ def _mast_join(include_mast: bool) -> str:
         "Does not expose current selections, current matching stocks, or "
         "individual symbols. "
         "limit_rank applies a per-week cutoff on the 13-week outperformance z-score ranking. "
+        "Read signal.ranking_basis for the formula, fallback score, and tie breakers. "
         "When start_date and end_date are omitted, the default persistent "
         "summary refresh seeds all-exchange rows for limit_rank omitted/null and "
         "limit_rank=10; other no-date limit_rank values require explicit date "

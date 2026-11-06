@@ -196,11 +196,15 @@ Relative performance of the security versus its benchmark (typically S&P 500) ov
 ### rsi_updn
 
 **Definition:**
-Directional indicator of weekly relative performance versus benchmark.
+Compares the instrument's performance in the current week with its benchmark.
 
 **Values:**
 - `+` → Outperformed this week
 - `-` → Underperformed this week
+
+The published definition establishes the meanings of `+` and `-`. The
+exact-tie encoding and historical meanings of `0` and the empty string remain
+unverified.
 
 ---
 

@@ -78,12 +78,14 @@ def meta_indicators(request: Request):
             "rsi_updn": {
                 "type": "enum",
                 "allowed": ["+", "-", "0", ""],
+                "description": "Compares the instrument's performance in the current week with its benchmark.",
                 "meaning": {
                     "+": "Outperformed benchmark this week",
                     "-": "Underperformed benchmark this week",
-                    "0": "Roughly flat vs benchmark this week",
-                    "": "Not available / missing",
+                    "0": "Encoding retained for compatibility. Historical meaning unverified.",
+                    "": "Encoding retained for compatibility. Historical meaning unverified.",
                 },
+                "note": "Exact-tie and legacy encodings are unverified.",
             },
             "vol_tag": {
                 "type": "enum",

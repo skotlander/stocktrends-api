@@ -826,7 +826,7 @@ def test_targeted_intent_metadata_reaches_x402_challenges_and_discovery_manifest
             "safe_example_request": {
                 "method": "GET",
                 "path": "/v1/agent/screener/top",
-                "query": {"limit": 10, "min_rsi": 40},
+                "query": {"limit": 10, "min_rsi": 100},
             },
         },
         ("GET", "/v1/indicators/latest"): {

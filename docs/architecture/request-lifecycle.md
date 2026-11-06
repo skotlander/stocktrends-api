@@ -269,9 +269,11 @@ The historical rule has no minimum `prob13wk` or membership requirement in
 `st_select`. The published endpoints apply the three lower-bound thresholds
 and `prob13wk >= 55` to `st_select` records. With `limit_rank`, the historical
 queries rank eligible observations within each week by descending
-`(x13wk - 2.19) / x13wksd`, substituting a low sentinel for null or zero
+`(x13wk - 2.19) / x13wksd`, substituting `-999999999999` for null or zero
 `x13wksd`. Ties are resolved by `x13wk` descending, exchange ascending, then
-symbol ascending. The cutoff selects a number of rows per week.
+symbol ascending. The cutoff selects a number of rows per week. The response
+publishes this order in `signal.ranking_basis` and retains `signal.criteria.ranking`
+as a legacy label.
 
 The legacy `outcomes` response uses `stweekly.st_data.fpr_chg13` as the realized
 13-week forward return. Default no-date responses also expose multi-horizon
