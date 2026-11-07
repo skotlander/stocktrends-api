@@ -1152,7 +1152,7 @@ def ai_context():
             "trend_cnt": "Number of consecutive weeks the current trend classification has persisted.",
             "mt_cnt": "Number of weeks the instrument has remained in its current major trend category.",
             "rsi": "Relative performance ratio versus the S&P 500 benchmark over 13 weeks. Baseline = 100. Values >100 indicate outperformance; <100 indicate underperformance. Not the traditional Wilder RSI oscillator.",
-            "rsi_updn": "Weekly direction of relative strength versus benchmark.",
+            "rsi_updn": "Performance versus the benchmark in the current week (+ outperformed, - underperformed).",
             "vol_tag": "Unusual volume classification for the current week."
         },
         "analytical_framework": {

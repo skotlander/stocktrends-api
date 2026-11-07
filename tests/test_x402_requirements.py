@@ -598,7 +598,7 @@ class TestBazaarRichDiscoveryMetadata:
         cases = [
             ("/v1/market/regime/latest", "GET", {"query": {}}),
             ("/v1/stim/latest", "GET", {"query": {"symbol_exchange": "IBM-N"}}),
-            ("/v1/agent/screener/top", "GET", {"query": {"limit": 10, "min_rsi": 40}}),
+            ("/v1/agent/screener/top", "GET", {"query": {"limit": 10, "min_rsi": 100}}),
             ("/v1/breadth/sector/latest", "GET", {"query": {"group_level": "sector", "limit": 5000}}),
             ("/v1/leadership/summary/latest", "GET", {"query": {"exchange": "N", "type": "CS", "min_rsi": 110, "min_mt_cnt": 4}}),
             ("/v1/decision/evaluate-symbol", "POST", {"json": {"symbol_exchange": "IBM-N"}}),

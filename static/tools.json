@@ -278,11 +278,16 @@
       "name": "agent_screener_top",
       "analytical_role": "market_intelligence_filter",
       "title": "Agent Screener Top",
-      "description": "Screens stocks for stronger or persistent trend candidates and returns top-ranked instruments from the latest Stock Trends signal data. Filters by trend code (default: bullish states ^+, ^-, v^), RSI threshold (relative performance vs S&P 500 benchmark, baseline 100), trend persistence (trend_cnt), and trend maturity (mt_cnt). Each result includes trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, symbol_exchange. Recommended first premium call for agent workflows.",
+      "description": "Screens stocks for stronger or persistent trend candidates and returns top-ranked instruments from the latest Stock Trends signal data. Filters by trend code (default: bullish states ^+, ^-, v^), RSI threshold (default min_rsi=100, the benchmark baseline), trend persistence (trend_cnt), and trend maturity (mt_cnt). The safe example requests 10 results for a compact sample. The default limit is 25. Each result includes trend, trend_cnt, mt_cnt, rsi, rsi_updn, vol_tag, symbol_exchange. Recommended first premium call for agent workflows.",
       "method": "GET",
       "path": "/agent/screener/top",
       "auth_required": true,
       "category": "agent_screener",
+      "safe_example_request": {
+        "method": "GET",
+        "path": "/v1/agent/screener/top",
+        "query": {"limit": 10, "min_rsi": 100}
+      },
       "pricing_rule_id": "agent_screener_top",
       "stc_cost": null,
       "estimated_usd_cost": null,
@@ -806,6 +811,20 @@
           "summary_endpoint": "/v1/selections/stim-select/outcomes/summary"
         },
         "interpretation_limit": "These descriptive aggregates apply to the historical cohort. Validating the current published rule, probability calibration, out-of-sample performance, or incremental value over an independent baseline requires separate evidence.",
+        "ranking_basis": {
+          "basis": "13_week_outperformance_z_score",
+          "applies_when": "limit_rank_is_set",
+          "partition_by": "weekdate",
+          "formula": "(x13wk - 2.19) / x13wksd",
+          "direction": "desc",
+          "null_or_zero_stddev_score": -999999999999,
+          "tie_breakers": [
+            {"field": "x13wk", "direction": "desc"},
+            {"field": "exchange", "direction": "asc"},
+            {"field": "symbol", "direction": "asc"}
+          ],
+          "modeled_probability_order_equivalent_when": "x13wksd > 0"
+        },
         "outcome_measurement": {
           "realized_return_field": "fpr_chg13",
           "realized_return_fields": ["fpr_chg4", "fpr_chg13", "fpr_chg40"],

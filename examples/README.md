@@ -297,7 +297,7 @@ call or an EIP-3009 `receiveWithAuthorization` transaction on Base mainnet.
 | `trend_cnt` | Weeks in current specific trend state (persistence)            |
 | `mt_cnt`    | Weeks in current major trend category (maturity)               |
 | `rsi`       | Relative strength vs. benchmark. Baseline 100. >100 = outperforming |
-| `rsi_updn`  | Weekly RSI direction: `+` improving, `-` weakening             |
+| `rsi_updn`  | Current-week performance versus the benchmark (`+` outperformed, `-` underperformed) |
 | `vol_tag`   | Volume signal: `**`/`*` high (accumulation), `!!`/`!` low (distribution) |
 | `x13wk`     | ST-IM expected 13-week forward return (mean)                   |
 | `x13wksd`   | ST-IM 13-week return standard deviation                        |

@@ -177,13 +177,17 @@ GET /v1/selections/latest
 GET /v1/breadth/sector/latest
 ```
 
-### Published STIM Select Signal Outcomes
+### Historical ST-IM Outcome Evidence
 
 ```text
 GET /v1/selections/stim-select/outcomes/summary
 ```
 
-Public/free aggregate historical outcome evidence for observations meeting ST-IM Select criteria. Exposes `outcomes_by_horizon` for realized 4-week, 13-week, and 40-week forward returns (`fpr_chg4`, `fpr_chg13`, `fpr_chg40`). Does not expose current selections, current matching symbols, or individual historical symbols.
+This public endpoint reports aggregate realized returns for `stim_select_historical_outcomes_v1`. The historical instrument-week cohort requires `x4wk1 > 0`, `x13wk1 > 2.19`, `x40wk1 > 6.45`, `price >= 2`, weekly volume above 100,000 actual shares, and non-null `fpr_chg13`. It has no minimum `prob13wk` or base-selection membership requirement.
+
+Current published ST-IM Select applies the three lower-bound tests and `prob13wk >= 55` to base selection records. The outcome statistics describe the historical cohort. Validation of the complete published rule requires separate evidence. See the [semantic contract](docs/STOCK_TRENDS_SEMANTIC_CONTRACT.md#historical-outcome-evidence-cohort).
+
+The cached summary includes `outcomes_by_horizon` for available 4-, 13-, and 40-week realized returns (`fpr_chg4`, `fpr_chg13`, `fpr_chg40`). Explicit date windows summarize 13-week returns. The response is aggregate only.
 
 When `start_date` and `end_date` are omitted, a trailing 10-year window ending at the latest mature outcome date is applied (`filters.default_window_applied: true`). The response includes `generated_at` and `source_latest_mature_weekdate` for freshness assessment. Supported seeded no-date combinations: all-exchange summary with `limit_rank` omitted/null, and all-exchange summary with `limit_rank=10`. Other combinations require explicit date filters or a cache refresh:
 

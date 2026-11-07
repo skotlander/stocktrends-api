@@ -961,6 +961,7 @@ def test_stim_select_outcomes_summary_openapi_documents_filters_and_boundary(cli
     assert "provenance.historical_cohort field identifies stim_select_historical_outcomes_v1" in description
     assert "historical rule has no minimum prob13wk" in description
     assert "prob13wk >= 55% to base selection records" in description
+    assert "Read signal.ranking_basis for the formula, fallback score, and tie breakers" in description
 
     parameters = {
         parameter["name"]: parameter
@@ -998,8 +999,30 @@ def test_historical_cohort_matches_outcome_methodology_and_discovery(client):
     assert limit in family["limitations"]
     assert all(term in limit for term in ("probability calibration", "out-of-sample", "independent baseline"))
 
+    assert outcome["signal"]["criteria"]["ranking"] == "prob13wk_desc"
+    basis = outcome["signal"]["ranking_basis"]
+    assert basis == {
+        "basis": "13_week_outperformance_z_score",
+        "applies_when": "limit_rank_is_set",
+        "partition_by": "weekdate",
+        "formula": "(x13wk - 2.19) / x13wksd",
+        "direction": "desc",
+        "null_or_zero_stddev_score": -999999999999,
+        "tie_breakers": [
+            {"field": "x13wk", "direction": "desc"},
+            {"field": "exchange", "direction": "asc"},
+            {"field": "symbol", "direction": "asc"},
+        ],
+        "modeled_probability_order_equivalent_when": "x13wksd > 0",
+    }
+    live = client.get(cohort["summary_endpoint"], params={"start_date": "2024-01-05", "limit_rank": 1}).json()
+    assert live["signal"]["ranking_basis"] == basis
+
     for entries in (tools, static_tools):
         tool = next(entry for entry in entries if entry["name"] == "stim_select_outcomes_summary")
         guidance = tool["interpretation_guidance"]
         assert guidance["historical_cohort"] == cohort
         assert guidance["interpretation_limit"] == limit
+        assert guidance["ranking_basis"] == basis
+    live_tool = next(entry for entry in tools if entry["name"] == "stim_select_outcomes_summary")
+    assert live_tool["interpretation_guidance"]["signal_criteria"]["ranking"] == "prob13wk descending"
