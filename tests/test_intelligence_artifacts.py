@@ -9,7 +9,7 @@ from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 import pytest
 from fastapi.testclient import TestClient
@@ -888,6 +888,7 @@ def test_agent_can_distinguish_newer_market_week_from_older_editorial_without_pa
 
     publication = context["intelligence_publication"]
     assert publication["research_available_for_latest_market_data_week"] is False
+    assert publication["research_endpoint_for_latest_market_data_week"] is None
     research = publication["research"]
     research_entry = _entry_for(_load_manifest(artifact_root), "market_research_report")
     assert research["status"] == "available"
@@ -935,9 +936,11 @@ def test_market_metadata_empty_unavailable_and_recovers(intelligence_client, mar
     read_context("empty")
 
 
-def test_latest_market_week_can_have_research_when_a_newer_report_is_active(
-    intelligence_client, artifact_root, market_observations
+def test_latest_market_week_discovers_research_by_id_when_a_newer_report_is_active(
+    availability_gate_client, artifact_root, market_observations, monkeypatch
 ):
+    client, economics_rows, _request_events = availability_gate_client
+    monkeypatch.setenv(STORE_ENV_VAR, str(artifact_root))
     conn, _queries = market_observations
     manifest = _load_manifest(artifact_root)
     matching_entry = _entry_for(manifest, "market_research_report")
@@ -954,11 +957,91 @@ def test_latest_market_week_can_have_research_when_a_newer_report_is_active(
     manifest["artifact_count"] += 1
     _save_manifest(artifact_root, manifest)
 
-    response = intelligence_client.get("/v1/ai/context")
+    response = client.get("/v1/ai/context")
     assert response.status_code == 200
+    assert response.headers["x-stocktrends-payment-required"] == "false"
     publication = response.json()["intelligence_publication"]
     assert publication["research"]["weekdate"] == newer["weekdate"]
     assert publication["research_available_for_latest_market_data_week"] is True
+    endpoint = publication["research_endpoint_for_latest_market_data_week"]
+    assert endpoint.startswith("/v1/intelligence/research/")
+    assert unquote(endpoint.rsplit("/", 1)[-1]) == matching_entry["artifact_id"]
+    assert "payload" not in publication["research"]
+
+    challenge = client.get(endpoint)
+    assert challenge.status_code == 402
+    assert challenge.headers["x-stocktrends-pricing-rule"] == "intelligence_research_by_id"
+    assert challenge.headers["x-stocktrends-accepted-payment-methods"] == "subscription,x402,mpp"
+    assert "payload" not in challenge.json()
+    assert economics_rows[-1]["payment_required"] == 1
+
+
+def test_publication_store_permission_error_preserves_market_freshness(
+    intelligence_client, artifact_root, market_observations, monkeypatch, caplog
+):
+    conn, _queries = market_observations
+    market_week = _entry_for(_load_manifest(artifact_root), "market_research_report")["weekdate"]
+    conn.execute("INSERT INTO st_data VALUES (?, ?)", (market_week, "A"))
+
+    def denied(_store):
+        raise PermissionError("private-artifact-mount/manifest.json")
+
+    monkeypatch.setattr(IntelligenceArtifactStore, "list_valid_artifacts", denied)
+    response = intelligence_client.get("/v1/ai/context")
+    assert response.status_code == 200
+    assert response.headers["x-stocktrends-payment-required"] == "false"
+    context = response.json()
+    assert context["last_update"] == market_week
+    assert context["dataset_freshness"]["latest_market_data_weekdate"] == market_week
+    publication = context["intelligence_publication"]
+    for product in ("research", "editorial_preview"):
+        assert publication[product]["status"] == "store_unavailable"
+        assert publication[product]["weekdate"] is None
+    assert publication["research_available_for_latest_market_data_week"] is None
+    assert publication["research_endpoint_for_latest_market_data_week"] is None
+    assert "Intelligence publication metadata unavailable (PermissionError)" in caplog.text
+    assert "private-artifact-mount" not in caplog.text
+    assert "private-artifact-mount" not in response.text
+
+
+@pytest.mark.parametrize("representation", ["extended", "compact", "iso_week", "invalid"])
+def test_context_normalizes_research_weekdate_for_availability_and_display(
+    intelligence_client, artifact_root, market_observations, representation
+):
+    conn, _queries = market_observations
+    entry = _entry_for(_load_manifest(artifact_root), "market_research_report")
+    week = date.fromisoformat(entry["weekdate"])
+    year, week_number, weekday = week.isocalendar()
+    representations = {
+        "extended": week.isoformat(),
+        "compact": week.isoformat().replace("-", ""),
+        "iso_week": f"{year}-W{week_number:02d}-{weekday}",
+        "invalid": "invalid-weekdate",
+    }
+    _rewrite_artifact(artifact_root, "market_research_report", {"weekdate": representations[representation]})
+    conn.execute("INSERT INTO st_data VALUES (?, ?)", (week.isoformat(), "A"))
+
+    response = intelligence_client.get("/v1/ai/context")
+    assert response.status_code == 200
+    publication = response.json()["intelligence_publication"]
+    assert publication["research"]["status"] == "available"
+    valid_week = representation != "invalid"
+    assert publication["research"]["weekdate"] == (week.isoformat() if valid_week else None)
+    assert publication["research_available_for_latest_market_data_week"] is valid_week
+    assert (publication["research_endpoint_for_latest_market_data_week"] is not None) is valid_week
+
+
+def test_publication_access_metadata_uses_intelligence_policy(monkeypatch):
+    monkeypatch.setattr(
+        freshness.policy_provider,
+        "is_public_intelligence_path",
+        lambda path: path == "/v1/intelligence/research/latest",
+    )
+
+    publication = freshness.read_intelligence_publication(None)
+
+    assert publication.research.payment_required_if_available is False
+    assert publication.editorial_preview.payment_required_if_available is True
 
 
 @pytest.mark.parametrize("failure", ["rollback", "invalid_hash", "unserveable_status", "expired", "missing_store"])
@@ -999,6 +1082,7 @@ def test_context_stops_advertising_research_after_activation_is_lost(
     updated = publication()
     assert updated["research"]["weekdate"] is None
     assert updated["research"]["published_at"] is None
+    assert updated["research_endpoint_for_latest_market_data_week"] is None
     if failure == "missing_store":
         assert updated["research"]["status"] == "store_unavailable"
         assert updated["editorial_preview"]["status"] == "store_unavailable"

@@ -109,6 +109,11 @@ manifest. Each artifact has its own weekdate and publication timestamp. Check
 covers the latest observed dataset week. A null value means that either the
 dataset week or store availability is unknown. The availability check is free,
 and retrieving an available research report requires paid access.
+`research_endpoint_for_latest_market_data_week` links directly to a matching
+report by artifact ID when one is addressable, even if a newer report is
+served by `/v1/intelligence/research/latest`. The public
+`/v1/intelligence/discovery` envelope describes supported capabilities and
+artifact types. Context resolves the matching report from the active manifest.
 
 Reading the manifest is public/free and must not:
 

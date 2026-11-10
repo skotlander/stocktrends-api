@@ -5,12 +5,17 @@ from datetime import date, datetime
 from threading import Lock
 from time import monotonic
 from typing import Literal
+from urllib.parse import quote
 
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from db import get_engine
-from services.intelligence_artifact_availability import IntelligenceArtifactAvailabilityStatus
+from payments import policy_provider
+from services.intelligence_artifact_availability import (
+    IntelligenceArtifactAvailabilityStatus,
+    match_paid_intelligence_artifact_route,
+)
 from services.intelligence_artifact_store import (
     IntelligenceArtifactStoreUnavailable,
     PublicArtifactEnvelope,
@@ -22,6 +27,7 @@ from services.intelligence_artifact_store import (
 logger = logging.getLogger(__name__)
 _DATASET_CACHE_SECONDS = 60
 _dataset_cache_lock = Lock()
+_RESEARCH_PATH = "/v1/intelligence/research"
 
 
 class DatasetFreshness(BaseModel, frozen=True):
@@ -75,6 +81,13 @@ class IntelligencePublication(BaseModel):
             "Null if the dataset weekdate or store availability is unknown."
         )
     )
+    research_endpoint_for_latest_market_data_week: str | None = Field(
+        default=None,
+        description=(
+            "Paid research by-ID path for a serveable report covering the latest observed market-data week. "
+            "Null when a matching report cannot be identified by ID."
+        ),
+    )
 
 
 class AiContextFreshnessResponse(BaseModel, extra="allow"):
@@ -115,8 +128,17 @@ def read_dataset_freshness() -> DatasetFreshness:
         return freshness
 
 
+def _publication_weekdate(artifact: PublicArtifactEnvelope | None) -> date | None:
+    if artifact is None:
+        return None
+    try:
+        return date.fromisoformat(artifact.weekdate)
+    except ValueError:
+        return None
+
+
 def _publication_metadata(
-    artifact: PublicArtifactEnvelope | None, *, store_available: bool, endpoint: str, paid: bool
+    artifact: PublicArtifactEnvelope | None, *, weekdate: date | None, store_available: bool, endpoint: str
 ) -> PublicationFreshness:
     status = IntelligenceArtifactAvailabilityStatus.STORE_UNAVAILABLE
     if store_available:
@@ -124,19 +146,18 @@ def _publication_metadata(
     if artifact is not None:
         status = IntelligenceArtifactAvailabilityStatus.AVAILABLE
 
-    weekdate = None
-    if artifact is not None:
-        try:
-            weekdate = date.fromisoformat(artifact.weekdate)
-        except ValueError:
-            pass
     return PublicationFreshness(
         status=status,
         weekdate=weekdate,
         published_at=artifact.published_at if artifact is not None else None,
         endpoint=endpoint,
-        payment_required_if_available=paid,
+        payment_required_if_available=not policy_provider.is_public_intelligence_path(endpoint),
     )
+
+
+def _is_addressable_research(artifact: PublicArtifactEnvelope) -> bool:
+    target = match_paid_intelligence_artifact_route("GET", f"{_RESEARCH_PATH}/{artifact.artifact_id}")
+    return target is not None and target.artifact_id == artifact.artifact_id
 
 
 def read_intelligence_publication(market_week: date | None) -> IntelligencePublication:
@@ -144,29 +165,40 @@ def read_intelligence_publication(market_week: date | None) -> IntelligencePubli
         artifacts = configured_intelligence_artifact_store().list_valid_artifacts()
     except IntelligenceArtifactStoreUnavailable:
         artifacts = None
+    except Exception as exc:
+        logger.warning("Intelligence publication metadata unavailable (%s)", type(exc).__name__)
+        artifacts = None
 
     store_available = artifacts is not None
-    research = latest_artifact_by_type(artifacts or [], "market_research_report")
+    reports = [artifact for artifact in artifacts or [] if artifact.artifact_type == "market_research_report"]
+    report_weekdates = {report.artifact_id: _publication_weekdate(report) for report in reports}
+    research = latest_artifact_by_type(reports, "market_research_report")
     editorial = latest_artifact_by_type(artifacts or [], "editorial_preview")
-    matching_research = None
-    if artifacts is not None and market_week is not None:
-        market_weekdate = market_week.isoformat()
-        matching_research = any(
-            artifact.artifact_type == "market_research_report" and artifact.weekdate == market_weekdate
-            for artifact in artifacts
+    research_available = None
+    research_endpoint = None
+    if store_available and market_week is not None:
+        matching_reports = [report for report in reports if report_weekdates[report.artifact_id] == market_week]
+        research_available = bool(matching_reports)
+        addressable_report = latest_artifact_by_type(
+            [report for report in matching_reports if _is_addressable_research(report)],
+            "market_research_report",
         )
+        if addressable_report is not None:
+            research_endpoint = f"{_RESEARCH_PATH}/{quote(addressable_report.artifact_id, safe='')}"
+
     return IntelligencePublication(
         research=_publication_metadata(
             research,
+            weekdate=report_weekdates[research.artifact_id] if research is not None else None,
             store_available=store_available,
-            endpoint="/v1/intelligence/research/latest",
-            paid=True,
+            endpoint=f"{_RESEARCH_PATH}/latest",
         ),
         editorial_preview=_publication_metadata(
             editorial,
+            weekdate=_publication_weekdate(editorial),
             store_available=store_available,
             endpoint="/v1/intelligence/editorial/latest/preview",
-            paid=False,
         ),
-        research_available_for_latest_market_data_week=matching_research,
+        research_available_for_latest_market_data_week=research_available,
+        research_endpoint_for_latest_market_data_week=research_endpoint,
     )
