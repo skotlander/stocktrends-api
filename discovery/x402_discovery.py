@@ -405,6 +405,7 @@ def build_x402_discovery(*, strict: bool = True) -> dict[str, Any]:
             "workflows_url": WORKFLOWS_URL,
             "pricing_catalog_url": PRICING_CATALOG_URL,
             "ai_context_url": AI_CONTEXT_URL,
+            "dataset_freshness_url": AI_CONTEXT_URL,
         },
         # Service-level, not per-resource. A client reading this manifest is by
         # definition deciding whether a payable resource is worth acquiring, so

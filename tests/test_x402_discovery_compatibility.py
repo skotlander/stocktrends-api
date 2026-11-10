@@ -33,6 +33,7 @@ import routers.stocktrends_strategies as stocktrends_strategies_router_module
 import routers.stwr as stwr_router_module
 import routers.workflows as workflows_router_module
 import services.intelligence_artifact_availability as availability_module
+import discovery.freshness as freshness_module
 import discovery.x402_discovery as x402_discovery_module
 from discovery.endpoint_metadata import get_endpoint_metadata
 from discovery.x402_discovery import (
@@ -210,7 +211,8 @@ def test_manifest_read_has_no_payment_data_or_artifact_side_effects(monkeypatch)
     monkeypatch.setattr(mpp_client_module, "authorize_mpp_payment", poison("mpp_authorize"))
     monkeypatch.setattr(mpp_client_module, "capture_mpp_payment", poison("mpp_capture"))
     monkeypatch.setattr(mpp_client_module, "void_mpp_authorization", poison("mpp_void"))
-    monkeypatch.setattr(ai_router_module, "get_engine", poison("market_data"))
+    monkeypatch.setattr(freshness_module, "_dataset_cache", None)
+    monkeypatch.setattr(freshness_module, "get_engine", poison("market_data"))
     monkeypatch.setattr(ai_router_module, "get_metering_engine", poison("pricing_db"))
     monkeypatch.setattr(
         metering_logger_module,
@@ -229,6 +231,11 @@ def test_manifest_read_has_no_payment_data_or_artifact_side_effects(monkeypatch)
     )
     monkeypatch.setattr(
         availability_module,
+        "configured_intelligence_artifact_store",
+        poison("artifact_store"),
+    )
+    monkeypatch.setattr(
+        freshness_module,
         "configured_intelligence_artifact_store",
         poison("artifact_store"),
     )
@@ -1123,6 +1130,7 @@ def _anonymous_request_from_openapi_claim(
 def test_every_openapi_public_claim_is_anonymously_true_at_runtime(monkeypatch):
     """The schema itself supplies claims; runtime auth is the independent oracle."""
     _stub_request_logging(monkeypatch)
+    monkeypatch.setattr(freshness_module, "_dataset_cache", None)
     empty_engine = rows_engine([])
     for module, accessor in (
         (instruments_router_module, "get_market_engine"),
@@ -1132,7 +1140,7 @@ def test_every_openapi_public_claim_is_anonymously_true_at_runtime(monkeypatch):
         (pricing_router_module, "get_metering_engine"),
         (stocktrends_portfolios_router_module, "get_engine"),
         (stocktrends_strategies_router_module, "get_engine"),
-        (ai_router_module, "get_engine"),
+        (freshness_module, "get_engine"),
         (ai_router_module, "get_metering_engine"),
     ):
         monkeypatch.setattr(module, accessor, lambda engine=empty_engine: engine)

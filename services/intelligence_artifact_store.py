@@ -256,6 +256,17 @@ def _artifact_sort_key(envelope: PublicArtifactEnvelope) -> tuple[str, datetime,
     )
 
 
+def latest_artifact_by_type(
+    artifacts: list[PublicArtifactEnvelope], artifact_type: PublicArtifactType
+) -> PublicArtifactEnvelope | None:
+    """Select the latest artifact of this type from a validated store snapshot."""
+    return max(
+        (artifact for artifact in artifacts if artifact.artifact_type == artifact_type),
+        key=_artifact_sort_key,
+        default=None,
+    )
+
+
 class IntelligenceArtifactStore:
     _cache_lock = threading.Lock()
     _cache: dict[tuple[str, str, str | None], _ArtifactStoreSnapshot] = {}
@@ -273,14 +284,7 @@ class IntelligenceArtifactStore:
         self._now = now
 
     def get_latest(self, artifact_type: PublicArtifactType) -> PublicArtifactEnvelope | None:
-        matches = [
-            artifact
-            for artifact in self._load_valid_artifacts()
-            if artifact.artifact_type == artifact_type
-        ]
-        if not matches:
-            return None
-        return sorted(matches, key=_artifact_sort_key, reverse=True)[0]
+        return latest_artifact_by_type(self._load_valid_artifacts(), artifact_type)
 
     def get_by_id(
         self,

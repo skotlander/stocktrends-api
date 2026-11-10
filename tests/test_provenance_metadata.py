@@ -78,9 +78,10 @@ def test_central_data_provenance_shape():
 
 
 def test_ai_context_and_tools_expose_full_provenance(monkeypatch):
+    from discovery.freshness import DatasetFreshness
     import routers.ai as ai_router
 
-    monkeypatch.setattr(ai_router, "get_last_update", lambda: None)
+    monkeypatch.setattr(ai_router, "read_dataset_freshness", lambda: DatasetFreshness(status="unavailable"))
 
     context = ai_router.ai_context()
     tools = ai_router.ai_tools()

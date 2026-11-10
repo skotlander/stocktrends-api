@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Response
 from sqlalchemy import text
-from db import get_engine, get_metering_engine
+from db import get_metering_engine
 from routers.workflows import WORKFLOW_REGISTRY, STC_TO_USD, WORKFLOW_ID_EXAMPLES
 from discovery.endpoint_metadata import (
     REGIME_FORECAST_CONFIDENCE_DESCRIPTION,
@@ -21,6 +21,11 @@ from discovery.inference_semantics import (
     inference_contract,
     stim_provider_profile,
 )
+from discovery.freshness import (
+    AiContextFreshnessResponse,
+    read_dataset_freshness,
+    read_intelligence_publication,
+)
 from discovery.provenance import (
     AI_CONTEXT_PROVENANCE_TEXT,
     INDICATORS_PROVENANCE_TEXT,
@@ -32,6 +37,7 @@ from discovery.provenance import (
 )
 from discovery.service_meta import (
     DATASET_DESCRIPTION,
+    DATASET_FRESHNESS_GUIDANCE,
     SERVICE_AUGMENTATION_ROLE,
     SERVICE_EVALUATION_GUIDANCE,
     SERVICE_EVALUATION_GUIDANCE_SOURCE,
@@ -192,6 +198,7 @@ _TOOL_TEMPLATES = [
         "name": "ai_context",
         "title": "AI Context",
         "description": (
+            DATASET_FRESHNESS_GUIDANCE + " "
             "Returns dataset overview, endpoint groups, access model, and agent usage guidance. "
             "Includes long-horizon Stock Trends provenance for records extending back to 1980. "
             "Secondary explanatory context for agents after reading the machine-readable "
@@ -201,7 +208,7 @@ _TOOL_TEMPLATES = [
         "method": "GET",
         "category": "discovery",
         "input_schema": {"type": "object", "properties": {}, "required": []},
-        "output_summary": "Dataset metadata, endpoint groups, auth model, and agent usage guidance.",
+        "output_summary": "Dataset freshness, publication availability, endpoint groups, auth model, and agent guidance.",
     },
     {
         "name": "ai_tools",
@@ -987,28 +994,23 @@ def _build_workflow_summary(workflow: dict) -> dict:
     }
 
 
-def get_last_update():
-    """
-    Returns the most recent weekdate from st_data.
-    Falls back to None if the query fails.
-    """
-    try:
-        engine = get_engine()
-        with engine.connect() as conn:
-            result = conn.execute(text("SELECT MAX(weekdate) AS last_update FROM st_data"))
-            row = result.fetchone()
-
-        if row and row.last_update:
-            return str(row.last_update)
-    except Exception:
-        return None
-
-    return None
-
-
-@router.get("/context")
+@router.get(
+    "/context",
+    summary="Public dataset freshness and AI context",
+    description=(
+        "Public and free to read. The dataset weekdate is the latest observed week-ending date. "
+        "A successful dataset refresh timestamp would describe ingestion completion and is null "
+        "without an authoritative marker. Research and editorial weekdates identify the weeks "
+        "covered by their respective activated artifacts. Each publication timestamp is the "
+        "published_at value from its artifact envelope. Use dataset_freshness for market-data "
+        "dates even when publication dates differ. Reading availability metadata requires no payment."
+    ),
+    responses={200: {"model": AiContextFreshnessResponse}},
+)
 def ai_context():
-    last_update = get_last_update()
+    freshness = read_dataset_freshness()
+    publication = read_intelligence_publication(freshness.latest_market_data_weekdate)
+    freshness_payload = freshness.model_dump(mode="json")
     contract = inference_contract()
     stim_profile = stim_provider_profile()
 
@@ -1125,13 +1127,16 @@ def ai_context():
             "x402_payment_resources": "/.well-known/x402",
             "task_and_tool_discovery": "/v1/ai/tools",
             "secondary_explanatory": "/v1/ai/context",
+            "dataset_freshness": "/v1/ai/context",
             "provider_agnostic_inference_contract": "/v1/meta/inference",
             "stim_provider_profile": "/v1/meta/stim",
             "docs": "/v1/docs",
             "openapi": "/v1/openapi.json",
         },
-        "update_frequency": "weekly",
-        "last_update": last_update,
+        "update_frequency": freshness.update_frequency,
+        "last_update": freshness_payload["latest_market_data_weekdate"],
+        "dataset_freshness": freshness_payload,
+        "intelligence_publication": publication.model_dump(mode="json"),
         "coverage": {
             "region": "North America",
             "asset_types": ["equities", "ETFs"],
@@ -1731,7 +1736,7 @@ def ai_context():
         },
         "usage_guidance": [
             "Start with /.well-known/x402 for payable-resource discovery, then use /v1/ai/tools for task and tool discovery.",
-            "Use /v1/ai/context as the secondary explanatory endpoint for dataset and endpoint-family context.",
+            DATASET_FRESHNESS_GUIDANCE,
             "Before deciding whether paid Stock Trends information is worth acquiring for a task, follow acquisition_evaluation_guidance: inspect the relevant capability, interpretation, evidence, and pricing resources, keep those categories separate, and decide from what was actually inspected.",
             "Use /v1/ai/proof/market-edge (no auth required) to inspect response structure and confirm field schemas. It returns a static synthetic body and is an illustration, not evidence of usefulness.",
             "Use /v1/docs and /v1/openapi.json for exact request and response contracts.",
@@ -1836,6 +1841,7 @@ def ai_tools():
             "x402_payment_resources": "/.well-known/x402",
             "task_and_tool_discovery": "/v1/ai/tools",
             "secondary_explanatory": "/v1/ai/context",
+            "dataset_freshness": "/v1/ai/context",
             "provider_agnostic_inference_contract": "/v1/meta/inference",
             "stim_provider_profile": "/v1/meta/stim",
             "docs": "/v1/docs",
@@ -1931,7 +1937,7 @@ def ai_tools():
             "Do not hardcode STC costs. Fetch /v1/pricing/catalog at agent startup.",
             "Use /.well-known/x402 for payment-resource discovery and /v1/ai/tools for task/tool discovery.",
             "Before deciding whether paid Stock Trends information is worth acquiring for a task, follow acquisition_evaluation_guidance: inspect the relevant capability, interpretation, evidence, and pricing resources, keep those categories separate, and decide from what was actually inspected. /v1/ai/context carries the full statement and the separated evidence families.",
-            "Use /v1/ai/context for explanatory dataset context and endpoint group overviews.",
+            DATASET_FRESHNESS_GUIDANCE,
             "Use /v1/workflows to choose a task-level strategy and endpoint sequence.",
             "Use /v1/meta/inference for the provider-agnostic inference contract; use /v1/meta/stim for the current ST-IM baseline provider profile.",
             "Treat the 1980+ historical classification record and 16M+ observations as research provenance, not a guarantee of future performance.",

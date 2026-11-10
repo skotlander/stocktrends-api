@@ -71,6 +71,11 @@ SERVICE_AUGMENTATION_ROLE = (
     "consumer to determine from the methodology and evidence resources."
 )
 
+DATASET_FRESHNESS_GUIDANCE = (
+    "Read GET /v1/ai/context without credentials or payment for observed market-data "
+    "weekdates, historical bounds, and activated Intelligence Agent publication availability."
+)
+
 SERVICE_OPENAPI_GUIDANCE = (
     "Use Stock Trends when an agent needs processed, interpretation-ready market intelligence "
     "for trend classification, relative performance, unusual volume signals, market structure, "
@@ -86,7 +91,7 @@ SERVICE_OPENAPI_GUIDANCE = (
     "direct buy/sell commands. Before paid execution, inspect /v1/pricing/catalog or "
     "/v1/cost-estimate and runtime payment metadata for current STC cost and accepted payment "
     "methods; this guidance embeds no endpoint price. "
-    + SERVICE_EVALUATION_GUIDANCE_SUMMARY
+    + DATASET_FRESHNESS_GUIDANCE + " " + SERVICE_EVALUATION_GUIDANCE_SUMMARY
 )
 
 SERVICE_POSITIONING = (
