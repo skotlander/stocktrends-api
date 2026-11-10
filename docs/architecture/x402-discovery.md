@@ -93,6 +93,23 @@ an unavailable artifact to `402`.
 
 ## Discovery Is Not Execution
 
+For dataset freshness, follow `service.dataset_freshness_url` (also listed as
+`discovery_entrypoints.dataset_freshness` in `/v1/ai/tools`) to the public,
+free-metered `GET /v1/ai/context`. Its `dataset_freshness` object reports the
+first and last observed week-ending dates in the core weekly market dataset.
+Different endpoint families may have different coverage. A completed weekly
+load requires separate verification. The refresh timestamp is null while the
+API lacks a dataset-wide completion marker. The legacy `last_update` field
+still aliases the latest observed weekdate.
+
+Use `intelligence_publication` for research and public editorial preview
+availability. It reflects validated, serveable artifacts in the active API
+manifest. Each artifact has its own weekdate and publication timestamp. Check
+`research_available_for_latest_market_data_week` to see whether a report
+covers the latest observed dataset week. A null value means that either the
+dataset week or store availability is unknown. The availability check is free,
+and retrieving an available research report requires paid access.
+
 Reading the manifest is public/free and must not:
 
 * invoke a paid endpoint or market-data query;

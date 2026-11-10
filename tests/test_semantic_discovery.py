@@ -4,6 +4,8 @@ probabilistic_semantics, and analytical_chain in live AI surfaces.
 """
 from __future__ import annotations
 
+from unittest.mock import patch
+
 import pytest
 
 
@@ -19,20 +21,11 @@ def ai_tools_response() -> dict:
 
 @pytest.fixture(scope="module")
 def ai_context_response() -> dict:
+    from discovery.freshness import DatasetFreshness
     from routers.ai import ai_context
-    try:
+
+    with patch("routers.ai.read_dataset_freshness", return_value=DatasetFreshness(status="unavailable")):
         return ai_context()
-    except Exception:
-        # DB unavailable in unit-test environment; call the underlying data assembly directly
-        from routers.ai import (
-            DATASET_DESCRIPTION,
-            SERVICE_POSITIONING,
-        )
-        # Fallback: construct partial response for field-presence tests
-        from routers.ai import ai_context as _ai_context
-        import unittest.mock as mock
-        with mock.patch("routers.ai.get_last_update", return_value=None):
-            return _ai_context()
 
 
 @pytest.fixture(scope="module")
