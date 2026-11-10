@@ -1127,6 +1127,7 @@ def ai_context():
             "x402_payment_resources": "/.well-known/x402",
             "task_and_tool_discovery": "/v1/ai/tools",
             "secondary_explanatory": "/v1/ai/context",
+            "dataset_freshness": "/v1/ai/context",
             "provider_agnostic_inference_contract": "/v1/meta/inference",
             "stim_provider_profile": "/v1/meta/stim",
             "docs": "/v1/docs",
